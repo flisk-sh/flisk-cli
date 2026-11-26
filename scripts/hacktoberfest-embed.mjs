@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const DEFAULT_REPO = "flisk-sh/flisk";
+export const DEFAULT_REPO = "flisk-sh/flisk-cli";
 export const MAP_PATH = "/docs/journey/hacktoberfest.svg";
 
 export function mapUrl(repo = DEFAULT_REPO) {
