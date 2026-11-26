@@ -20,7 +20,7 @@ export const meta = {
 const PIN_FILE = ".bun-version";
 const COMPOSITE = ".github/actions/setup-bun/action.yml";
 const COMPOSITE_USES = "./.github/actions/setup-bun";
-const CANARY_WORKFLOW = ".github/workflows/nightly-adopters.yml";
+const CANARY_WORKFLOW = ".github/workflows-disabled/nightly-adopters.yml";
 const VERSION = /^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/;
 const isSetupBun = (uses) => typeof uses === "string" && uses.startsWith("oven-sh/setup-bun@");
 const isBunStep = (uses) => isSetupBun(uses) || uses === COMPOSITE_USES;

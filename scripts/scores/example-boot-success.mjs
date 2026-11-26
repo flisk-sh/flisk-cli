@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Flisk Landscape contributors
 // SPDX-License-Identifier: MIT
 // Whether the official examples still boot. The share of the last 30 completed runs of the 🚪 E2E | Examples gate
-// (.github/workflows/e2e-examples.yml: build the CLI, boot each bundled example, reach a healthy URL) that succeeded.
+// (.github/workflows-disabled/e2e-examples.yml: build the CLI, boot each bundled example, reach a healthy URL) that succeeded.
 // merge_group runs come first: they are the last gate before main, so a red one is a real break and not a pull request
 // still in progress. Only when the merge queue has no runs are all events used, and the summary says which.
 // Cancelled and skipped runs (a newer push superseded them, or nothing ran) say nothing about the examples and are left

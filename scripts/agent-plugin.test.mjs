@@ -355,7 +355,7 @@ test("the generator follows the skill sources: a changed skill is rewritten and 
     assert.ok(run(repo, { write: true }).length > 0);
     assert.deepEqual(run(repo, { write: false }), []);
     const copy = path.join(repo, PLUGIN_DIR, "skills/flisk-a/SKILL.md");
-    assert.match(readFileSync(copy, "utf8"), /\(https:\/\/github\.com\/flisk-sh\/flisk\/blob\/main\/docs\/x\.md\)/);
+    assert.match(readFileSync(copy, "utf8"), /\(https:\/\/github\.com\/flisk-sh\/flisk-cli\/blob\/main\/docs\/x\.md\)/);
 
     writeFileSync(skill("flisk-a"), "---\nname: flisk-a\n---\nChanged.\n");
     rmSync(path.dirname(skill("flisk-b")), { recursive: true });

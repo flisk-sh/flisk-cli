@@ -61,7 +61,7 @@ function fixture(files = {}) {
 		".bun-version": "1.4.4\n",
 		".github/actions/setup-bun/action.yml": ACTION,
 		".github/workflows/ci.yml": WORKFLOW,
-		".github/workflows/nightly-adopters.yml": CANARY,
+		".github/workflows-disabled/nightly-adopters.yml": CANARY,
 		...files,
 	};
 	for (const [rel, text] of Object.entries(texts)) {

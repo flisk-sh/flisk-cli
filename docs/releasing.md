@@ -122,7 +122,7 @@ It accepts an **exact** candidate, or an **ancestor** candidate when no commit s
 
 | Path in `.github/release-inputs.txt` | Why it can change the shipped release |
 | --- | --- |
-| `.github/workflows/release-binaries.yml` | Changes the release workflow itself, including what gets built and published |
+| `.github/workflows-disabled/release-binaries.yml` | Changes the release workflow itself, including what gets built and published |
 | `.github/release-inputs.txt` | Changes the filter definition; the file lists itself, so editing the rules needs a new candidate too |
 | `package.json` | Holds the version, workspace and `files` list that define the npm tarball |
 | `bun.lock` | Pins the dependency tree used to build and pack the binaries and tarball |
@@ -130,7 +130,7 @@ It accepts an **exact** candidate, or an **ancestor** candidate when no commit s
 | `scripts/release-binaries.sh` | Creates the tarball and release assets |
 | `scripts/release/**` | Release helpers such as tag-target selection and asset checks |
 | `tests/e2e/platforms/container-image/**` | The release-blocking container-image suites that validate the shipped image |
-| `.github/workflows/publish-cli-image.yml` | Publishes the CLI image built from the candidate |
+| `.github/workflows-disabled/publish-cli-image.yml` | Publishes the CLI image built from the candidate |
 | `runtime/**` | Packaged engine and extension assets; most runtime paths are in the npm `files` list, excluding test and documentation folders |
 
 An ancestor candidate cannot cover a commit that changes any of these paths. That is why a starter-template-only change ([#3050](https://github.com/flisk-sh/flisk-cli/pull/3050)) made the gate refuse `main`: the template is inside `cli/**` and is packaged into the tarball, even though no CLI runtime code moved. Cut a new candidate after such a change; see the [moving-`main` troubleshooting row](#troubleshooting).

@@ -31,7 +31,7 @@ Canlı stack kullanan her suite `tests/e2e/<group>/<suite>/` altında bulunur ve
 
 Çalışan bir agent'ı okuyan bir MCP aracı mı ekliyorsunuz? `agent` suite'ine aittir (MCP resource'ları için `mcp` suite'i). C1 ile C3 arasındaki vakaların şeklini kopyalayın. <!-- spellchecker:disable-line -->
 
-Şimdiye kadar yalnızca `resource-types/agent` taşındı. Diğer e2e testleri hâlâ `.github/workflows/*-e2e.yml`, `scripts/e2e/`, `scripts/verify-*.sh` ve `tests/e2e/*.test.sh` altında bulunuyor. Pull request başına bir suite taşınır; bunu [`openspec/changes/organize-e2e-suites`](../../../openspec/changes/organize-e2e-suites/tasks.md) anlatır. Değişikliğiniz bunlardan birine dokunuyorsa, olduğu yerde genişletin veya önce taşıyın.
+Şimdiye kadar yalnızca `resource-types/agent` taşındı. Diğer e2e testleri hâlâ `.github/workflows-disabled/*-e2e.yml`, `scripts/e2e/`, `scripts/verify-*.sh` ve `tests/e2e/*.test.sh` altında bulunuyor. Pull request başına bir suite taşınır; bunu [`openspec/changes/organize-e2e-suites`](../../../openspec/changes/organize-e2e-suites/tasks.md) anlatır. Değişikliğiniz bunlardan birine dokunuyorsa, olduğu yerde genişletin veya önce taşıyın.
 
 ---
 

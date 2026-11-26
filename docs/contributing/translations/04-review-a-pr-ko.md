@@ -57,7 +57,7 @@ AI 버튼은 AI 어시스턴트와의 채팅을 엽니다. 그 어시스턴트�
 
 ## AI 리뷰 버튼의 동작 방식
 
-누군가 PR을 열거나, 다시 열거나, 편집하면 [AI 리뷰 버튼 워크플로](../../../.github/workflows/ai-review-buttons.yml)가 PR 설명 끝에 이 섹션을 추가합니다.
+누군가 PR을 열거나, 다시 열거나, 편집하면 [AI 리뷰 버튼 워크플로](../../../.github/workflows-disabled/ai-review-buttons.yml)가 PR 설명 끝에 이 섹션을 추가합니다.
 
 > **Review this PR in**
 > \[Grok\] \[Claude\] \[Codex\]
@@ -94,7 +94,7 @@ Review this pull request. Read the title and diff at https://github.com/flisk-sh
 
 ### 병합 충돌 버튼
 
-PR이 `main`과 충돌하면 [AI 충돌 버튼 워크플로](../../../.github/workflows/ai-conflict-buttons.yml)가 Grok, Claude, Codex용 **Resolve conflict** 버튼이 있는 댓글을 PR에 하나 올립니다. 이 버튼은 AI에게 `main`을 브랜치에 병합하고 수정 사항을 push하는 단계별 지침을 줍니다. AI가 해당 브랜치에 push할 수 없으면(예: 여러분이 소유하지 않은 포크), 지침은 대신 `fix/<PR 번호>-conflict` 브랜치에 push하고 대체 PR을 열도록 안내합니다. 원래 PR에 `Fixes #N`이 있다면 대체 PR에도 같은 내용이 적힙니다. 결과는 다른 변경과 같은 방식으로 확인하고, 원래 PR에 대체 PR 링크를 댓글로 남기세요. 충돌이 해결되면 같은 댓글이 그렇게 바뀌고 버튼은 사라집니다.
+PR이 `main`과 충돌하면 [AI 충돌 버튼 워크플로](../../../.github/workflows-disabled/ai-conflict-buttons.yml)가 Grok, Claude, Codex용 **Resolve conflict** 버튼이 있는 댓글을 PR에 하나 올립니다. 이 버튼은 AI에게 `main`을 브랜치에 병합하고 수정 사항을 push하는 단계별 지침을 줍니다. AI가 해당 브랜치에 push할 수 없으면(예: 여러분이 소유하지 않은 포크), 지침은 대신 `fix/<PR 번호>-conflict` 브랜치에 push하고 대체 PR을 열도록 안내합니다. 원래 PR에 `Fixes #N`이 있다면 대체 PR에도 같은 내용이 적힙니다. 결과는 다른 변경과 같은 방식으로 확인하고, 원래 PR에 대체 PR 링크를 댓글로 남기세요. 충돌이 해결되면 같은 댓글이 그렇게 바뀌고 버튼은 사라집니다.
 
 ## 무엇을 볼지
 

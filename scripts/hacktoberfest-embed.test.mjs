@@ -21,14 +21,14 @@ const SCRIPT_PATH = fileURLToPath(new URL("./hacktoberfest-embed.mjs", import.me
 
 test("bannerMarkup produces the expected markdown embed for a given repository", () => {
   const defaultMarkup = bannerMarkup();
-  const explicitMarkup = bannerMarkup("flisk-sh/flisk");
+  const explicitMarkup = bannerMarkup("flisk-sh/flisk-cli");
   assert.equal(defaultMarkup, explicitMarkup);
 
   const expectedSvgUrl = "https://raw.githubusercontent.com/flisk-sh/flisk-cli/journey-map/docs/journey/hacktoberfest.svg";
   const expectedListUrl = "https://github.com/flisk-sh/flisk-cli/issues?q=is%3Aissue+is%3Aopen+label%3Ahacktoberfest";
 
-  assert.equal(mapUrl("flisk-sh/flisk"), expectedSvgUrl);
-  assert.equal(listUrl("flisk-sh/flisk"), expectedListUrl);
+  assert.equal(mapUrl("flisk-sh/flisk-cli"), expectedSvgUrl);
+  assert.equal(listUrl("flisk-sh/flisk-cli"), expectedListUrl);
 
   assert.ok(defaultMarkup.includes(`[![Flisk Hacktoberfest map](${expectedSvgUrl})](${expectedListUrl})`));
   assert.ok(defaultMarkup.includes("Part of Hacktoberfest. Filled dot = merged, hollow dot = open. Click the map for all open `hacktoberfest` issues."));
@@ -50,17 +50,17 @@ test("shouldEmbed accurately detects whether hacktoberfest map is already presen
 
 test("embedMarkup embeds banner at the top of issue body for fixed input", () => {
   const fixedInput = "## Problem Description\n\nNeed unit test coverage for hacktoberfest embed script.";
-  const embedded = embedMarkup(fixedInput, "flisk-sh/flisk");
+  const embedded = embedMarkup(fixedInput, "flisk-sh/flisk-cli");
 
-  const expected = bannerMarkup("flisk-sh/flisk") + fixedInput;
+  const expected = bannerMarkup("flisk-sh/flisk-cli") + fixedInput;
   assert.equal(embedded, expected);
 
   // Idempotent: embedding again returns the existing body unchanged
-  assert.equal(embedMarkup(embedded, "flisk-sh/flisk"), embedded);
+  assert.equal(embedMarkup(embedded, "flisk-sh/flisk-cli"), embedded);
 
   // When body is empty, returns banner markup
-  assert.equal(embedMarkup("", "flisk-sh/flisk"), bannerMarkup("flisk-sh/flisk"));
-  assert.equal(embedMarkup(null, "flisk-sh/flisk"), bannerMarkup("flisk-sh/flisk"));
+  assert.equal(embedMarkup("", "flisk-sh/flisk-cli"), bannerMarkup("flisk-sh/flisk-cli"));
+  assert.equal(embedMarkup(null, "flisk-sh/flisk-cli"), bannerMarkup("flisk-sh/flisk-cli"));
 });
 
 test("embedIssues updates issues missing the map and skips issues that already have it", () => {
@@ -92,7 +92,7 @@ test("embedIssues updates issues missing the map and skips issues that already h
   };
 
   const result = embedIssues({
-    repo: "flisk-sh/flisk",
+    repo: "flisk-sh/flisk-cli",
     runner: fakeRunner,
     log: (msg) => logs.push(msg),
   });
@@ -107,13 +107,13 @@ test("embedIssues updates issues missing the map and skips issues that already h
   assert.equal(calls[1].args[0], "issue");
   assert.equal(calls[1].args[1], "edit");
   assert.equal(calls[1].args[2], "102");
-  assert.equal(calls[1].input, bannerMarkup("flisk-sh/flisk") + "Plain issue without map.");
+  assert.equal(calls[1].input, bannerMarkup("flisk-sh/flisk-cli") + "Plain issue without map.");
 
   // Edit call for #103
   assert.equal(calls[2].args[0], "issue");
   assert.equal(calls[2].args[1], "edit");
   assert.equal(calls[2].args[2], "103");
-  assert.equal(calls[2].input, bannerMarkup("flisk-sh/flisk"));
+  assert.equal(calls[2].input, bannerMarkup("flisk-sh/flisk-cli"));
 
   assert.equal(calls.length, 3);
   assert.ok(logs.includes("added map to #102"));
@@ -148,16 +148,16 @@ test("main returns exit code 0 on success and 1 when repository is empty or runn
   };
 
   assert.equal(main([], { runner: successRunner, log: (m) => logs.push(m), error: (e) => errors.push(e) }), 0);
-  assert.equal(main(["flisk-sh/flisk"], { runner: successRunner, log: (m) => logs.push(m), error: (e) => errors.push(e) }), 0);
+  assert.equal(main(["flisk-sh/flisk-cli"], { runner: successRunner, log: (m) => logs.push(m), error: (e) => errors.push(e) }), 0);
 
   // Missing or empty repository input
   assert.equal(main([""], { runner: successRunner, error: (e) => errors.push(e) }), 1);
   assert.equal(main(["   "], { runner: successRunner, error: (e) => errors.push(e) }), 1);
 
   // Runner failure
-  assert.equal(main(["flisk-sh/flisk"], { runner: () => null, error: (e) => errors.push(e) }), 1);
-  assert.equal(main(["flisk-sh/flisk"], { runner: () => "malformed", error: (e) => errors.push(e) }), 1);
-  assert.equal(main(["flisk-sh/flisk"], { runner: () => { throw new Error("failure"); }, error: (e) => errors.push(e) }), 1);
+  assert.equal(main(["flisk-sh/flisk-cli"], { runner: () => null, error: (e) => errors.push(e) }), 1);
+  assert.equal(main(["flisk-sh/flisk-cli"], { runner: () => "malformed", error: (e) => errors.push(e) }), 1);
+  assert.equal(main(["flisk-sh/flisk-cli"], { runner: () => { throw new Error("failure"); }, error: (e) => errors.push(e) }), 1);
 
   assert.ok(errors.includes("Repository must not be empty"));
   assert.ok(errors.some((e) => e.includes("Missing runner output")));

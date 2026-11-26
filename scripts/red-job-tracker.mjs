@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 // Red-job tracker (#1288, tracker #1279). For each scheduled or main-branch workflow below, opens one issue when its last
 // three non-pull-request runs on main failed, names the first failing run and the last error line, and closes that issue
-// after three passing runs. Run by .github/workflows/red-job-tracker.yml.
+// after three passing runs. Run by .github/workflows-disabled/red-job-tracker.yml.
 //   node scripts/red-job-tracker.mjs [--dry-run]
 // --dry-run prints each decision and changes nothing. Needs gh authenticated with actions: read and issues: write.
 import { execFileSync } from "node:child_process";

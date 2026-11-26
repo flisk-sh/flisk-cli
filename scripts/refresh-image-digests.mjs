@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: MIT
 // Re-resolves every `name:tag@sha256:...` pin in the engine, the CLI, the release image and the examples to the digest
 // the tag points at now, and rewrites the references in place. A pin that is never refreshed stops taking the base
-// image's patches, so .github/workflows/refresh-image-digests.yml runs this weekly and opens a pull request.
+// image's patches, so .github/workflows-disabled/refresh-image-digests.yml runs this weekly and opens a pull request.
 // Usage: node scripts/refresh-image-digests.mjs [--dry-run]
 // Needs `docker buildx` (the registry lookup is `docker buildx imagetools inspect`). Changing a golden layer line changes
 // the golden Dockerfile hash, so the golden images are republished when the pull request merges.

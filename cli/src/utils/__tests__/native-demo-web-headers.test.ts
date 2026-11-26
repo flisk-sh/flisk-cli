@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 // The demo website without Docker is a plain Node script, started here for real on a free port. The nightly OWASP ZAP scan
-// (.github/workflows/zap.yml) fails on missing security headers, so this test keeps them in place on every pull request.
+// (.github/workflows-disabled/zap.yml) fails on missing security headers, so this test keeps them in place on every pull request.
 const serverPath = fileURLToPath(
   new URL("../../../templates/demo-native/web/server.mjs", import.meta.url),
 );

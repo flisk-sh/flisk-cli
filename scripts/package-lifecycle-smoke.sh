@@ -6,7 +6,7 @@
 # cli/package.json, run the reinstalled `flisk --help`, uninstall, and confirm `flisk` is gone.
 #
 # Meant for a clean machine or container with Node 22 and no Tilt or Docker
-# project (see .github/workflows/package-lifecycle-smoke.yml). Everything lands
+# project (see .github/workflows-disabled/package-lifecycle-smoke.yml). Everything lands
 # under a private HOME, npm prefix and cache, so it never touches the host's
 # global install.
 #   usage: bash scripts/package-lifecycle-smoke.sh <tarball> <cli/package.json>

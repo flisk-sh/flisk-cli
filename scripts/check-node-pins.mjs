@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Flisk Landscape contributors
 // SPDX-License-Identifier: MIT
 // Fails when a pinned `node-version:` under .github/ is behind the newest patch release of its line on nodejs.org.
-// A pin never takes a Node security fix by itself, so this runs on a schedule (.github/workflows/node-pins.yml).
+// A pin never takes a Node security fix by itself, so this runs on a schedule (.github/workflows-disabled/node-pins.yml).
 // The one pin allowed to lag is the `engines.node` floor in cli/package.json, which tests the oldest Node we support.
 //   node scripts/check-node-pins.mjs [--root <repo dir>]
 import { readdirSync, readFileSync } from "node:fs";

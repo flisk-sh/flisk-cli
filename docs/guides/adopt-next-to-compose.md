@@ -73,7 +73,7 @@ A Compose file such as nosia's asks Docker Model Runner for its models with a to
 
 ## 7. Check it on Linux: a GitHub Actions job
 
-The fastest way to know the imported stack is honest is a throwaway job that boots it on a clean Linux machine, the same shape used for the nosia and Lychee checks. `ubuntu-latest` comes with Docker; Tilt and Flisk are installed in two steps. Save it as `.github/workflows/flisk-up.yml`:
+The fastest way to know the imported stack is honest is a throwaway job that boots it on a clean Linux machine, the same shape used for the nosia and Lychee checks. `ubuntu-latest` comes with Docker; Tilt and Flisk are installed in two steps. Save it as `.github/workflows-disabled/flisk-up.yml`:
 
 ```yaml
 name: flisk up

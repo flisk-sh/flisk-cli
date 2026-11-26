@@ -66,7 +66,7 @@ The [adoption guide](adopt-flisk.md) is the one-page path: `flisk doctor`, `flis
 
 ## CI
 
-`flisk config verify` checks that generated project files match `.flisk/project.json` and runs in CI ([`e2e-examples.yml`](../.github/workflows/e2e-examples.yml)). The [quickstart workflow](../.github/workflows/e2e-journeys.yml) runs a real `flisk up` on a GitHub-hosted runner, so it works on one. The [scope page](scope.md#local-only-or-also-staging-and-ci) says what CI is and is not for. A copy-paste workflow for your own repository is in [Running Flisk in CI](ci.md); its `flisk up` job has not been run on GitHub.
+`flisk config verify` checks that generated project files match `.flisk/project.json` and runs in CI ([`e2e-examples.yml`](../.github/workflows-disabled/e2e-examples.yml)). The [quickstart workflow](../.github/workflows-disabled/e2e-journeys.yml) runs a real `flisk up` on a GitHub-hosted runner, so it works on one. The [scope page](scope.md#local-only-or-also-staging-and-ci) says what CI is and is not for. A copy-paste workflow for your own repository is in [Running Flisk in CI](ci.md); its `flisk up` job has not been run on GitHub.
 
 ## Where are the other answers?
 

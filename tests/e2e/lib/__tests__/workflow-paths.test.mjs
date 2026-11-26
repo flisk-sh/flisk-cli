@@ -111,9 +111,9 @@ test("a workflow without a paths filter runs on every pull request and is not ch
 });
 
 test("the resource-type workflow is excluded, because it has no paths filter on purpose", () => {
-  assert.ok(EXCLUDED_WORKFLOWS[".github/workflows/e2e-resource-types.yml"], "the exclusion needs a reason");
+  assert.ok(EXCLUDED_WORKFLOWS[".github/workflows-disabled/e2e-resource-types.yml"], "the exclusion needs a reason");
   const { e2e, wf } = fixture(
-    { "resource-types/demo": { paths: ["cli/src/**", ".github/workflows/e2e-resource-types.yml"] } },
+    { "resource-types/demo": { paths: ["cli/src/**", ".github/workflows-disabled/e2e-resource-types.yml"] } },
     { "e2e-resource-types.yml": ["engine/**"] },
   );
   assert.deepEqual(workflowPathProblems(e2e, wf), []);

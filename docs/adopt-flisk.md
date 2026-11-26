@@ -94,7 +94,7 @@ When the pilot services start cleanly:
 
 1. Commit each `service.json` and `.flisk/project.json`. `.env` and `.flisk/.flisk-out/` are gitignored by `flisk project`; see [environment.md](environment.md) for what belongs in git.
 2. Add the commands a new teammate needs to your repository README, for example `flisk doctor` and `flisk up shop`.
-3. Run `flisk config verify` in CI. It checks that the generated project files match `.flisk/project.json` and exits non-zero on drift. It does not validate `service.json` or Helm values. For a copy-paste workflow see [Running Flisk in CI](ci.md); it is adapted from [`e2e-examples.yml`](../.github/workflows/e2e-examples.yml), which runs `flisk project --yes`, `flisk doctor --no-ping` and `flisk config verify` on the bundled example.
+3. Run `flisk config verify` in CI. It checks that the generated project files match `.flisk/project.json` and exits non-zero on drift. It does not validate `service.json` or Helm values. For a copy-paste workflow see [Running Flisk in CI](ci.md); it is adapted from [`e2e-examples.yml`](../.github/workflows-disabled/e2e-examples.yml), which runs `flisk project --yes`, `flisk doctor --no-ping` and `flisk config verify` on the bundled example.
 
 ## 5. What to measure
 

@@ -7,7 +7,7 @@ Facts on this page were read from the files `flisk project` and `flisk resource`
 ## Local only, or also staging and CI?
 
 - **Local:** the intended use.
-- **CI:** it works as a throwaway environment. The repository's own [quickstart workflow](../.github/workflows/e2e-journeys.yml) runs a real `flisk up` on a GitHub-hosted runner. A copy-paste workflow for your own repository is in [Running Flisk in CI](ci.md); its `flisk up` job has not been run on GitHub.
+- **CI:** it works as a throwaway environment. The repository's own [quickstart workflow](../.github/workflows-disabled/e2e-journeys.yml) runs a real `flisk up` on a GitHub-hosted runner. A copy-paste workflow for your own repository is in [Running Flisk in CI](ci.md); its `flisk up` job has not been run on GitHub.
 - **Staging or production:** no. There is no command that deploys, exports a chart, or generates cluster configuration.
 
 ## What differs from production

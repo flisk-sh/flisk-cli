@@ -78,7 +78,7 @@ pgrep -f "flisk up" >/dev/null 2>&1 || nohup flisk up --json >> up.log 2>&1 &
 
 ### GitHub Copilot coding agent
 
-`.github/workflows/copilot-setup-steps.yml` in the repo. Copilot on GitHub Actions runs its one `copilot-setup-steps` job before the session starts (the file must be on the default branch):
+`.github/workflows-disabled/copilot-setup-steps.yml` in the repo. Copilot on GitHub Actions runs its one `copilot-setup-steps` job before the session starts (the file must be on the default branch):
 
 ```yaml
 name: Copilot setup steps
@@ -87,9 +87,9 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: [".github/workflows/copilot-setup-steps.yml"]
+    paths: [".github/workflows-disabled/copilot-setup-steps.yml"]
   pull_request:
-    paths: [".github/workflows/copilot-setup-steps.yml"]
+    paths: [".github/workflows-disabled/copilot-setup-steps.yml"]
 
 jobs:
   copilot-setup-steps:

@@ -4,14 +4,14 @@
 
 ライブスタックのテストは GitHub Actions のマトリクスとして実行されます。各スイートが1つのレグ（leg）になり、各レグが自分のスタックを起動します。レグは並列に走るので、新しいスイートを追加しても他のスイートを待たせることはありません。このページでは、マトリクスの組み立て方、スイートをマトリクスに追加する方法、同じ方法で新しいグループのスイート群を追加する方法を説明します。ここは [テスト品質の取り組み](https://github.com/flisk-sh/flisk-cli/issues/1388) にあるすべての e2e 項目の手本です。
 
-手本となる例は `resource-types` グループです。これは [`e2e-resource-types.yml`](../../../.github/workflows/e2e-resource-types.yml) から実行されます。スイートの `run.sh` の書き方は、先に [e2e テストを書く](05-write-e2e-ja.md) を読んでください。
+手本となる例は `resource-types` グループです。これは [`e2e-resource-types.yml`](../../../.github/workflows-disabled/e2e-resource-types.yml) から実行されます。スイートの `run.sh` の書き方は、先に [e2e テストを書く](05-write-e2e-ja.md) を読んでください。
 
 ## 3 つの構成要素
 
 ```text
 tests/e2e/<group>/<suite>/suite.json   one file per suite: what it is, when it runs, its timeout
 tests/e2e/lib/suite-matrix.mjs         reads every suite.json in a group and prints the matrix
-.github/workflows/<group>-e2e.yml      a plan job (runs the builder) and a matrix job (one leg per entry)
+.github/workflows-disabled/<group>-e2e.yml      a plan job (runs the builder) and a matrix job (one leg per entry)
 ```
 
 ワークフローはスイート名を一覧に持っていません。`suite.json` を持つフォルダを追加すると、その `triggers` にイベントが含まれた時点でレグが1つ追加されます。
@@ -98,7 +98,7 @@ node tests/e2e/lib/suite-matrix.mjs resource-types,orm pr "bun,python,rust,go"
 `packaging` や `failure-recovery` のような、新しい種類のテストに独自の並列実行が必要なときに使います。
 
 1. `tests/e2e/<group>/` と、スイートごとのフォルダを、上と同じように作ります。グループ名は [e2e テストを書く](05-write-e2e-ja.md#グループを選ぶ) の表にあるものを使うか、同じ変更でその表に行を追加してください。
-2. `.github/workflows/e2e-resource-types.yml` を `.github/workflows/<group>-e2e.yml` にコピーします。名前、`paths` フィルター、`concurrency` グループ、そして `plan` ジョブ内の `suite-matrix.mjs` のグループ引数を変更します。`plan` ジョブ、`fail-fast: false`、`gate` ジョブは残してください。
+2. `.github/workflows-disabled/e2e-resource-types.yml` を `.github/workflows-disabled/<group>-e2e.yml` にコピーします。名前、`paths` フィルター、`concurrency` グループ、そして `plan` ジョブ内の `suite-matrix.mjs` のグループ引数を変更します。`plan` ジョブ、`fail-fast: false`、`gate` ジョブは残してください。
 3. 常に実行され、plan またはいずれかのレグが失敗したときに失敗する `gate` ジョブを追加します。これはブランチ保護で必須にすべき唯一のチェックです。こうすると、スキップされたマトリクスが見逃されずに済みます。
 4. `max-parallel` は、ランナーのプールが処理できる数にします（resource-types グループは 4、リリース候補は 15 を使います。リリース候補の 30 本の短いレグは、10 本ずつだと 3 波、10 分かかったためです）。
 5. `e2e-resource-types.yml` が使っているのと同じ `if: failure()` のステップで、各レグの失敗時の証跡をアップロードします。

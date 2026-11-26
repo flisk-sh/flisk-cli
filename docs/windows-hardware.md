@@ -67,7 +67,7 @@ tests/e2e/platforms/windows-hardware/run.sh WH4
 
 ## Run it in CI on a self-hosted runner
 
-The workflow [`e2e-platforms-hardware.yml`](../.github/workflows/e2e-platforms-hardware.yml) has two jobs:
+The workflow [`e2e-platforms-hardware.yml`](../.github/workflows-disabled/e2e-platforms-hardware.yml) has two jobs:
 
 - **hosted** runs the suite on `windows-latest` on every pull request that touches the Windows platform code. It is a reference run and a canary on the published release, not the acceptance run.
 - **hardware** runs the same suite on a self-hosted Windows 11 AMD64 machine. It only runs when someone dispatches the workflow by hand, so a pull request never executes on a maintainer's machine.

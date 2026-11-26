@@ -33,6 +33,6 @@ GitHub의 blob 뷰에서는 애니메이션 없이 다이어그램이 표시되�
 
 레코드는 `flisk down` 실행 후에도 유지되므로 컨테이너가 중지된 후에도 실패 기록을 확인할 수 있습니다. 이후 실행에서 덮어쓰거나 직접 삭제(`rm -rf .flisk/smoke/`)할 때까지 보존됩니다.
 
-CI 환경에서는 `.github/workflows/e2e-journeys.yml`의 `smoke` 스위트가 실행 실패 시에도 일회용 검증 프로젝트의 레코드를 `smoke-records-*` 아티팩트(14일간 유지)로 업로드합니다. 워크플로 아티팩트는 해당 실행을 조회할 수 있는 모든 사용자가 읽을 수 있으므로, `.env`에 정의되지 않은 인증 정보를 응답으로 반환하는 스모크 단계에 워크플로를 연결하지 마세요.
+CI 환경에서는 `.github/workflows-disabled/e2e-journeys.yml`의 `smoke` 스위트가 실행 실패 시에도 일회용 검증 프로젝트의 레코드를 `smoke-records-*` 아티팩트(14일간 유지)로 업로드합니다. 워크플로 아티팩트는 해당 실행을 조회할 수 있는 모든 사용자가 읽을 수 있으므로, `.env`에 정의되지 않은 인증 정보를 응답으로 반환하는 스모크 단계에 워크플로를 연결하지 마세요.
 
 모든 필드, 재시도 규칙 및 제외 사항은 [설정: `smoke`](configuration.md#smoke-check-the-public-url-after-flisk-up)에 기술되어 있습니다. `tests/e2e/journeys/smoke/verify-smoke.sh`는 실제 `flisk up`을 통해 두 가지 결과 경로를 모두 실행하여 검증합니다.

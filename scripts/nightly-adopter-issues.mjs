@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Flisk Landscape contributors
 // SPDX-License-Identifier: MIT
-// Nightly adopter issue reporter. After .github/workflows/nightly-adopters.yml runs on the default branch, opens one issue per
+// Nightly adopter issue reporter. After .github/workflows-disabled/nightly-adopters.yml runs on the default branch, opens one issue per
 // adopter whose job failed (or comments on its open issue), and closes that issue once the adopter passes again. Each issue
 // names the failing step and the job's error annotations, so a red adopter is visible without opening the run.
 // red-job-tracker.mjs still tracks the workflow as a whole after three red runs; this reports each adopter on every run.

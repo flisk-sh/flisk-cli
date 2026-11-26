@@ -22,7 +22,8 @@ const schema = JSON.parse(
   readFileSync(join(repoRoot, "runtime", "engine", "schemas", "service-schema.json"), "utf-8"),
 );
 const publishWorkflow = readFileSync(
-  join(repoRoot, ".github", "workflows", "publish-service-schema.yml"),
+  // The workflow is parked in workflows-disabled/ (see its README); the test reads it there.
+  join(repoRoot, ".github", "workflows-disabled", "publish-service-schema.yml"),
   "utf-8",
 );
 

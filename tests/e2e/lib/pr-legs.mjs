@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Flisk Landscape contributors
 // SPDX-License-Identifier: MIT
 // Narrows a resource-types/orm matrix (suite-matrix.mjs) to the legs a pull request's changed files touch, so a change to one
-// framework runs only that framework's legs. Used by the plan job of .github/workflows/e2e-resource-types.yml on pull requests;
+// framework runs only that framework's legs. Used by the plan job of .github/workflows-disabled/e2e-resource-types.yml on pull requests;
 // merge_group, nightly, release and manual runs keep the full matrix.
 //
 //   git diff --name-only "$BASE_SHA" HEAD | node tests/e2e/lib/pr-legs.mjs '<matrix json>' [--templates-before <file>]

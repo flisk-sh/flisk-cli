@@ -167,7 +167,7 @@ vendor-stated, not independently verified here.
 
 ## 9. CI integration cost
 
-- Workflow: `.github/workflows/typescript-compiler-benchmark.yml`; weekly and manual only (no `pull_request` trigger, so it never
+- Workflow: `.github/workflows-disabled/typescript-compiler-benchmark.yml`; weekly and manual only (no `pull_request` trigger, so it never
   adds to the PR feedback loop); `runs` input is validated (1-20); 30-minute job budget. Separate `continue-on-error` jobs for `ubuntu-latest` and `macos-latest`; not a required check; registered in
   `.github/ci-inventory.json`. Install is about 40 s (7 npm packages with prebuilt binaries), cached by the pin file.
 - Windows is **untested**: the npm shims need a shell and there is no `/usr/bin/time`, and a first attempt also hit the

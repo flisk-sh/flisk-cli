@@ -31,7 +31,7 @@
 
 要新增讀取執行中 agent 的 MCP 工具嗎？它屬於 `agent` 測試套件（MCP 資源則是 `mcp` 測試套件）。請比照 C1 到 C3 案例的寫法。
 
-目前只有 `resource-types/agent` 完成搬移。其他 e2e 測試仍在 `.github/workflows/*-e2e.yml`、`scripts/e2e/`、`scripts/verify-*.sh` 和 `tests/e2e/*.test.sh`。如 [`openspec/changes/organize-e2e-suites`](../../../openspec/changes/organize-e2e-suites/tasks.md) 所述，它們每個 pull request 搬移一個測試套件。如果你的改動涉及其中之一，就在它目前的位置擴充，或先搬移它。
+目前只有 `resource-types/agent` 完成搬移。其他 e2e 測試仍在 `.github/workflows-disabled/*-e2e.yml`、`scripts/e2e/`、`scripts/verify-*.sh` 和 `tests/e2e/*.test.sh`。如 [`openspec/changes/organize-e2e-suites`](../../../openspec/changes/organize-e2e-suites/tasks.md) 所述，它們每個 pull request 搬移一個測試套件。如果你的改動涉及其中之一，就在它目前的位置擴充，或先搬移它。
 
 ---
 

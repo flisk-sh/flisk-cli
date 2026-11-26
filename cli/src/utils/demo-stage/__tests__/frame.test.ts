@@ -109,7 +109,7 @@ describe("renderDemoFrame golden frames", () => {
       " Edit a file — the browser updates.                                           ",
       " flisk 1.4.72 · MIT · no telemetry · signed release: docs/security.md         ",
       " Questions? Join us on Discord: discord.gg/qMu5Xn8Kaq                         ",
-      " Like it? A star helps: github.com/flisk-sh/flisk-cli                             ",
+      " Like it? A star helps: github.com/flisk-sh/flisk-cli                         ",
     ]);
   });
 

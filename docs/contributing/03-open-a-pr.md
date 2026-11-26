@@ -72,10 +72,10 @@ GitHub also adds **Grok**, **Claude**, and **Codex** buttons to the end of your 
 The [PR template](../../.github/pull_request_template.md) asks you to select the areas you changed and opens short instructions for each area. GitHub also adds matching `area:*` labels from changed paths and removes stale area labels when you push an updated diff. Labels organize the PR; workflow path rules decide which automation runs.
 
 - **Every pull request:** [CI](../../.github/workflows/ci.yml) runs lint, typecheck, CLI tests, and a package smoke check. Some extra CI jobs depend on which files changed or repository settings.
-- **Runtime files changed:** the [E2E journeys gate](../../.github/workflows/e2e-journeys.yml) runs on every PR, and its quickstart suite runs when a changed file matches that suite's paths in `tests/e2e/journeys/quickstart/suite.json` (for example files under `cli/`, `runtime/engine/`, or `runtime/discovery/`).
+- **Runtime files changed:** the [E2E journeys gate](../../.github/workflows-disabled/e2e-journeys.yml) runs on every PR, and its quickstart suite runs when a changed file matches that suite's paths in `tests/e2e/journeys/quickstart/suite.json` (for example files under `cli/`, `runtime/engine/`, or `runtime/discovery/`).
 - **Framework example:** adding Vue, React, or another provider changes `cli/` and `runtime/engine/`, so both the always-run CI and Quickstart E2E run.
 - **Docs-only change:** the always-run CI still runs. the quickstart suite does not run unless the PR also changes one of its paths.
 
-Other example-app and 100-service fixture-bench checks run on a schedule or by manual request, not on each PR. You can always see a workflow's trigger paths at the top of its file in `.github/workflows/`.
+Other example-app and 100-service fixture-bench checks run on a schedule or by manual request, not on each PR. You can always see a workflow's trigger paths at the top of its file in `.github/workflows-disabled/`.
 
 If the Checks tab stays empty or every run ends in **Startup failure**, GitHub rejected the run before any job started; it is not your code and there is no log to read. A scheduled job re-runs a failed startup once within about 15 minutes, so the checks come back on their own. If they do not, push an empty commit or ask a maintainer to re-run the workflow.

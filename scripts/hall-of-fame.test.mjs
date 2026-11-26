@@ -7,7 +7,7 @@ import { describe, it } from "node:test";
 // The table is built by the script inlined in the workflow, so run that exact text.
 function workflowScript() {
   const lines = readFileSync(
-    new URL("../.github/workflows/hall-of-fame.yml", import.meta.url),
+    new URL("../.github/workflows-disabled/hall-of-fame.yml", import.meta.url),
     "utf8",
   ).split("\n");
   const start = lines.findIndex((line) => line.trim() === "script: |");

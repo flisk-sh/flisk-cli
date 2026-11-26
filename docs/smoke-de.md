@@ -33,6 +33,6 @@ Die Datensätze werden standardmäßig ignoriert: `flisk up` stellt sicher, dass
 
 Die Datensätze überleben `flisk down`, sodass ein Fehlschlag auch nach dem Stoppen der Container noch gelesen werden kann. Sie bleiben erhalten, bis ein späterer Lauf sie überschreibt oder Sie sie löschen: `rm -rf .flisk/smoke/`. <!-- spellchecker:disable-line -->
 
-In CI lädt die `smoke`-Suite von `.github/workflows/e2e-journeys.yml` die Datensätze ihres Wegwerf-Verifizierungsprojekts als `smoke-records-*`-Artefakt hoch (14 Tage aufbewahrt), auch wenn der Lauf fehlschlägt. Ein Workflow-Artefakt ist für alle lesbar, die den Lauf lesen können; verweisen Sie einen Workflow daher nicht auf einen Smoke-Schritt, dessen Antwort Anmeldedaten wiedergibt, die nicht in der `.env` stehen. <!-- spellchecker:disable-line -->
+In CI lädt die `smoke`-Suite von `.github/workflows-disabled/e2e-journeys.yml` die Datensätze ihres Wegwerf-Verifizierungsprojekts als `smoke-records-*`-Artefakt hoch (14 Tage aufbewahrt), auch wenn der Lauf fehlschlägt. Ein Workflow-Artefakt ist für alle lesbar, die den Lauf lesen können; verweisen Sie einen Workflow daher nicht auf einen Smoke-Schritt, dessen Antwort Anmeldedaten wiedergibt, die nicht in der `.env` stehen. <!-- spellchecker:disable-line -->
 
 Alle Felder, die Wiederholungsregeln und was nicht abgedeckt ist, stehen in [Konfiguration: `smoke`](configuration.md#smoke-check-the-public-url-after-flisk-up). `tests/e2e/journeys/smoke/verify-smoke.sh` führt beide Ergebnispfade über ein echtes `flisk up` aus. <!-- spellchecker:disable-line -->

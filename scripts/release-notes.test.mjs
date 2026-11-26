@@ -123,7 +123,7 @@ test("groupPulls orders sections and buckets every pull", () => {
 test("releaseBody puts the cosign line first and the grouped pulls under it", () => {
 	const body = releaseBody({
 		version: "1.4.30",
-		repo: "flisk-sh/flisk",
+		repo: "flisk-sh/flisk-cli",
 		previous: "v1.4.29",
 		generatedBody: GENERATED_BODY_1_4_30,
 	});
@@ -135,7 +135,7 @@ test("releaseBody puts the cosign line first and the grouped pulls under it", ()
 	assert.ok(body.indexOf("### Bug Fixes") < body.indexOf("### Documentation"));
 	assert.match(
 		body,
-		/\* feat\(templates\): swarm starter, a coordinator and three pulling workers as local processes \(#3015\) by @draarivpatel-ui in https:\/\/github\.com\/flisk-sh\/flisk\/pull\/3015/,
+		/\* feat\(templates\): swarm starter, a coordinator and three pulling workers as local processes \(#3015\) by @draarivpatel-ui in https:\/\/github\.com\/flisk-sh\/flisk-cli\/pull\/3015/,
 	);
 	assert.ok(
 		body.trimEnd().endsWith(

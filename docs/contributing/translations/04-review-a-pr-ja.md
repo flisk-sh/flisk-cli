@@ -57,7 +57,7 @@ AI ボタンは AI アシスタントとのチャットを開きます。その�
 
 ## AI レビューボタンの仕組み
 
-PR が開かれたり、再オープンされたり、編集されたりすると、[AI レビューボタンのワークフロー](../../../.github/workflows/ai-review-buttons.yml)が PR の説明の末尾にこのセクションを追加します。
+PR が開かれたり、再オープンされたり、編集されたりすると、[AI レビューボタンのワークフロー](../../../.github/workflows-disabled/ai-review-buttons.yml)が PR の説明の末尾にこのセクションを追加します。
 
 > **Review this PR in**
 > \[Grok\] \[Claude\] \[Codex\]
@@ -94,7 +94,7 @@ Review this pull request. Read the title and diff at https://github.com/flisk-sh
 
 ### マージ競合のボタン
 
-PR が `main` と競合する場合、[AI 競合ボタンのワークフロー](../../../.github/workflows/ai-conflict-buttons.yml)が、Grok、Claude、Codex 用の **Resolve conflict** ボタンを付けたコメントを PR に一つ投稿します。これらのボタンは、AI に `main` をブランチにマージして修正を push するための手順を与えます。AI がそのブランチに push できない場合（たとえば自分の所有でないフォーク）、手順は代わりに `fix/<PR number>-conflict` ブランチへ push して、置き換えの PR を開するよう指示します。元の PR に `Fixes #N` と書かれていれば、置き換えの PR にも同じことが書かれます。結果は通常の変更と同じように確認し、元の PR に置き換えの PR へのリンクをコメントしてください。競合が解消されると、同じコメントが解消されたことを示す内容に変わり、ボタンは消えます。
+PR が `main` と競合する場合、[AI 競合ボタンのワークフロー](../../../.github/workflows-disabled/ai-conflict-buttons.yml)が、Grok、Claude、Codex 用の **Resolve conflict** ボタンを付けたコメントを PR に一つ投稿します。これらのボタンは、AI に `main` をブランチにマージして修正を push するための手順を与えます。AI がそのブランチに push できない場合（たとえば自分の所有でないフォーク）、手順は代わりに `fix/<PR number>-conflict` ブランチへ push して、置き換えの PR を開するよう指示します。元の PR に `Fixes #N` と書かれていれば、置き換えの PR にも同じことが書かれます。結果は通常の変更と同じように確認し、元の PR に置き換えの PR へのリンクをコメントしてください。競合が解消されると、同じコメントが解消されたことを示す内容に変わり、ボタンは消えます。
 
 ## 何を確認するか
 
