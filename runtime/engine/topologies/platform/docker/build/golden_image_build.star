@@ -13,7 +13,7 @@ GOLDEN_HASH_LABEL = 'flisk.golden.hash'
 GOLDEN_REGISTRY_DEFAULT = 'ghcr.io/flisk-sh'
 
 # Who may have signed a golden image: this repository's publish workflow, keyless through GitHub's OIDC issuer.
-GOLDEN_SIGNER_IDENTITY = 'https://github.com/flisk-sh/flisk/.github/workflows/publish-golden-images.yml@.*'
+GOLDEN_SIGNER_IDENTITY = 'https://github.com/flisk-sh/flisk-cli/.github/workflows/publish-golden-images.yml@.*'
 GOLDEN_SIGNER_ISSUER = 'https://token.actions.githubusercontent.com'
 
 # Machine-wide names: flisk-golden-<layer>:<hash12> is built or pulled once, every project's <project>-<layer> tag points at it.

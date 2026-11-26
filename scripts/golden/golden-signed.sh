@@ -11,7 +11,7 @@ tag12="$(sha256sum "$out/golden-layers.Dockerfile" | cut -c1-12)"
 for layer in l1 l2 l3-backend l3-backend-prisma l3-frontend l4-backend l4-backend-node l4-frontend l4-migrator; do
   for registry in "$@"; do
     cosign verify \
-      --certificate-identity-regexp 'https://github.com/flisk-sh/flisk/.github/workflows/publish-golden-images.yml@.*' \
+      --certificate-identity-regexp 'https://github.com/flisk-sh/flisk-cli/.github/workflows/publish-golden-images.yml@.*' \
       --certificate-oidc-issuer https://token.actions.githubusercontent.com \
       "$registry/golden-$layer:$tag12" >/dev/null 2>&1 || { echo "golden-$layer:$tag12 is not signed in $registry" >&2; exit 1; }
   done

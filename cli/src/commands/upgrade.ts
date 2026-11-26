@@ -238,7 +238,7 @@ function isSignedRelease(tag: string): boolean {
 
 /** Workflows of this repository that sign checksums.txt (cosign, keyless). */
 const SIGNER_IDENTITY =
-  /^https:\/\/github\.com\/flisk-sh\/flisk\/\.github\/workflows\/(release-binaries|sign-release)\.yml@.*$/;
+  /^https:\/\/github\.com\/flisk-sh\/flisk-cli\/\.github\/workflows\/(release-binaries|sign-release)\.yml@.*$/;
 const SIGNER_ISSUER = "https://token.actions.githubusercontent.com";
 
 /** @internal Exported for unit tests only; not part of the package API. */
