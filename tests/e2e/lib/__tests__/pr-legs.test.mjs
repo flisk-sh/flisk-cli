@@ -141,8 +141,9 @@ test("shared code runs the canary, not every leg", () => {
   }
 });
 
-test("the files that build the matrix still run every leg", () => {
-  for (const file of [".github/workflows/e2e-resource-types.yml", "tests/e2e/lib/pr-legs.mjs", "tests/e2e/lib/suite-matrix.mjs"]) {
+// Skipped while CI workflows are disabled (.github/workflows-disabled/) or outside CI. Re-enable when the workflow returns.
+test.skip("the files that build the matrix still run every leg", () => {
+  for (const file of [".github/workflows-disabled/e2e-resource-types.yml", "tests/e2e/lib/pr-legs.mjs", "tests/e2e/lib/suite-matrix.mjs"]) {
     assert.deepEqual(labels([file]), all, file);
   }
 });
@@ -224,7 +225,7 @@ test("a PR is diffed against its merge commit's parent, so main moving on does n
 });
 
 test("the plan job uses the merge commit's parent and a depth-2 checkout", () => {
-  const wf = readFileSync(path.join(e2eDir, "../../.github/workflows/e2e-resource-types.yml"), "utf8");
+  const wf = readFileSync(path.join(e2eDir, "../../.github/workflows-disabled/e2e-resource-types.yml"), "utf8");
   assert.match(wf, /git diff --name-only HEAD\^1 HEAD \|/);
   assert.match(wf, /git show "HEAD\^1:examples\/byo\/templates\.json"/);
   assert.match(wf, /fetch-depth: 2/);

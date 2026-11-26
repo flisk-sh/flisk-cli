@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026 Flisk Landscape contributors
 # SPDX-License-Identifier: MIT
-# Runs inside WSL2 Ubuntu on the hosted Windows runner (.github/workflows/e2e-windows-wsl2-docker.yml): installs the Docker
+# Runs inside WSL2 Ubuntu on the hosted Windows runner (.github/workflows-disabled/e2e-windows-wsl2-docker.yml): installs the Docker
 # Engine and makes it listen on tcp://127.0.0.1:2375 as well as its socket, so the Windows docker CLI, tilt.exe and Flisk can
 # use it. Run as root. `diagnose` prints what the engine and systemd say, for the findings artifact.
 #

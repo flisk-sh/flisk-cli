@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Flisk Landscape contributors
 // SPDX-License-Identifier: MIT
 // Whether the agent and mcp resource types still work on a live stack. 🧩 E2E | Resource types
-// (.github/workflows/e2e-resource-types.yml) runs one matrix job per suite, named `${group} / ${label}`; the agent and
+// (.github/workflows-disabled/e2e-resource-types.yml) runs one matrix job per suite, named `${group} / ${label}`; the agent and
 // mcp suites (tests/e2e/resource-types/{agent,mcp}/suite.json) are the jobs `resource-types / agent` and
 // `resource-types / mcp`. The value is the share of those jobs that succeeded over the last 20 completed runs that ran
 // one. Only nightly, release (workflow_run) and manual runs are read: they run both suites on main or a published

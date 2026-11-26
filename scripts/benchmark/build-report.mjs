@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: MIT
 
 // Builds one self-contained HTML page (no external files, no network) from a flisk up benchmark run and the
-// committed history in docs/benchmarks/results. Published to GitHub Pages by .github/workflows/benchmarks.yml.
+// committed history in docs/benchmarks/results. Published to GitHub Pages by .github/workflows-disabled/benchmarks.yml.
 //
 // Usage: node scripts/benchmark/build-report.mjs --run <run dir> --history docs/benchmarks/results --out <dir> [--commit <sha>] [--run-url <url>]
 

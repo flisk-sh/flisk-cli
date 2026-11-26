@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Flisk Landscape contributors
 // SPDX-License-Identifier: MIT
 // Whether the packed CLI still installs and runs. The share of the last 10 completed runs of the 🔄 CI | Packed CLI
-// lifecycle smoke (.github/workflows/package-lifecycle-smoke.yml: pack the CLI, install the tarball, create a project,
+// lifecycle smoke (.github/workflows-disabled/package-lifecycle-smoke.yml: pack the CLI, install the tarball, create a project,
 // up and down) that succeeded. It runs on push to main and on manual dispatch, so the newest run is the state of main.
 // Cancelled, skipped and unapproved runs say nothing about the package and are left out (recentRuns, shared with
 // example-boot-success.mjs).

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 // Post-merge failure reporter (#2897). When a pull request workflow finishes red for the head commit of a pull request that
 // was already merged, comments on the pull request and opens (or updates) one issue per pull request, so a merge with red
-// checks is never silent. Run by .github/workflows/report-post-merge-failures.yml on `workflow_run`; reads the event from
+// checks is never silent. Run by .github/workflows-disabled/report-post-merge-failures.yml on `workflow_run`; reads the event from
 // GITHUB_EVENT_PATH and never checks out pull request code.
 //   node scripts/report-post-merge-failures.mjs [--dry-run]
 import { execFileSync } from "node:child_process";

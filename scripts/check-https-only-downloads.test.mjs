@@ -9,11 +9,11 @@ import { test } from "node:test";
 const DOWNLOADS = [
   ["install.sh", '"$OFFICIAL_INSTALLER" -o "$installer_tmp"'],
   ["runtime/engine/assets/docker/wake-gateway/Dockerfile", "tilt-dev/tilt/releases/download"],
-  [".github/workflows/publish-mcp-registry.yml", '"$base_url/$archive"'],
-  [".github/workflows/publish-mcp-registry.yml", '"$base_url/$archive.sigstore.json"'],
-  [".github/workflows/oss-score-gate.yml", "api.securityscorecards.dev"],
-  [".github/workflows/byo-template-e2e.yml", "tilt-dev/tilt/releases/download"],
-  [".github/workflows/e2e-resource-types.yml", "benchmarks-data/stack-timings/latest.json"],
+  [".github/workflows-disabled/publish-mcp-registry.yml", '"$base_url/$archive"'],
+  [".github/workflows-disabled/publish-mcp-registry.yml", '"$base_url/$archive.sigstore.json"'],
+  [".github/workflows-disabled/oss-score-gate.yml", "api.securityscorecards.dev"],
+  [".github/workflows-disabled/byo-template-e2e.yml", "tilt-dev/tilt/releases/download"],
+  [".github/workflows-disabled/e2e-resource-types.yml", "benchmarks-data/stack-timings/latest.json"],
 ];
 
 for (const [file, marker] of DOWNLOADS) {

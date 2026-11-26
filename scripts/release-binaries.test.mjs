@@ -564,7 +564,7 @@ test("updateBunLockCliWorkspaceVersion updates CLI version while preserving form
 });
 
 test("release-binaries.yml workflow synchronizes bun.lock and stages it with package.json", () => {
-  const workflowPath = join(ROOT_DIR, ".github/workflows/release-binaries.yml");
+  const workflowPath = join(ROOT_DIR, ".github/workflows-disabled/release-binaries.yml");
   const workflowContent = readFileSync(workflowPath, "utf8");
 
   assert.match(
@@ -630,12 +630,12 @@ function jobBlock(workflow, job) {
 }
 
 test("the MCP Registry publish is its own workflow, started when the release run completes, not on the release's path", () => {
-  const release = readFileSync(join(ROOT_DIR, ".github/workflows/release-binaries.yml"), "utf8");
+  const release = readFileSync(join(ROOT_DIR, ".github/workflows-disabled/release-binaries.yml"), "utf8");
   const publish = jobBlock(release, "publish");
   assert.doesNotMatch(publish, /mcp-publisher|Publish to the MCP Registry/, "publish must not wait on the MCP Registry");
   assert.match(publish, /name: Commit the version bump/);
   assert.doesNotMatch(release, /mcp-publisher/, "the release run must end without waiting for the MCP Registry (#3938)");
-  const mcp = readFileSync(join(ROOT_DIR, ".github/workflows/publish-mcp-registry.yml"), "utf8");
+  const mcp = readFileSync(join(ROOT_DIR, ".github/workflows-disabled/publish-mcp-registry.yml"), "utf8");
   const releaseName = release.match(/^name: (.+)$/m)[1];
   assert.ok(mcp.includes(`workflows: ["${releaseName}"]`), "it must be triggered by the release workflow's name");
   assert.match(mcp, /types: \[completed\]/);
@@ -658,8 +658,8 @@ test("the CLI image pre-flight and the push build share one Actions layer cache 
   assert.match(script, /--cache-to "type=gha,scope=\$FLISK_IMAGE_CACHE_SCOPE,mode=max,ignore-error=true"/, "a cache outage must not fail a pushed build");
   const dockerfile = readFileSync(join(ROOT_DIR, "scripts/release/flisk-image.Dockerfile"), "utf8");
   assert.ok(dockerfile.indexOf("ARG VERSION") > dockerfile.lastIndexOf("tilt version"), "ARG VERSION must come after the apt and Tilt layers");
-  const preflight = jobBlock(readFileSync(join(ROOT_DIR, ".github/workflows/release-binaries.yml"), "utf8"), "cli-image");
-  const publish = readFileSync(join(ROOT_DIR, ".github/workflows/publish-cli-image.yml"), "utf8");
+  const preflight = jobBlock(readFileSync(join(ROOT_DIR, ".github/workflows-disabled/release-binaries.yml"), "utf8"), "cli-image");
+  const publish = readFileSync(join(ROOT_DIR, ".github/workflows-disabled/publish-cli-image.yml"), "utf8");
   for (const [name, text] of [["cli-image", preflight], ["publish-cli-image.yml", publish]]) {
     assert.match(text, /crazy-max\/ghaction-github-runtime@[0-9a-f]{40}/, `${name} must export the Actions cache variables`);
     assert.match(text, /FLISK_IMAGE_CACHE_SCOPE: cli-image/, `${name} must write its own scope`);
@@ -675,13 +675,13 @@ test("the CLI image stores the flisk binary in one layer (#3947)", () => {
 });
 
 test("the candidate starts the release only after its gate passed (#3979)", () => {
-  const release = jobBlock(readFileSync(join(ROOT_DIR, ".github/workflows/release-candidate.yml"), "utf8"), "release");
+  const release = jobBlock(readFileSync(join(ROOT_DIR, ".github/workflows-disabled/release-candidate.yml"), "utf8"), "release");
   assert.match(release, /^\s+needs: \[[^\]]*\bgate\b[^\]]*\]$/m, "dispatched before the suites end, publish holds a runner waiting for them");
   assert.match(release, /needs\.gate\.result == 'success'/);
 });
 
 test("the release candidate runs at least 15 legs at once", () => {
-  const workflow = readFileSync(join(ROOT_DIR, ".github/workflows/release-candidate.yml"), "utf8");
+  const workflow = readFileSync(join(ROOT_DIR, ".github/workflows-disabled/release-candidate.yml"), "utf8");
   const cap = Number(workflow.match(/max-parallel: (\d+)/)?.[1]);
   assert.ok(cap >= 15 && cap < 20, `max-parallel is ${cap}: below 15 the candidate takes 3 waves, 20 starves the shared runner pool`);
 });

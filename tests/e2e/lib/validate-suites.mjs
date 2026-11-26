@@ -122,7 +122,7 @@ export function validateSuites(e2eDir, { selfCheck = true } = {}) {
 // e2e-resource-types.yml has no pull_request.paths on purpose: the gate must report on every pull request and merge queue entry,
 // and its plan job picks the legs to run from the PR_PATHS regex inside the workflow. Changing that regex is a separate task.
 export const EXCLUDED_WORKFLOWS = {
-  ".github/workflows/e2e-resource-types.yml": "no pull_request.paths on purpose; the plan job's PR_PATHS regex selects the legs",
+  ".github/workflows-disabled/e2e-resource-types.yml": "no pull_request.paths on purpose; the plan job's PR_PATHS regex selects the legs",
 };
 
 // Paths a workflow filter may hold that no suite lists: the reason for each is recorded here so a new unowned entry is a decision.

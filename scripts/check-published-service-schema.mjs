@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Flisk Landscape contributors
 // SPDX-License-Identifier: MIT
 // Offline check of runtime/engine/schemas/service-schema.json. It never fetches the live Pages copy:
-// that file is a deploy artifact published from main (see .github/workflows/publish-service-schema.yml),
+// that file is a deploy artifact published from main (see .github/workflows-disabled/publish-service-schema.yml),
 // so a PR that changes the schema could never match it before merge.
 import { readFile } from "node:fs/promises";
 

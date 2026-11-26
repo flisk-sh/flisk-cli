@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Flisk Landscape contributors
 // SPDX-License-Identifier: MIT
 // Whether Flisk still works under WSL2 on Windows. The share of the last 10 completed runs of 🪟 E2E | Platforms WSL2
-// (.github/workflows/e2e-platforms-wsl2.yml) that succeeded. The workflow is dispatched by hand only, so a run can be
+// (.github/workflows-disabled/e2e-platforms-wsl2.yml) that succeeded. The workflow is dispatched by hand only, so a run can be
 // weeks old: the summary gives how many runs there were and the date of the newest, so a stale 100% is not read as a
 // fresh one. Cancelled and skipped runs are left out.
 import { failedRuns, passRate, recentRuns } from "./example-boot-success.mjs";

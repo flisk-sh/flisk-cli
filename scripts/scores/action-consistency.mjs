@@ -140,13 +140,13 @@ export const EXPECTED = [
 		reason: "publish jobs run npm publish with the npm 11 that Node 24 bundles (npm trusted publishing needs npm >= 11.5.1)",
 	})),
 	{
-		file: ".github/workflows/release-candidate.yml",
+		file: ".github/workflows-disabled/release-candidate.yml",
 		kind: "node-version",
 		value: "24.22.3",
 		reason: "the release candidate tests the binaries on the Node that release-binaries.yml publishes them with (#3946)",
 	},
 	{
-		file: ".github/workflows/e2e-platforms-wsl2.yml",
+		file: ".github/workflows-disabled/e2e-platforms-wsl2.yml",
 		kind: "runs-on",
 		value: "windows-2022",
 		reason: "the WSL2 suite stays on the Windows image it was validated on (#1876); setup-wsl's wsl --update is flaky (#716)",

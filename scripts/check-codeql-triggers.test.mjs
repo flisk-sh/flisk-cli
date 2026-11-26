@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 import { triggersOf } from "./check-ci-inventory.mjs";
 
-const workflowPath = fileURLToPath(new URL("../.github/workflows/codeql.yml", import.meta.url));
+const workflowPath = fileURLToPath(new URL("../.github/workflows-disabled/codeql.yml", import.meta.url));
 const source = readFileSync(workflowPath, "utf8");
 
 test("CodeQL triggers are PRs, merge groups, a weekly schedule and manual dispatch only", () => {

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copyright (c) 2026 Flisk Landscape contributors
 # SPDX-License-Identifier: MIT
-# The flisk up warm and cold start benchmark on the restaurant example (moved from .github/workflows/benchmarks.yml, #1301). Each
+# The flisk up warm and cold start benchmark on the restaurant example (moved from .github/workflows-disabled/benchmarks.yml, #1301). Each
 # case is one step of the old measure job: B1 generates the project from this commit's extension, B2 runs the cold and warm
 # starts with scripts/benchmark/flisk-up-warm-start.sh, B3 builds the HTML report and its summary. The job builds the CLI from
 # this commit and installs Tilt first (the workflow's steps), and the publish job stays in the workflow: this suite measures,
