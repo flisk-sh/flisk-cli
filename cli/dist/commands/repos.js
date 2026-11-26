@@ -86,7 +86,7 @@ reposCommand
     .command("clone")
     .description("Clone missing service repositories configured in .flisk/project.json")
     .argument("[dir...]", "Clone only these configured repository dirs (default: every missing repository)")
-    .addHelpText("after", '\nEach entry of "repos" in .flisk/project.json has url, dir (relative to the project root), and optional branch.\nExisting directories are left untouched. flisk up also clones missing repositories.\n\nExamples:\n  flisk repos clone\n  flisk repos clone services/orders\n  flisk repos clone --dry-run\n  flisk repos clone --json\n  flisk repos clone --dry-run --json\n\nDocs: https://github.com/flisk-sh/flisk/blob/main/docs/layout.md')
+    .addHelpText("after", '\nEach entry of "repos" in .flisk/project.json has url, dir (relative to the project root), and optional branch.\nExisting directories are left untouched. flisk up also clones missing repositories.\n\nExamples:\n  flisk repos clone\n  flisk repos clone services/orders\n  flisk repos clone --dry-run\n  flisk repos clone --json\n  flisk repos clone --dry-run --json\n\nDocs: https://github.com/flisk-sh/flisk-cli/blob/main/docs/layout.md')
     .option("--dry-run", "List the repositories that would be cloned, without creating folders or running git", false)
     .option("--json", "Output JSON result", false)
     .action(async (dirs, options) => {

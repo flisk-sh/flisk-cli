@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 import { conflictPort } from "./port-conflict-fix.js";
 import { getPortSetting } from "./port-owner.js";
-const DOCS = "https://github.com/flisk-sh/flisk/blob/main/docs";
+const DOCS = "https://github.com/flisk-sh/flisk-cli/blob/main/docs";
 const DEFAULT_TILT_PORT = 10350;
 /** Troubleshooting entries the hints point at. Each anchor is a heading in docs/troubleshooting.md. */
 export const UP_HINT_DOCS = {

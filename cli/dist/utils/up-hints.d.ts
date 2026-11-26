@@ -1,8 +1,8 @@
 /** Troubleshooting entries the hints point at. Each anchor is a heading in docs/troubleshooting.md. */
 export declare const UP_HINT_DOCS: {
-    readonly coldStart: "https://github.com/flisk-sh/flisk/blob/main/docs/troubleshooting.md#cold-start-blocked-docker-or-tilt-missing";
-    readonly unhealthy: "https://github.com/flisk-sh/flisk/blob/main/docs/troubleshooting.md#services-never-turn-healthy-or-are-left-behind";
-    readonly smoke: "https://github.com/flisk-sh/flisk/blob/main/docs/smoke.md";
+    readonly coldStart: "https://github.com/flisk-sh/flisk-cli/blob/main/docs/troubleshooting.md#cold-start-blocked-docker-or-tilt-missing";
+    readonly unhealthy: "https://github.com/flisk-sh/flisk-cli/blob/main/docs/troubleshooting.md#services-never-turn-healthy-or-are-left-behind";
+    readonly smoke: "https://github.com/flisk-sh/flisk-cli/blob/main/docs/smoke.md";
 };
 /**
  * A warning for a CI job that ran plain `flisk up`, or null anywhere else. That command stays attached to stream logs, so

@@ -206,7 +206,7 @@ export function showDemoHelp() {
     ]);
     console.log();
     console.log(chalk.gray(`  For every command: ${chalk.cyan("flisk --help")}`));
-    console.log(chalk.gray(`  GitHub: ${chalk.cyan("https://github.com/flisk-sh/flisk")}`));
+    console.log(chalk.gray(`  GitHub: ${chalk.cyan("https://github.com/flisk-sh/flisk-cli")}`));
     console.log();
 }
 export function showHelp() {
@@ -254,6 +254,6 @@ export function showHelp() {
   `));
     console.log(chalk.gray(`  ${"═".repeat(50)}`));
     console.log(chalk.gray(`  For more help: ${chalk.cyan("flisk help [command]")}`));
-    console.log(chalk.gray(`  GitHub: ${chalk.cyan("https://github.com/flisk-sh/flisk")}`));
+    console.log(chalk.gray(`  GitHub: ${chalk.cyan("https://github.com/flisk-sh/flisk-cli")}`));
     console.log();
 }

@@ -3,7 +3,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 const COVERAGE_DOC = "docs/project/ADOPTER-COVERAGE.md";
-const COVERAGE_DOC_URL = `https://github.com/flisk-sh/flisk/blob/main/${COVERAGE_DOC}`;
+const COVERAGE_DOC_URL = `https://github.com/flisk-sh/flisk-cli/blob/main/${COVERAGE_DOC}`;
 const TABLE_ANCHOR = "compose-features";
 // The coverage rows a finding can link to by name; anything else links to the table itself.
 const FEATURE_ANCHORS = [

@@ -32,13 +32,13 @@ export function specOf(path) {
         spec = level.find((candidate) => candidate.name === name);
         if (!spec)
             throw new FliskError(`argSpec: no command spec for "${path.join(" ")}"`, [
-                "This is a bug in the MCP tool table, not in your input. Report it at https://github.com/flisk-sh/flisk/issues",
+                "This is a bug in the MCP tool table, not in your input. Report it at https://github.com/flisk-sh/flisk-cli/issues",
             ]);
         level = spec.subcommands;
     }
     if (!spec?.hasAction) {
         throw new FliskError(`argSpec: "${path.join(" ")}" is a command group, not a runnable command`, [
-            "This is a bug in the MCP tool table, not in your input. Report it at https://github.com/flisk-sh/flisk/issues",
+            "This is a bug in the MCP tool table, not in your input. Report it at https://github.com/flisk-sh/flisk-cli/issues",
         ]);
     }
     return spec;
@@ -57,7 +57,7 @@ export function parseOptionFlags(flags) {
     const long = longFlagOf(flags);
     if (!long)
         throw new FliskError(`argSpec: option spec has no long flag: "${flags}"`, [
-            "This is a bug in the MCP tool table, not in your input. Report it at https://github.com/flisk-sh/flisk/issues",
+            "This is a bug in the MCP tool table, not in your input. Report it at https://github.com/flisk-sh/flisk-cli/issues",
         ]);
     const name = long.slice(2);
     const negated = name.startsWith("no-");
@@ -94,7 +94,7 @@ function inferKind(command, row, parsed) {
     if (parsed.variadic)
         return "names";
     throw new FliskError(`argSpec: ${command} ${row.flag} takes a value and needs an explicit "as"`, [
-        "This is a bug in the MCP tool table, not in your input. Report it at https://github.com/flisk-sh/flisk/issues",
+        "This is a bug in the MCP tool table, not in your input. Report it at https://github.com/flisk-sh/flisk-cli/issues",
     ]);
 }
 /** Match one row against its spec element, or fail with the command it should have been on. */
@@ -106,19 +106,19 @@ export function resolveRow(spec, row) {
         const specOption = spec.options.find((o) => longFlagOf(o.flags) === row.flag);
         if (!specOption)
             throw new FliskError(`argSpec: ${command} has no option ${row.flag}`, [
-                "This is a bug in the MCP tool table, not in your input. Report it at https://github.com/flisk-sh/flisk/issues",
+                "This is a bug in the MCP tool table, not in your input. Report it at https://github.com/flisk-sh/flisk-cli/issues",
             ]);
         const parsed = parseOptionFlags(specOption.flags);
         const arg = row.arg ?? parsed.attribute;
         const as = row.as ?? inferKind(command, row, parsed);
         if (as === "boolean" && parsed.takesValue) {
             throw new FliskError(`argSpec: ${command} ${row.flag} takes a value and cannot be "boolean"`, [
-                "This is a bug in the MCP tool table, not in your input. Report it at https://github.com/flisk-sh/flisk/issues",
+                "This is a bug in the MCP tool table, not in your input. Report it at https://github.com/flisk-sh/flisk-cli/issues",
             ]);
         }
         if ((as === "names" || as === "strings") && !parsed.variadic) {
             throw new FliskError(`argSpec: ${command} ${row.flag} is not variadic and cannot take "${as}"`, [
-                "This is a bug in the MCP tool table, not in your input. Report it at https://github.com/flisk-sh/flisk/issues",
+                "This is a bug in the MCP tool table, not in your input. Report it at https://github.com/flisk-sh/flisk-cli/issues",
             ]);
         }
         return { row, arg, as, option: { spec: specOption, flags: parsed } };
@@ -126,13 +126,13 @@ export function resolveRow(spec, row) {
     const specArgument = spec.arguments.find((a) => a.name === row.argument);
     if (!specArgument)
         throw new FliskError(`argSpec: ${command} has no argument ${row.argument}`, [
-            "This is a bug in the MCP tool table, not in your input. Report it at https://github.com/flisk-sh/flisk/issues",
+            "This is a bug in the MCP tool table, not in your input. Report it at https://github.com/flisk-sh/flisk-cli/issues",
         ]);
     const arg = row.arg ?? specArgument.name;
     const as = row.as ?? (specArgument.variadic ? "strings" : "name");
     if (as === "boolean") {
         throw new FliskError(`argSpec: ${command} ${row.argument} is a positional and cannot be "boolean"`, [
-            "This is a bug in the MCP tool table, not in your input. Report it at https://github.com/flisk-sh/flisk/issues",
+            "This is a bug in the MCP tool table, not in your input. Report it at https://github.com/flisk-sh/flisk-cli/issues",
         ]);
     }
     return { row, arg, as, argument: specArgument };

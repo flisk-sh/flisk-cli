@@ -262,7 +262,7 @@ export async function verifyChecksumsSignature(checksums, bundleUrl, tag) {
                 ? `Release ${tag} has no signature (${CHECKSUMS_BUNDLE_ASSET_NAME}), but every release since v1.3.130 is signed`
                 : `Release ${tag} has no signature (${CHECKSUMS_BUNDLE_ASSET_NAME}) and ${REQUIRE_SIGNATURE_ENV}=1 is set`, [
                 mustBeSigned
-                    ? "Do not install this release; report it at https://github.com/flisk-sh/flisk/security"
+                    ? "Do not install this release; report it at https://github.com/flisk-sh/flisk-cli/security"
                     : "Upgrade to a signed release, or unset FLISK_UPGRADE_REQUIRE_SIGNATURE",
                 "Or install with: npm install -g @flisk-sh/flisk",
             ]);
@@ -275,7 +275,7 @@ export async function verifyChecksumsSignature(checksums, bundleUrl, tag) {
             "Or install with: npm install -g @flisk-sh/flisk",
         ]);
     const fail = (reason) => new FliskError(`Signature verification failed for ${CHECKSUMS_ASSET_NAME}: ${reason}`, [
-        "Nothing was installed. Do not use this release; report it at https://github.com/flisk-sh/flisk/security",
+        "Nothing was installed. Do not use this release; report it at https://github.com/flisk-sh/flisk-cli/security",
         "Or install with: npm install -g @flisk-sh/flisk",
     ]);
     let signer;

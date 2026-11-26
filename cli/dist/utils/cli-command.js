@@ -9,7 +9,7 @@ export const CLI_COMMAND = "flisk";
 /** The npm package that installs it. */
 export const CLI_PACKAGE = "@flisk-sh/flisk";
 /** The repository the CLI is released from. */
-export const CLI_REPOSITORY = "https://github.com/flisk-sh/flisk";
+export const CLI_REPOSITORY = "https://github.com/flisk-sh/flisk-cli";
 /**
  * The package the CLI was published under before the rename. It owns the old `flisk` command.
  *

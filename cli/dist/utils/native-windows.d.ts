@@ -7,7 +7,7 @@
  * one-command flow of a Docker starter refuse with this message before they touch the machine.
  */
 export declare const NATIVE_WINDOWS_REFUSAL = "Landscape startup needs Ubuntu on WSL2. Native Windows runs only services that declare a command, as local processes.";
-export declare const WINDOWS_GUIDE_URL = "https://github.com/flisk-sh/flisk/blob/main/docs/setup/windows.md";
+export declare const WINDOWS_GUIDE_URL = "https://github.com/flisk-sh/flisk-cli/blob/main/docs/setup/windows.md";
 /**
  * The one next step for someone on native Windows: open Ubuntu (WSL2) and run Flisk there, with the exact commands.
  */

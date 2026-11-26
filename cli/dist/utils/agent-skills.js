@@ -26,10 +26,10 @@ export const PROJECT_AGENT_SKILLS = [
 export const CLAUDE_SKILLS_DIR = ".claude/skills";
 export const AGENTS_SKILLS_DIR = ".agents/skills";
 export const AGENT_SKILL_DIRS = [CLAUDE_SKILLS_DIR, AGENTS_SKILLS_DIR];
-const DOCS_URL = "https://github.com/flisk-sh/flisk/blob/main/docs/";
+const DOCS_URL = "https://github.com/flisk-sh/flisk-cli/blob/main/docs/";
 export const PROJECT_AGENTS_MD = `# AGENTS.md
 
-This project runs on [Flisk](https://github.com/flisk-sh/flisk). To build or run something here, follow the Flisk skills in \`.agents/skills\` (Claude Code: \`.claude/skills\`), starting with \`flisk-build\`.
+This project runs on [Flisk](https://github.com/flisk-sh/flisk-cli). To build or run something here, follow the Flisk skills in \`.agents/skills\` (Claude Code: \`.claude/skills\`), starting with \`flisk-build\`.
 
 - Add a service: \`flisk resource <name> --type <frontend|backend|worker|agent|mcp> --stack <stack> --yes\`
 - Start it: \`flisk up <stack>\`, then \`flisk status --json\`: every resource must be \`ready\`; request \`<url or directUrl>/health\` of each

@@ -58,32 +58,32 @@ export const PROJECT_TEMPLATES = {
         description: "AI assistant: an assistant that can use tools and remember what it did",
     },
     swarm: {
-        repo: "https://github.com/flisk-sh/flisk.git",
+        repo: "https://github.com/flisk-sh/flisk-cli.git",
         generated: "swarm",
         description: "AI team: one assistant splits a goal into tasks and three helpers finish them",
     },
     security: {
-        repo: "https://github.com/flisk-sh/flisk.git",
+        repo: "https://github.com/flisk-sh/flisk-cli.git",
         generated: "security",
         description: "Security checker: one assistant scans, one sorts what it found, one writes the report",
     },
     "super-agent": {
-        repo: "https://github.com/flisk-sh/flisk.git",
+        repo: "https://github.com/flisk-sh/flisk-cli.git",
         generated: "super-agent",
         description: "AI researcher: plans a task, looks things up, writes and checks the result (uses Claude when you add an Anthropic key)",
     },
     langgraph: {
-        repo: "https://github.com/flisk-sh/flisk.git",
+        repo: "https://github.com/flisk-sh/flisk-cli.git",
         generated: "langgraph",
         description: "Step-by-step AI writer: plans, researches, writes and checks, and picks up where it stopped",
     },
     "tool-loop": {
-        repo: "https://github.com/flisk-sh/flisk.git",
+        repo: "https://github.com/flisk-sh/flisk-cli.git",
         generated: "tool-loop",
         description: "Simple AI helper: an assistant that uses tools, with a practice model so it works offline",
     },
     "next-postgres": {
-        repo: "https://github.com/flisk-sh/flisk.git",
+        repo: "https://github.com/flisk-sh/flisk-cli.git",
         composed: "next-postgres",
         description: "Next.js + Postgres app: a website with a working add, tick and delete list, an API and a migrator (needs Docker)",
     },
