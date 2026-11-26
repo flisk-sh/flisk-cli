@@ -1,0 +1,202 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+
+/**
+ * What `flisk create` can offer, read from Flisk's own generators.
+ *
+ * Nothing here names a framework, language, starter or resource type to offer: every option comes from the registries that
+ * `flisk resource` and `flisk project` already use (frontend and backend providers, backend languages, project templates,
+ * creatable resource types and infrastructure presets). A generator added to a registry shows up in `flisk create` with no
+ * edit here, and this file never has to be kept in step with them.
+ */
+
+import {
+  DEFAULT_BACKEND_FRAMEWORK,
+  listBackendFrameworks,
+} from "../backend-frameworks/registry.js";
+import { bunBackendProvider } from "../backend-languages/bun.js";
+import { nodeBackendProvider } from "../backend-languages/node.js";
+import { BACKEND_LANGUAGES, DEFAULT_BACKEND_LANGUAGE } from "../backend-languages/registry.js";
+import {
+  DEFAULT_FRONTEND_FRAMEWORK,
+  FRONTEND_FRAMEWORKS,
+} from "../frontend-frameworks/registry.js";
+import {
+  CREATABLE_RESOURCE_TYPES,
+  DATABASE_FRAMEWORKS,
+  DATABASE_RESOURCE_TYPE,
+  PRESET_RESOURCE_TYPES,
+} from "../types/index.js";
+import { BRING_YOUR_OWN_TYPE } from "./constants.js";
+import { frameworksOfType, INFRA_PRESETS } from "./infra-presets.js";
+import { PROJECT_TEMPLATES, runsLocally } from "./project-templates.js";
+import { findOnPath, localPackageManager } from "./which.js";
+
+/** One thing a menu can offer. */
+export interface CatalogOption {
+  id: string;
+  title: string;
+  hint: string;
+  /** Runs on the host with no Docker or Tilt. False means the Docker route only. */
+  local: boolean;
+}
+
+/** The frontend frameworks, the registry's default first. */
+export function frontendCatalog(): CatalogOption[] {
+  const options = Object.values(FRONTEND_FRAMEWORKS).map((provider) => ({
+    id: provider.id,
+    title: provider.label,
+    hint: provider.kind === "server" ? "runs its own dev server" : "Vite",
+    // A server framework runs its own dev server on the host; a Vite one needs its plugin setup declared.
+    local: provider.kind === "server" || provider.vite !== undefined,
+  }));
+  return defaultFirst(options, DEFAULT_FRONTEND_FRAMEWORK);
+}
+
+export interface LanguageOption extends CatalogOption {
+  /** The backend frameworks this language can be combined with; empty when the language owns its runtime. */
+  frameworks: CatalogOption[];
+  /** The frameworks this language is usually served with, for a `--backend` hint (`fastapi` for Python). */
+  serverFrameworks: string[];
+}
+
+/** The backend languages, each with the frameworks it can be combined with, the registry's default first. */
+export function backendCatalog(): LanguageOption[] {
+  const frameworks = listBackendFrameworks();
+  const options = Object.values(BACKEND_LANGUAGES).map((language) => ({
+    id: language.id,
+    title: language.label,
+    // What the language needs on the host: its dev command's program, or its own id for the shared scaffold.
+    hint: `needs ${localRequirements({ language: language.id }).join(", ")}`,
+    local: true,
+    frameworks: defaultFirst(
+      frameworks
+        .filter((entry) => entry.languages.includes(language.id))
+        .map((entry) => ({ id: entry.id, title: entry.label, hint: "", local: true })),
+      DEFAULT_BACKEND_FRAMEWORK,
+    ),
+    serverFrameworks: language.serverFrameworks ?? [],
+  }));
+  return defaultFirst(options, DEFAULT_BACKEND_LANGUAGE);
+}
+
+/**
+ * A starter's menu row in plain words: the description's lead (a "Name: what it does" description)
+ * becomes the title and the rest the hint, so nobody has to know the internal id.
+ */
+export function plainStarterText(id: string, description: string): { title: string; hint: string } {
+  const colon = description.indexOf(": ");
+  if (colon > 0 && colon <= 40) {
+    return { title: description.slice(0, colon), hint: description.slice(colon + 2) };
+  }
+  return { title: id, hint: description };
+}
+
+/** The ready-made starter projects. A starter the CLI writes itself (`generated`) runs as local processes. */
+export function starterCatalog(): CatalogOption[] {
+  return Object.entries(PROJECT_TEMPLATES).map(([key, template]) => ({
+    id: key,
+    ...plainStarterText(key, template.description),
+    local: runsLocally(template),
+  }));
+}
+
+export interface ExtraOption {
+  /** `type` or `type:framework`, the shape `--extras` takes. */
+  id: string;
+  type: string;
+  framework?: string;
+  title: string;
+  hint: string;
+}
+
+/**
+ * Extra parts a project can add on the Docker route: the creatable resource types that are not the website or the API, and
+ * every framework of the infrastructure types (queues, storage, databases).
+ */
+export function extraCatalog(): ExtraOption[] {
+  const presetTypes = Object.keys(PRESET_RESOURCE_TYPES);
+  const infra = [...presetTypes, DATABASE_RESOURCE_TYPE].flatMap((type) =>
+    // `--type database` also takes the shared Postgres, which is not an infrastructure preset.
+    (type === DATABASE_RESOURCE_TYPE ? DATABASE_FRAMEWORKS : frameworksOfType(type)).map(
+      (framework) => {
+        const preset = INFRA_PRESETS[framework as keyof typeof INFRA_PRESETS];
+        return {
+          id: `${type}:${framework}`,
+          type,
+          framework,
+          title: framework,
+          hint: preset?.description ?? `shared ${framework} database`,
+        };
+      },
+    ),
+  );
+  const own = CREATABLE_RESOURCE_TYPES.filter(
+    (type) => !isAppPart(type) && type !== BRING_YOUR_OWN_TYPE,
+  ).map((type) => ({ id: type, type, title: type, hint: `a ${type} resource` }));
+  return [...own, ...infra];
+}
+
+/** The two parts every app is built from; everything else is an extra. */
+function isAppPart(type: string): boolean {
+  return Object.hasOwn(APP_PARTS, type);
+}
+const APP_PARTS = { frontend: true, backend: true } as const;
+
+/**
+ * The command that installs a local backend's dependencies before it starts, or undefined for an unknown language. A provider
+ * with its own package.json, or with neither a package.json nor a dev command (the shared Bun scaffold), starts through
+ * `npm run dev` and installs with npm; any other language installs with its own hint, without the "# optional" note.
+ */
+export function localBackendInstall(language: string): string | undefined {
+  const provider = BACKEND_LANGUAGES[language];
+  if (!provider) return undefined;
+  const hasPackageJson = provider
+    .createFiles?.("app")
+    .some((file) => file.filename === "package.json");
+  if (hasPackageJson || !provider.devCommand) return "npm install";
+  return provider.installHint.split("#")[0]?.trim() || undefined;
+}
+
+/**
+ * The programs a local project needs on the host, read from the generators it was built with.
+ *
+ * A package.json service runs `<manager> run dev` through the first package manager on the machine
+ * (npm, bun, pnpm, yarn), so npm itself is only needed when it is the manager (#3609). npm, pnpm and
+ * yarn are Node programs; `bun run` covers the node calls and bins inside scripts itself.
+ */
+export function localRequirements(
+  parts: { frontend?: string; language?: string },
+  onPath: (program: string) => boolean = (program) => findOnPath(program) !== null,
+): string[] {
+  const programs = new Set<string>();
+  const manager = localPackageManager(onPath);
+  if (parts.frontend !== undefined) {
+    // A server framework (Next.js) really runs on Node; a Vite page needs node only to run the manager.
+    const needsNode =
+      FRONTEND_FRAMEWORKS[parts.frontend]?.kind === "server" || manager !== bunBackendProvider.id;
+    for (const program of needsNode ? [nodeBackendProvider.id, manager] : [manager]) {
+      programs.add(program);
+    }
+  }
+  if (parts.language) {
+    const provider = BACKEND_LANGUAGES[parts.language];
+    const hasPackageJson = provider
+      ?.createFiles?.("app")
+      .some((file) => file.filename === "package.json");
+    // A package.json owned by the provider runs `<manager> run dev` (#4459). A provider with neither its
+    // own devCommand nor its own package.json uses the shared Bun scaffold, whose dev script runs
+    // `bun run --watch`, so it needs the manager and Bun (#4678).
+    if (!provider) programs.add(parts.language);
+    else if (hasPackageJson) programs.add(manager);
+    else if (!provider.devCommand) {
+      programs.add(manager);
+      programs.add(provider.installHint.trim().split(/\s+/)[0]);
+    } else programs.add(provider.devCommand.split(" ")[0]);
+  }
+  return [...programs];
+}
+
+function defaultFirst<T extends { id: string }>(options: T[], defaultId: string): T[] {
+  return [...options].sort((a, b) => Number(b.id === defaultId) - Number(a.id === defaultId));
+}

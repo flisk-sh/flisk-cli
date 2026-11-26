@@ -1,0 +1,7 @@
+{
+  "appName": "helper-agent",
+  "appType": "agent",
+  "stack": "tools",
+  "port": 4500,
+  "schemaVersion": 1
+}

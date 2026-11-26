@@ -1,0 +1,120 @@
+# Maintainers' Decision: Native Windows Runtime Execution
+
+**Status:** Decided (Inspection-Only for Docker stacks; amended 2026-10-31, see below)  
+**RFC Issue:** [#1757](https://github.com/flisk-sh/flisk/issues/1757)  
+**Related Issues & Changes:** [#107](https://github.com/flisk-sh/flisk/issues/107) (Windows/WSL2 quickstart validation), [#165](https://github.com/flisk-sh/flisk/pull/165) (native Windows CLI foundation), [#661](https://github.com/flisk-sh/flisk/issues/661) (inspection-only policy), [#1765](https://github.com/flisk-sh/flisk/issues/1765) (Windows hardware validation inventory), [#1856](https://github.com/flisk-sh/flisk/issues/1856) (native Windows doctor diagnostics), [#1873](https://github.com/flisk-sh/flisk/pull/1873) (native Windows demo refusal).  
+**Date:** 2026-10-23  
+
+> **Amendment (2026-10-31, Flisk 1.4.23):** the inspection-only boundary now applies to container stacks only. Projects whose services each declare a `command` run on native Windows as local processes (no Docker, Tilt or Linux containers), and `flisk demo` falls back to its two-service local-process demo there ([#2840](https://github.com/flisk-sh/flisk/pull/2840)). `flisk up` on a Docker project still refuses with "Landscape startup needs Ubuntu on WSL2". CI covers it in `tests/e2e/platforms/windows` W5.
+
+---
+
+## 1. Context and Problem Statement
+
+Flisk currently supports macOS, Linux, and Ubuntu in WSL2 for local runtime workflows (`flisk up`, live-reloading Tilt orchestration, Traefik routing, and background service lifecycle). On native Windows (Windows 10 22H2+, Windows 11, and Windows Server 2022+ on AMD64), the CLI executable `flisk.exe` is fully compiled, packaged, and distributed, but its runtime behavior is intentionally restricted to **inspection-only**: commands such as `flisk --version`, `flisk doctor`, `flisk project`, `flisk upgrade`, `flisk completion`, and `flisk up --dry-run` work, while commands that start containers (`flisk up` and `flisk demo`) refuse execution before touching the system with the message:
+
+> `"Landscape startup needs Ubuntu on WSL2. Native Windows is inspect-only."`
+
+Issue [#1757](https://github.com/flisk-sh/flisk/issues/1757) opened an RFC to formally evaluate user demand, assess technical prerequisites and blockers for native Windows runtime support, record an explicit maintainers' decision, and define an acceptance matrix for any future reconsideration.
+
+---
+
+## 2. Platform Capability Matrix (Current State)
+
+The table below documents verified capabilities across supported Unix platforms, WSL2 Ubuntu, and native Windows AMD64 today:
+
+| Capability | macOS (Darwin) | Linux (x64 / arm64) | WSL2 (Ubuntu) | Native Windows (AMD64) |
+| :--- | :--- | :--- | :--- | :--- |
+| **CLI binaries & packaging** | Standalone binary & npm | Standalone binary & npm | Standalone binary & npm | `flisk-windows-amd64.exe` & npm |
+| **Inspection (`--version`, `help`)** | Supported | Supported | Supported | Supported |
+| **System diagnostics (`doctor`)** | Supported | Supported | Supported | Supported (Windows-specific checks run via [#1875](https://github.com/flisk-sh/flisk/pull/1875)) |
+| **Project scaffolding (`project`)** | Supported | Supported | Supported | Supported (with Bun installed) |
+| **Shell completion** | Bash, Zsh, Fish | Bash, Zsh, Fish | Bash, Zsh, Fish | PowerShell profile integration |
+| **Configuration verification** | Supported | Supported | Supported | Supported |
+| **Dry-run planning (`up --dry-run`)** | Supported | Supported | Supported | Supported (no containers started) |
+| **Stack startup (`flisk up`)** | Supported (Docker/Tilt) | Supported (Docker/Tilt) | Supported (Docker/Tilt) | **Refused** (requires WSL2 Ubuntu) |
+| **One-command demo (`flisk demo`)** | Supported | Supported | Supported (WS6 verified) | **Refused** early (no clone/install) |
+| **Escape hatch (`FLISK_ALLOW_NATIVE_WINDOWS=1`)**| N/A | N/A | N/A | Available (unsupported / experimental) |
+
+---
+
+## 3. Technical Spike: Blocker Analysis
+
+A thorough spike evaluated the mechanical and orchestration differences between Linux/WSL2 and native Windows runtime execution:
+
+### 3.1 Docker Desktop Communication & Container Mode
+- **Named Pipes vs. Unix Sockets:** Docker on native Windows primarily exposes the named pipe `npipe:////./pipe/docker_engine`. While Docker CLI and Docker Desktop bridge this, child tools spawned by Starlark or Tilt expecting `/var/run/docker.sock` fail unless a named pipe proxy or TCP socket is configured.
+- **Linux vs. Windows Containers:** Flisk container images (`l1`-`l4` golden images, Traefik, PostgreSQL 16) are built exclusively as Linux containers. If Docker Desktop is configured in Windows container mode, `flisk doctor` detects this and fails fast (`checkWindowsDockerMode`). Even in Linux container mode, bind mounts cross the Windows host boundary into the Docker Desktop Linux VM, introducing filesystem sync latencies and permission mapping divergence.
+
+### 3.2 Tilt Lifecycle & POSIX Starlark Assumptions
+- **Tilt for Windows (`tilt.exe`):** While Tilt provides a Windows binary, Flisk's `engine/` Starlark topologies make extensive use of POSIX shell commands (`sh`, `/bin/sh -c`, `test -f`, `curl`). Spawning these commands on a native Windows host fails without MSYS2/Git Bash, neither of which is guaranteed or supported as a standard developer toolchain.
+- **Signal Handling & Process Tree Teardown:** On Windows, process cancellation does not propagate via POSIX signals (`SIGINT`, `SIGTERM`, `SIGKILL`). Terminating `flisk up` via `Ctrl+C` in PowerShell or cmd.exe frequently leaves detached `tilt.exe` background processes, orphaned Docker port forwarders, and uncollected resources.
+
+### 3.3 File Watching and Hot Reloading
+- **Filesystem Event Discrepancies:** Windows uses `ReadDirectoryChangesW`, which behaves differently from Linux `inotify` or macOS `kqueue` regarding recursive subdirectory watching and atomic file renames.
+- **CRLF vs. LF Line Endings:** Git checkouts on Windows with `core.autocrlf=true` alter file line endings, which corrupts content hashes used by Flisk snapshot drift detection (`.flisk-contract`) and golden layer cache invalidation.
+- **Path Case Sensitivity:** Windows NTFS is case-preserving but case-insensitive by default, whereas the container runtime inside the Linux VM is strictly case-sensitive. This discrepancy causes import path failures that only appear inside the running container.
+
+### 3.4 Paths and Filesystem Restrictions
+- **Path Delimiters and Drive Letters:** Windows absolute paths (`C:\path\to\service`) break naive POSIX path joining and Starlark string manipulations that expect leading slashes (`/`).
+- **Paths with Spaces:** Windows default user directories frequently include spaces (e.g., `C:\Users\First Last\...`). While CLI utilities have been hardened for spaces, container bind mount specifications and shell-escaped commands in third-party Tilt extensions remain fragile.
+- **MAX_PATH (260 Characters):** Deep nested Node/Bun dependencies or monorepo layouts risk hitting the legacy 260-character path limit unless the host system has registry long paths explicitly enabled.
+
+### 3.5 Host Networking and Port Collisions
+- **Port 80/443 Ingress Conflicts:** Windows hosts frequently run `W3SVC` (IIS) or the HTTP.sys kernel listener, occupying port 80.
+- **Hyper-V / WSL Dynamic Port Exclusions:** Windows dynamically reserves broad TCP port ranges for Hyper-V and WSL (`netsh interface ipv4 show excludedportrange protocol=tcp`), colliding unpredictably with standard ports (80, 443, 5432).
+- **Wildcard `*.localhost` DNS Resolution:** Unlike macOS and Linux, native Windows DNS client resolvers do not natively resolve wildcard `*.localhost` subdomains (such as `api.shop.localhost`) to `127.0.0.1` without manual `hosts` file modification or external DNS proxy tools.
+
+### 3.6 Teardown and Network Cleanup
+- Aborting a stack run on native Windows leaves Docker bridge networks and container port mappings locked if the child process termination is not cleanly orchestrated via Windows Job Objects.
+
+### 3.7 Evidence from the engine (2026-11-04)
+
+Re-checked against Docker Desktop and Tilt documentation and the code on main on 2026-11-04:
+
+- **Works natively:** Docker Desktop runs Linux containers on Windows with the default WSL 2 backend (no administrator rights for a per-user install); `docker` and `docker compose` work from PowerShell. Tilt installs as `tilt.exe` (`install.ps1`, Scoop or zip). The CLI already handles Windows for Docker mode, ports, DNS and process teardown (`windows-doctor.ts`, `tilt-process.ts`).
+- **Tilt shell semantics:** `local()` and `local_resource()` run a string command through `cmd /S /C` on Windows (`sh -c` elsewhere); list commands run directly, and `cmd_bat`/`serve_cmd_bat` are Windows-only overrides.
+- **The real blocker is the engine:** 92 `local()`/`local_resource()` call sites in 29 Starlark files under `runtime/` (discovery, golden-image build, infra loader, databases), none with a `cmd_bat`, and about 197 POSIX idioms (`sh -c 'test -f ...'`, `cat ... 2>/dev/null || true`, `mkdir -p`, `find`, `ls -d`, `sleep`, `date +%s`). Manifest discovery fails before any container starts. 14 `.sh` scripts run on the host; `traefik_standalone.star` mounts `/var/run/docker.sock`.
+- **Why Git Bash is not a fix:** its `usr\bin` would shadow Windows `find.exe` and `sort.exe` with different behaviour.
+- **Not verifiable in CI:** GitHub `windows-latest` runners cannot run Linux containers, so G6 needs a real or self-hosted Windows machine.
+
+**G1 progress (host shell removal):** `runtime/discovery/native_windows.star` now answers file-exists, directory-exists, `find`, glob, `mkdir -p`, file read/write, `date` and `sleep` with Tilt built-ins or PowerShell (`command_bat`) when `os.name == "nt"`. The discovery layer (`runtime/discovery/`) and the engine's file checks, `find`, generated-file writes and Infisical timestamps use it; the POSIX command at each call site is unchanged, so Linux, macOS and WSL2 behave as before. `tests/tilt-engine/test_discovery_portable_fs.py` forces the portable path with `FLISK_DISCOVERY_PORTABLE=1` and compares it with the POSIX results. G1 part 2 (PowerShell via `cmd_bat`/`serve_cmd_bat`, untested on Windows): the manifest YAML mtime check (`file_mtime`), `init-networks`, `postgres-healthy`, `provision-db-*`, the database status resources, the golden image build, the library publish (`engine/scripts/*.ps1`), the Tilt image-tag cleanup, and the pytest, prebuild, healthy, job-done and typecheck resources in `apply_compose_resource_registration.star` (scripts in `runtime/engine/topologies/tilt/common/windows_scripts.star`). Step 2 (G3): `normalize_abs_path` keeps a drive letter and the gateway's project mount gets a POSIX container path. Docker Desktop already serves `/var/run/docker.sock`, `host.docker.internal` and `host-gateway`, and the CLI's bind probe already treats Hyper-V excluded ports as taken, so those needed no change. `watchers.star` now builds every maintenance command with `maintenance_command()`: POSIX keeps `bash <script>`, while native Windows gets a PowerShell no-op that prints why in the Tilt resource log (`serve_cmd` no-ops stay alive so Tilt does not mark them red). This covers `prune-images`, `memory-optimizer`, and the cron status tracker (`cron-status-init`, `cron-lint`, `cron-format`, `cron-jobs-status-server`). The cron scripts keep their POSIX shell state under `/tmp`, so cron status tracking is intentionally skipped on native Windows rather than ported; use WSL2 when the status API and periodic lint/format are needed. `FLISK_WATCHERS_PORTABLE=1` forces that Windows branch on any host so tests can compare both commands. `make test-shell` runs `scripts/check-star-shell-paths.mjs`, which lists `.sh` paths used in `.star` commands and rejects direct execution without a Windows branch. Still POSIX-only and not on the engine path: `generate-manifest.sh` and `debug-container.sh`. Not designed yet: the sablier wake gateway runs `docker compose` inside a Linux container with the host's compose paths, which cannot match Windows paths. None of this has run on a real Windows machine, and `flisk up` still refuses native Windows unless `FLISK_ALLOW_NATIVE_WINDOWS=1`.
+
+Smallest future path: gate G1 (finish replacing host `sh`: the `local_resource` scripts), then G3 to G6 on hardware. Until then the refusal and the unsupported `FLISK_ALLOW_NATIVE_WINDOWS=1` escape hatch stay as they are.
+
+**Trying the engine on a Windows machine (contributors, unsupported):** with Docker Desktop in Linux-container mode, `tilt.exe` and `powershell.exe` on PATH, run `flisk doctor` (it now fails when `powershell.exe` is missing, because the engine runs its host scripts with it), then `FLISK_ALLOW_NATIVE_WINDOWS=1 flisk up`. No PowerShell branch has been verified yet. Please report the first failing resource name and its Tilt log; the PowerShell for each resource is in `runtime/engine/topologies/tilt/common/windows_scripts.star` and `runtime/engine/scripts/*.ps1`. Not designed yet: the sablier wake gateway with Windows compose paths. `flisk up` still refuses native Windows without the opt-in, so W3 and W4 in `tests/e2e/platforms/windows` stay as they are.
+
+---
+
+## 4. The Maintainers' Decision
+
+**Decision:** **Maintain the inspection-only boundary on native Windows AMD64. Do not support native Windows runtime execution (`flisk up`) at this time.**
+
+### Rationale:
+1. **WSL2 Ubuntu Provides a Superior Experience:** Docker Desktop on Windows already runs its container engine inside a WSL2 lightweight utility VM. Developing within Ubuntu in WSL2 (with the working repository stored in the WSL2 Linux filesystem rather than Windows-mounted `/mnt/c/...` paths) gives developers native POSIX signals, inotify file watching, standard Unix domain sockets, and container filesystem performance comparable to native Linux, which is not reliably achieved when the repository sits on a Windows-mounted path.
+2. **Predictability and Reliability (Principle of #661):** Per Flisk's guiding principle *"Do not make Flisk bigger. Make Flisk trustworthy."*, supporting native Windows runtime execution would require continuous maintenance of an extensive compatibility layer (Starlark POSIX emulation, Windows Job Object cancellation, volume mount translation, DNS workarounds) that adds significant fragility.
+3. **Inspection and Scaffolding Remain First-Class:** Native Windows developers can install the official binary, run diagnostics (`flisk doctor`), scaffold projects (`flisk project`), inspect dry-run plans (`flisk up --dry-run`), and install completions. When ready to boot the stack, they transition seamlessly to Ubuntu in WSL2.
+4. **Unsupported Escape Hatch Preserved:** For developers and contributors conducting experiments, `FLISK_ALLOW_NATIVE_WINDOWS=1` remains in place to bypass the refusal check without changing official support guarantees.
+
+---
+
+## 5. Acceptance Matrix for Future Native Runtime Evaluation
+
+If user demand or upstream ecosystem shifts (e.g., Tilt native Starlark execution on Windows without shell requirements) warrant revisiting native Windows runtime execution in the future, all of the following acceptance gates must pass before support can be planned or claimed:
+
+| Gate | Category | Requirement | Validation Method |
+| :--- | :--- | :--- | :--- |
+| **G1** | **Orchestration** | Tilt topologies and Starlark modules must execute cleanly via `tilt.exe` without `/bin/sh` or POSIX toolchain assumptions. | Automated Windows unit and engine tests. |
+| **G2** | **Lifecycle** | `flisk up` and `Ctrl+C` must use Windows Job Objects or equivalent process groups to guarantee zero orphaned Tilt or Docker processes. | Process audit test verifying clean exit. |
+| **G3** | **Filesystem** | Volume mounts must reliably map Windows paths (including paths with spaces) to Linux container targets without file lock contention. | Live reload test verifying bidirectional sync. |
+| **G4** | **Networking** | Wildcard `*.localhost` routing must resolve cleanly to ingress ports without requiring administrator privileges or manual `hosts` editing. | End-to-end HTTP routing verification test. |
+| **G5** | **Ports** | Automatic port fallback must cleanly navigate Hyper-V excluded port ranges and IIS collisions without hanging. | Dynamic port allocation verification test. |
+| **G6** | **CI Gate** | A dedicated Windows live-stack CI workflow on a real or self-hosted Windows 11 AMD64 machine must run `flisk up` and pass all service health checks. | Not implemented by the current workflow; `.github/workflows/e2e-platforms-hardware.yml` currently runs the WH1–WH6 installation, refusal, and path checks. |
+
+---
+
+## 6. Platform-Support Claims Boundary
+
+- **No platform-support claims change as a result of this decision.**
+- The [README](../../README.md#requirements-and-support), [Operator Runbook](../operator-runbook.md), and [Public Claims Registry](../claims.md) strictly maintain that **native Windows is inspection-only** and that running the local stack requires macOS, Linux, or Ubuntu on WSL2.
+- Any change to this claim remains strictly gated on passing gates **G1–G6** above.

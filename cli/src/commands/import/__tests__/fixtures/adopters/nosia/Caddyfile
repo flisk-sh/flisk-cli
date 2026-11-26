@@ -1,0 +1,4 @@
+# Stub for the reverse-proxy bind mount; the importer only needs the path to exist.
+:80 {
+	reverse_proxy web:3000
+}

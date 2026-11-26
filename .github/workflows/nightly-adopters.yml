@@ -1,0 +1,471 @@
+# Nightly real-world adopter repositories integration testing (#3100).
+# Tests realistic import, manifest verification, and startup orchestration
+# against pinned external repositories on clean GitHub-hosted runners.
+#
+# Pinned repositories:
+# - biolend83/tubehaus@4982153e8de9144b89433245f3e8adf9fe028db1 (the last commit before upstream added its own
+#   services/tubehaus/ Flisk files; a later pin makes `flisk import` write a second copy under services/adopter/)
+# - dilolabs/nosia@42796ffb30b48b5aeece234383b71e3d51badc7e
+# - LycheeOrg/Lychee@7145b37ff66ea7990cc9b8dbbf779ba1d34c0b64
+# - openathleteorg/openathlete@96478a75673437d8cca6219304037a3580163a1c (runs on the Kiri engine, `engine: kiri`; every
+#   other entry runs on the runner's Docker. No PR or comment goes to that repository.)
+# - MBombeck/HealthLog@d32036b003a7f834eb21e4bfb324036ebbfb07cc (also `engine: kiri`; no PR or comment goes to that repository.)
+# - iv-org/invidious@9a5c91cf808966fb6a4516c9e21ec7a7ad648f16 (its development Compose file builds the app from source; no PR or comment goes to that repository.)
+#
+# Not adopters: projects whose maintainers closed a Flisk PR. They stay here so `flisk import` keeps working on the
+# Compose files people actually ship, and a later PR to them starts from a stack that is known to come up.
+# - ghostfolio/ghostfolio@841ff112c4cbd775c5cbef85980057b1f4ecd61d (base of ghostfolio/ghostfolio#8377)
+# - firsttris/haben@3d6bbf97fff325571f2acbe93f62f94270fa66ec (haben#188 targeted 63b1dec, which has no root compose.yml)
+name: 🌙 NIGHTLY | E2E | Real adopter repositories
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "CLI version to test (local dist if empty)"
+        type: string
+        default: ""
+  schedule:
+    # GitHub starts daily scheduled runs about 7-10 h after their cron time (#3911), so this
+    # cron is set 8 h early and the run really starts around 03:00 UTC.
+    - cron: "0 19 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-nightly-adopters
+  cancel-in-progress: false
+
+jobs:
+  adopter:
+    name: ${{ matrix.name }} (${{ matrix.owner }}/${{ matrix.repo }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Tubehaus
+            owner: biolend83
+            repo: tubehaus
+            commit: 4982153e8de9144b89433245f3e8adf9fe028db1
+            health_check: "http://127.0.0.1:8080"
+            needs_env: true
+            env_file: |
+              TUBEHAUS_SITE=:80
+              TUBEHAUS_URL=http://127.0.0.1:8080
+              TUBEHAUS_DOMAIN=127.0.0.1
+              TUBEHAUS_HTTPS=false
+              TUBEHAUS_EXTERNAL_PORT=8080
+              TUBEHAUS_HTTP_BIND=127.0.0.1:8080
+              TUBEHAUS_HTTPS_BIND=127.0.0.1:8443
+              COMPANION_KEY=@@CI_TEST_PASSWORD_16@@
+              INVIDIOUS_HMAC_KEY=@@CI_TEST_PASSWORD@@
+              POSTGRES_PASSWORD=@@CI_TEST_PASSWORD@@
+              INVIDIOUS_CONFIG='{db: {dbname: invidious, user: kemal, password: @@CI_TEST_PASSWORD@@, host: invidious-db, port: 5432}, check_tables: true, domain: 127.0.0.1, https_only: false, external_port: 8080, hmac_key: @@CI_TEST_PASSWORD@@}'
+          - name: Nosia
+            owner: dilolabs
+            repo: nosia
+            commit: 42796ffb30b48b5aeece234383b71e3d51badc7e
+            docker_model_plugin: true
+            # Small models (a few hundred MB): the job checks that Flisk imports and starts the stack. It does not call the
+            # model endpoint (AI_BASE_URL below names Model Runner's port, 12434), so no host-gateway mapping is added.
+            # ai/all-minilm does not exist on Docker Hub (the cause of every red Nosia night); the embedding model is the
+            # small default Nosia's install.sh picks, with its 768 dimensions and 512/128 chunking.
+            # Pulled before `flisk up`: Compose pulls a service's models inside `docker compose up`, where a slow or failed pull
+            # fails the `web` resource with no output in the job log.
+            models: "ai/smollm2 ai/granite-embedding-multilingual:278M-F16"
+            health_check: "http://127.0.0.1:80"
+            needs_env: true
+            env_file: |
+              NOSIA_URL=http://localhost
+              POSTGRES_DB=nosia
+              POSTGRES_USER=nosia
+              POSTGRES_PASSWORD=@@CI_TEST_PASSWORD@@
+              DATABASE_URL=postgres://nosia:@@CI_TEST_PASSWORD@@@postgres-db:5432/nosia
+              SECRET_KEY_BASE=@@CI_TEST_PASSWORD@@
+              ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY=@@CI_TEST_PASSWORD@@
+              ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY=@@CI_TEST_PASSWORD@@
+              ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT=@@CI_TEST_PASSWORD@@
+              AI_BASE_URL=http://model-runner.docker.internal:12434/engines/llama.cpp/v1
+              AI_API_KEY=@@CI_TEST_PASSWORD@@
+              LLM_MODEL=ai/smollm2
+              LLM_TEMPERATURE=0.1
+              LLM_MAX_TOKENS=1024
+              LLM_TOP_K=40
+              LLM_TOP_P=0.9
+              EMBEDDING_MODEL=ai/granite-embedding-multilingual:278M-F16
+              EMBEDDING_DIMENSIONS=768
+              CHUNK_SIZE=512
+              CHUNK_OVERLAP=128
+              RETRIEVAL_FETCH_K=3
+              GUARD_MODEL=
+              AUGMENTED_CONTEXT=true
+          - name: Lychee
+            owner: LycheeOrg
+            repo: Lychee
+            commit: 7145b37ff66ea7990cc9b8dbbf779ba1d34c0b64
+            # lychee_api publishes ${APP_PORT:-8000}->8000; nothing in this Compose file publishes host port 80.
+            health_check: "http://127.0.0.1:8000"
+            needs_env: true
+            env_file: |
+              APP_ENV=production
+              AI_VISION_API_KEY=@@CI_TEST_PASSWORD@@
+              APP_KEY=base64:Y2ktYXBwLWtleS1ub3QtYS1zZWNyZXQtMDEyMzQ1Njc=
+          # Root docker-compose.yml: builds docker/Dockerfile, Postgres with a healthcheck, depends_on service_healthy.
+          - name: Invidious
+            owner: iv-org
+            repo: invidious
+            commit: 9a5c91cf808966fb6a4516c9e21ec7a7ad648f16
+            health_check: "http://127.0.0.1:3000/api/v1/stats"
+            # INVIDIOUS_CONFIG is a multi-line YAML value in the Compose file, which the importer cannot copy to .env, so it
+            # lands as a required secret with no value. JSON is YAML, so one line does it (db host is the Compose service name).
+            needs_env: true
+            env_file: |
+              POSTGRES_PASSWORD=@@CI_TEST_PASSWORD@@
+              INVIDIOUS_CONFIG='{"db":{"dbname":"invidious","user":"kemal","password":"@@CI_TEST_PASSWORD@@","host":"invidious-db","port":5432},"check_tables":true,"hmac_key":"@@CI_TEST_PASSWORD@@"}'
+          # Rejected ghostfolio/ghostfolio#8377. Its Compose file is docker/docker-compose.yml with env_file ../.env;
+          # flisk import reads only a root Compose file, and run from docker/ it drops ../.env (outside the directory).
+          - name: Ghostfolio
+            owner: ghostfolio
+            repo: ghostfolio
+            commit: 841ff112c4cbd775c5cbef85980057b1f4ecd61d
+            compose_from: docker/docker-compose.yml
+            health_check: "http://127.0.0.1:3333/api/v1/health"
+            needs_env: true
+            env_file: |
+              REDIS_HOST=redis
+              REDIS_PORT=6379
+              REDIS_PASSWORD=@@CI_TEST_PASSWORD@@
+              POSTGRES_DB=ghostfolio-db
+              POSTGRES_USER=user
+              POSTGRES_PASSWORD=@@CI_TEST_PASSWORD@@
+              ACCESS_TOKEN_SALT=@@CI_TEST_PASSWORD@@
+              DATABASE_URL=postgresql://user:@@CI_TEST_PASSWORD@@@postgres:5432/ghostfolio-db?connect_timeout=300
+              JWT_SECRET_KEY=@@CI_TEST_PASSWORD@@
+          # Rejected firsttris/haben#188. The dev stack builds deploy/dev and serves on 127.0.0.1:${HABEN_DEV_PORT:-3000}.
+          - name: Haben
+            owner: firsttris
+            repo: haben
+            commit: 3d6bbf97fff325571f2acbe93f62f94270fa66ec
+            health_check: "http://127.0.0.1:3000"
+            needs_env: true
+            env_file: |
+              POSTGRES_PASSWORD=@@CI_TEST_PASSWORD@@
+              DATABASE_URL=postgres://haben:@@CI_TEST_PASSWORD@@@db:5432/haben
+              BETTER_AUTH_URL=http://localhost:3000
+          # Runs on Kiri (libracoder/kiri), the Docker-compatible runtime, not the runner's Docker. Published images, API on
+          # 127.0.0.1:3000 and the web app on port 80. The two secrets are required by its Compose file.
+          - name: OpenAthlete
+            owner: openathleteorg
+            repo: openathlete
+            commit: 96478a75673437d8cca6219304037a3580163a1c
+            engine: kiri
+            # Its Compose file has no healthcheck for the API; the image's own HEALTHCHECK probes /health. `flisk import`
+            # assumes "/" without one, the API answers 404 there, and Traefik's load-balancer check then marks it down.
+            health_paths: "api=/health"
+            health_check: "http://127.0.0.1:80"
+            needs_env: true
+            env_file: |
+              JWT_SECRET_KEY=@@CI_TEST_PASSWORD@@
+              HASH_PEPPER=@@CI_TEST_PASSWORD@@
+              POSTGRES_PASSWORD=@@CI_TEST_PASSWORD@@
+              DATABASE_URL=postgresql://openathlete:@@CI_TEST_PASSWORD@@@postgres:5432/openathlete
+              APP_URL=http://localhost
+          # Runs on the Kiri engine (engine: kiri) instead of Docker, so the nightly also shows that `flisk up` works on Kiri
+          # with a real Compose stack (prebuilt app image + Postgres 18).
+          - name: HealthLog
+            owner: MBombeck
+            repo: HealthLog
+            commit: d32036b003a7f834eb21e4bfb324036ebbfb07cc
+            engine: kiri
+            # prisma.config.ts rewrites the host "db" to localhost unless /.dockerenv exists, and Kiri containers have no
+            # /.dockerenv, so the migration looked for Postgres inside the app container (P1001). The DB answers to a second name.
+            network_aliases: "db=healthlog-db"
+            health_check: "http://127.0.0.1:3000"
+            needs_env: true
+            env_file: |
+              POSTGRES_PASSWORD=@@CI_TEST_PASSWORD@@
+              ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+              API_TOKEN_HMAC_KEY=@@CI_TEST_PASSWORD@@@@CI_TEST_PASSWORD@@
+              SESSION_COOKIE_SECURE=false
+              DATABASE_URL=postgresql://healthlog:@@CI_TEST_PASSWORD@@@healthlog-db:5432/healthlog?schema=public
+              APP_URL=http://localhost:3000
+              NEXT_PUBLIC_APP_URL=http://localhost:3000
+    steps:
+      - name: Checkout Flisk
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          sparse-checkout: |
+            .github/actions
+            scripts/e2e
+            scripts/install-global.mjs
+            scripts/wait-for-npm-version.sh
+            cli
+            runtime
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.23.5
+
+      - name: Setup Bun (cache-free for untrusted adopter execution)
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest # canary: this is the one job that intentionally tests the newest Bun
+
+      - name: Install Tilt
+        uses: ./.github/actions/setup-tilt # zizmor: ignore[self-repository] composite action resolves from this commit
+
+      - name: Free port 5432 (preinstalled Postgres)
+        uses: ./.github/actions/free-postgres-port # zizmor: ignore[self-repository] composite action resolves from this commit
+
+      - name: Install Docker Model Runner (stacks that declare Compose models)
+        if: matrix.docker_model_plugin
+        env:
+          MODELS: ${{ matrix.models }}
+        run: |
+          # The runner image has Docker but not Docker's apt repository, which is where docker-model-plugin lives.
+          # The plugin is a static binary, so the noble (LTS) packages work on any runner release.
+          sudo install -m 0755 -d /etc/apt/keyrings
+          sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable" \
+            | sudo tee /etc/apt/sources.list.d/docker-model.list >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y docker-model-plugin
+          docker model version
+          docker model install-runner
+          # Model Runner can fail at 100% while renaming the finished blob ("remove incomplete file"); a retry resumes it.
+          for model in $MODELS; do
+            for attempt in 1 2 3; do
+              docker model pull "$model" && break
+              [ "$attempt" -eq 3 ] && { echo "::error::could not pull $model"; exit 1; }
+              echo "::warning::pull of $model failed (attempt $attempt), retrying"
+              sleep 10
+            done
+          done
+          docker model ls
+
+      - name: Install Flisk CLI
+        uses: ./.github/actions/install-flisk # zizmor: ignore[self-repository] composite action resolves from this commit
+        with:
+          version: ${{ inputs.version || 'local' }}
+
+      # Only the entries marked `engine: kiri`. A failure here fails that adopter, so a Kiri problem shows up as an issue for it.
+      - name: Install Kiri
+        if: matrix.engine == 'kiri'
+        env:
+          KIRI_VERSION: "0.2.1"
+          KIRI_DEB_SHA256: 5e7b1f6d8239aa590b314fd2ccc8f1472ba1427f414b35efa86ccedd6a6571b2 # kiri-lite_0.2.1_amd64.deb, from the release's own digest
+        run: |
+          # Engine only (kiri-lite): the runner already has docker, compose and buildx. Kiri runs on the kernel on Linux, no VM.
+          scripts/e2e/retry-infra.sh "download Kiri v${KIRI_VERSION}" -- curl -fsSL -o kiri.deb "https://github.com/libracoder/kiri/releases/download/v${KIRI_VERSION}/kiri-lite_${KIRI_VERSION}_amd64.deb"
+          echo "${KIRI_DEB_SHA256}  kiri.deb" | sha256sum -c -
+          sudo apt-get install -y ./kiri.deb
+          rm -f kiri.deb
+          sudo kiri host-access "$USER" # starts the engine and puts the user in the kiri group
+          for _ in $(seq 1 30); do [ -S /run/kiri/docker.sock ] && break; sleep 1; done
+          sudo chmod a+rw /run/kiri/docker.sock # the group only applies to new logins; this runner is thrown away
+          docker context create kiri --docker host=unix:///run/kiri/docker.sock
+          docker context use kiri # Flisk reads the current context to see that this is Kiri
+          # Tilt and Compose read DOCKER_HOST, so every later step talks to Kiri and not to the runner's Docker.
+          echo "DOCKER_HOST=unix:///run/kiri/docker.sock" >> "$GITHUB_ENV"
+          DOCKER_HOST=unix:///run/kiri/docker.sock docker info --format 'engine: {{.Name}} {{.ServerVersion}}'
+
+      - name: Checkout Adopter Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ${{ matrix.owner }}/${{ matrix.repo }}
+          ref: ${{ matrix.commit }}
+          path: adopter
+          persist-credentials: false
+
+      - name: Prepare Synthetic Environment
+        if: matrix.needs_env
+        working-directory: adopter
+        env:
+          ENV_CONTENT: ${{ matrix.env_file }}
+          CI_TEST_PASSWORD: ${{ secrets.CI_TEST_PASSWORD }}
+        run: |
+          # The matrix cannot read secrets, so it carries @@CI_TEST_PASSWORD@@ (and @@CI_TEST_PASSWORD_16@@, its first 16
+          # characters, for keys that must be exactly 16 long) and the value is filled in here. The value goes into URLs
+          # and JSON unescaped, so CI_TEST_PASSWORD must be letters and digits only, at least 16 of them.
+          if [ -n "$ENV_CONTENT" ]; then
+            if [[ "$ENV_CONTENT" == *@@CI_TEST_PASSWORD* ]] && ! [[ "$CI_TEST_PASSWORD" =~ ^[A-Za-z0-9]{16,}$ ]]; then
+              echo "::error::secret CI_TEST_PASSWORD must be set to 16 or more letters and digits"
+              exit 1
+            fi
+            # Bash 5.2 turns "&" in a replacement into the matched text; switch that off so the value goes in as is.
+            shopt -u patsub_replacement 2>/dev/null || true
+            short="${CI_TEST_PASSWORD:0:16}"
+            content="${ENV_CONTENT//@@CI_TEST_PASSWORD_16@@/$short}"
+            printf "%s\n" "${content//@@CI_TEST_PASSWORD@@/$CI_TEST_PASSWORD}" > .env
+          fi
+
+      # flisk import reads only the root Compose file. A repo that keeps it in a subfolder gets a root copy, with
+      # env_file paths that pointed at the root (../.env) rewritten to .env so they still name the same file.
+      - name: Place Compose File at Root
+        if: matrix.compose_from
+        working-directory: adopter
+        env:
+          COMPOSE_FROM: ${{ matrix.compose_from }}
+        run: |
+          sed 's#\.\./\.env#.env#' "$COMPOSE_FROM" > docker-compose.yml
+
+      - name: Run Flisk Import
+        working-directory: adopter
+        run: |
+          flisk import . --yes
+
+      # `flisk import` assumes a "/" health path when Compose declares none. A service that answers 404 on "/" gets its
+      # real path here (service=/path, space separated), the way a maintainer would write it in service.json.
+      - name: Set Health Paths
+        if: matrix.health_paths
+        working-directory: adopter
+        env:
+          HEALTH_PATHS: ${{ matrix.health_paths }}
+        run: |
+          for entry in $HEALTH_PATHS; do
+            name="${entry%%=*}"
+            path="${entry#*=}"
+            found=0
+            for file in services/*/"$name"/service.json; do
+              [ -f "$file" ] || continue
+              jq --arg path "$path" '.healthCheckPath = $path' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+              echo "healthCheckPath of $file is now $path"
+              found=1
+            done
+            [ "$found" = 1 ] || { echo "::error::no service.json for $name"; exit 1; }
+          done
+
+      # A service that must also answer to another name (service=alias, space separated), the way a maintainer would write
+      # container.networkAliases in service.json.
+      - name: Set Network Aliases
+        if: matrix.network_aliases
+        working-directory: adopter
+        env:
+          NETWORK_ALIASES: ${{ matrix.network_aliases }}
+        run: |
+          for entry in $NETWORK_ALIASES; do
+            name="${entry%%=*}"
+            alias="${entry#*=}"
+            found=0
+            for file in services/*/"$name"/service.json; do
+              [ -f "$file" ] || continue
+              jq --arg alias "$alias" '.container.networkAliases = ((.container.networkAliases // []) + [$alias] | unique)' "$file" > "$file.tmp" && mv "$file.tmp" "$file"
+              echo "$file answers to $alias too"
+              found=1
+            done
+            [ "$found" = 1 ] || { echo "::error::no service.json for $name"; exit 1; }
+          done
+
+      # `flisk import` writes only service.json and .flisk/project.json; the
+      # generated files under .flisk/.flisk-out come from `config regenerate`,
+      # so verify fails with "Missing file" until it has run.
+      - name: Regenerate Configuration
+        working-directory: adopter
+        run: |
+          flisk config regenerate
+
+      - name: Verify Generated Configuration
+        working-directory: adopter
+        run: |
+          flisk config verify
+
+      - name: Show the engine
+        run: |
+          docker info --format 'daemon: {{.Name}} {{.ServerVersion}}'
+
+      - name: Flisk Up with Readiness Wait
+        working-directory: adopter
+        timeout-minutes: 20
+        run: |
+          flisk up --wait --wait-timeout 900
+
+      - name: Smoke Route Health Check
+        working-directory: adopter
+        timeout-minutes: 5
+        env:
+          TARGET: ${{ matrix.health_check }}
+        run: |
+          echo "Probing $TARGET..."
+          for attempt in $(seq 1 60); do
+            status="$(curl -s -o /dev/null -w "%{http_code}" "$TARGET" || true)"
+            if [ -n "$status" ] && [ "$status" != "000" ] && [ "$status" -lt 500 ]; then
+              echo "PASS: target answered with HTTP $status (attempt $attempt)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Target $TARGET did not answer with 2xx/3xx/4xx within 120s"
+          exit 1
+
+      - name: Collect Failure Evidence
+        if: failure() || cancelled()
+        uses: ./.github/actions/collect-e2e-evidence # zizmor: ignore[self-repository] composite action resolves from this commit
+        with:
+          name: adopter-${{ matrix.repo }}
+          sources: adopter
+
+      # No working-directory: a failure before the adopter checkout leaves no adopter/ and the step would fail to start.
+      - name: Diagnostics on Failure
+        if: failure() || cancelled()
+        run: |
+          cd adopter 2>/dev/null || { echo "adopter repository was not checked out"; exit 0; }
+          echo "::group::Containers status"
+          docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' || true
+          echo "::endgroup::"
+          echo "::group::Tilt UI resources"
+          tilt get uiresources -o json 2>/dev/null | jq -r '.items[] | select(.status.updateStatus == "error") | "\(.metadata.name): \((.status.buildHistory // [] | map(.error // empty) | first) // "-")"' || true
+          echo "::endgroup::"
+          # The update error above is only the command line; the Compose stderr that explains it is in the resource's log.
+          for resource in $(tilt get uiresources -o json 2>/dev/null | jq -r '.items[] | select(.status.updateStatus == "error" or .status.runtimeStatus == "error") | .metadata.name' || true); do
+            echo "::group::Tilt log: $resource (last 120 lines)"
+            tilt logs "$resource" 2>&1 | tail -n 120 || true
+            echo "::endgroup::"
+          done
+          # A container whose health check fails or that exited non-zero explains itself only in its own output.
+          for c in $(docker ps -a --format '{{.Names}} {{.Status}}' | awk '/unhealthy|Restarting|Exited \([1-9]/ {print $1}' || true); do
+            echo "::group::Container log: $c (last 150 lines)"
+            docker logs --tail 150 "$c" 2>&1 || true
+            docker inspect --format '{{range .State.Health.Log}}{{.ExitCode}} {{.Output}}{{end}}' "$c" 2>/dev/null | tail -c 2000 || true
+            echo "::endgroup::"
+          done
+          echo "::group::Flisk doctor output"
+          flisk doctor || true
+          echo "::endgroup::"
+
+      - name: Flisk Down & Cleanup
+        if: always()
+        run: |
+          cd adopter 2>/dev/null || exit 0
+          command -v flisk >/dev/null || exit 0
+          flisk down --prune-networks --yes || true
+
+  # One issue per failing adopter, a comment on each further failing night, and a close once it passes (nightly-adopter-issues.mjs).
+  # A separate job so the issues: write token never sits in a job that runs adopter code. Default branch only, so a dispatch on a
+  # feature branch does not file issues.
+  report:
+    name: Report adopter failures
+    needs: adopter
+    if: always() && github.ref_name == github.event.repository.default_branch && needs.adopter.result != 'skipped'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      checks: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          sparse-checkout: scripts/nightly-adopter-issues.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Open, update or close adopter issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/nightly-adopter-issues.mjs

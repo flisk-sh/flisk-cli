@@ -1,0 +1,759 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureExit } from "../../test-support/index.js";
+import { errorFactories } from "../../utils/errors.js";
+
+const tilt = vi.hoisted(() => ({
+  isTiltAvailable: vi.fn(async () => true),
+  runTilt: vi.fn(),
+}));
+const paths = vi.hoisted(() => ({ findProjectRoot: vi.fn() }));
+const secretMock = vi.hoisted(() => ({
+  envSecretValues: vi.fn((): string[] => []),
+}));
+
+vi.mock("../../utils/tilt.js", () => ({ ...tilt, getTiltfilePath: () => "Tiltfile" }));
+vi.mock("../../utils/paths.js", () => paths);
+vi.mock("../../utils/secret-redaction.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../utils/secret-redaction.js")>();
+  return {
+    ...actual,
+    envSecretValues: secretMock.envSecretValues,
+  };
+});
+
+import { EnvUnreadableError } from "../../utils/secret-redaction.js";
+import { logsCommand } from "../logs.js";
+
+const ok = (stdout: string) => ({ exitCode: 0, stdout, stderr: "" });
+const resources = (...names: string[]) =>
+  ok(JSON.stringify({ items: names.map((name) => ({ metadata: { name } })) }));
+const logLine = (message: string) =>
+  JSON.stringify({ time: "t", resource: "api", level: "info", source: "runtime", message });
+const webviewDump = (segments: Array<Record<string, unknown>>, services = ["api"]) =>
+  ok(
+    JSON.stringify({
+      logList: {
+        spans: Object.fromEntries(
+          services.map((name) => [`runtime:${name}`, { manifestName: name }]),
+        ),
+        segments,
+      },
+    }),
+  );
+const segment = (time: string, text: string, spanId = "runtime:api", level = "INFO") => ({
+  spanId,
+  time,
+  text: `${text}\n`,
+  level,
+});
+
+interface Envelope {
+  schemaVersion: number;
+  data: unknown;
+  errors: Array<{ code: string; message: string; suggestions?: string[] }>;
+}
+
+let out: string[];
+let errors: string[];
+let exit: ReturnType<typeof vi.spyOn>;
+
+async function run(...args: string[]): Promise<{ envelope: Envelope; code: number | null }> {
+  let code: number | null = null;
+  exit.mockImplementation(((c: number) => {
+    // runCommand catches the mocked exit and exits again; the first code is the real one.
+    code ??= c;
+    throw new Error("exit");
+  }) as never);
+  try {
+    await logsCommand.parseAsync(["--json", ...args], { from: "user" });
+  } catch (error) {
+    if ((error as Error).message !== "exit") throw error;
+  }
+  return { envelope: JSON.parse(out.at(-1) ?? "null"), code };
+}
+
+beforeEach(() => {
+  out = [];
+  errors = [];
+  vi.spyOn(console, "log").mockImplementation((line) => void out.push(String(line)));
+  vi.spyOn(console, "error").mockImplementation(
+    (...parts) => void errors.push(parts.map(String).join(" ")),
+  );
+  exit = vi.spyOn(process, "exit");
+  paths.findProjectRoot.mockReturnValue("/project");
+  tilt.isTiltAvailable.mockResolvedValue(true);
+  tilt.isTiltAvailable.mockClear();
+  tilt.runTilt.mockReset();
+  secretMock.envSecretValues.mockReturnValue([]);
+  delete process.env.TILT_PORT;
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  for (const option of [
+    "service",
+    "since",
+    "after",
+    "port",
+    "tail",
+    "unhealthy",
+    "source",
+    "grep",
+    "context",
+  ])
+    logsCommand.setOptionValue(option, undefined);
+  logsCommand.setOptionValue("tail", "200");
+  logsCommand.setOptionValue("json", false);
+  delete process.env.TILT_PORT;
+});
+
+describe("flisk logs argument errors", () => {
+  it("tells the user to pass a service with --service when given a positional name", async () => {
+    const stderr: string[] = [];
+    logsCommand.configureOutput({ writeErr: (text) => stderr.push(text) });
+    const { exit } = captureExit();
+    try {
+      await expect(logsCommand.parseAsync(["orders-api"], { from: "user" })).rejects.toThrow();
+    } finally {
+      logsCommand.configureOutput({ writeErr: (text) => process.stderr.write(text) });
+      exit.mockRestore();
+    }
+    expect(stderr.join("")).toContain("flisk logs --service <name>");
+  });
+});
+
+describe("flisk logs --json", () => {
+  it("returns one envelope with normalized lines and never follows", async () => {
+    tilt.runTilt.mockResolvedValueOnce(ok(`${logLine("hi")}\n`));
+    const { envelope, code } = await run("--tail", "5");
+    expect(code).toBeNull();
+    expect(envelope).toMatchObject({
+      schemaVersion: 1,
+      data: { services: [], tail: 5, since: null, lines: [{ resource: "api", text: "hi" }] },
+      errors: [],
+    });
+    const args = tilt.runTilt.mock.calls[0]?.[1] as string[];
+    expect(args).toEqual(expect.arrayContaining(["--tail", "5", "--json"]));
+    expect(args).not.toContain("-f");
+    expect(args).not.toContain("--follow");
+  });
+
+  it("numbers Docker log lines and reads only newer lines with --after", async () => {
+    const out1 = [logLine("one"), logLine("two"), logLine("three")];
+    tilt.runTilt.mockResolvedValueOnce(ok(out1.join("\n")));
+
+    const first = (await run()).envelope.data as {
+      lines: Array<{ seq: number; text: string }>;
+      nextCursor: number;
+      truncated: boolean;
+    };
+
+    expect(first.lines.map((l) => l.text)).toEqual(["one", "two", "three"]);
+    expect(first.lines.map((l) => l.seq)).toEqual(
+      [...first.lines.map((l) => l.seq)].sort((a, b) => a - b),
+    );
+    expect(new Set(first.lines.map((l) => l.seq)).size).toBe(3);
+    expect(first.nextCursor).toBe(first.lines.at(-1)?.seq);
+    expect(first.truncated).toBe(false);
+    const args = tilt.runTilt.mock.calls[0]?.[1] as string[];
+    expect(args).not.toContain("--after");
+
+    // The same Tilt output on a second call: no new lines, and the same cursor.
+    tilt.runTilt.mockResolvedValueOnce(ok(out1.join("\n")));
+    const again = (await run("--after", String(first.nextCursor))).envelope.data as {
+      lines: unknown[];
+      nextCursor: number;
+      truncated: boolean;
+    };
+    expect(again.lines).toEqual([]);
+    expect(again.nextCursor).toBe(first.nextCursor);
+    expect(again.truncated).toBe(false);
+
+    // A cursor before the oldest retained line returns everything and says the log was truncated.
+    tilt.runTilt.mockResolvedValueOnce(ok(out1.join("\n")));
+    const old = (await run("--after", "0")).envelope.data as {
+      lines: unknown[];
+      truncated: boolean;
+    };
+    expect(old.lines).toHaveLength(3);
+    expect(old.truncated).toBe(true);
+  });
+
+  it("rejects an invalid --after cursor before running Tilt", async () => {
+    const { envelope, code } = await run("--after", "-1");
+    expect(code).toBe(2);
+    expect(envelope.errors[0]).toMatchObject({ code: "USAGE" });
+    expect(tilt.runTilt).not.toHaveBeenCalled();
+  });
+
+  it("returns one shared not-in-project error envelope before checking Tilt", async () => {
+    paths.findProjectRoot.mockReturnValue(null);
+
+    const { envelope, code } = await run();
+
+    expect(code).toBe(1);
+    expect(out).toHaveLength(1);
+    expect(envelope).toMatchObject({
+      schemaVersion: 1,
+      data: null,
+      errors: [
+        {
+          code: "NOT_IN_PROJECT",
+          message: "Could not find project root (no .flisk/project.json found)",
+          suggestions: [
+            "Run this from within a Flisk project",
+            "Run `flisk project --yes` to initialize a new project",
+          ],
+        },
+      ],
+    });
+    expect(tilt.isTiltAvailable).not.toHaveBeenCalled();
+    expect(tilt.runTilt).not.toHaveBeenCalled();
+  });
+
+  it("prints shared not-in-project suggestions in text mode before checking Tilt", async () => {
+    paths.findProjectRoot.mockReturnValue(null);
+    let code: number | null = null;
+    exit.mockImplementation(((exitCode: number) => {
+      code ??= exitCode;
+      throw new Error("exit");
+    }) as never);
+
+    try {
+      await logsCommand.parseAsync([], { from: "user" });
+    } catch {
+      // The mocked process.exit ends the command under test.
+    }
+
+    expect(code).toBe(1);
+    expect(errors.join("\n")).toContain(
+      "Could not find project root (no .flisk/project.json found)",
+    );
+    expect(errors.join("\n")).toContain("Run this from within a Flisk project");
+    expect(errors.join("\n")).toContain("Run `flisk project --yes` to initialize a new project");
+    expect(tilt.isTiltAvailable).not.toHaveBeenCalled();
+    expect(tilt.runTilt).not.toHaveBeenCalled();
+  });
+
+  it("passes service names after `--` so they cannot be read as flags", async () => {
+    tilt.runTilt.mockResolvedValueOnce(resources("api", "-weird")).mockResolvedValueOnce(ok(""));
+    await run("--service=api", "--service=-weird");
+    const args = tilt.runTilt.mock.calls[1]?.[1] as string[];
+    expect(args.slice(-3)).toEqual(["--", "api", "-weird"]);
+  });
+
+  it("splits comma-separated --service names with whitespace before forwarding them (#5313)", async () => {
+    tilt.runTilt.mockResolvedValueOnce(resources("api", "web")).mockResolvedValueOnce(ok(""));
+    const { envelope } = await run("--service=api, web,");
+    expect(envelope.errors).toEqual([]);
+    const args = tilt.runTilt.mock.calls[1]?.[1] as string[] | undefined;
+    expect(args?.slice(-3)).toEqual(["--", "api", "web"]);
+  });
+
+  it("suggests a close resource name for an unknown service, exit 2", async () => {
+    tilt.runTilt.mockResolvedValueOnce(resources("api", "web"));
+    const { envelope, code } = await run("-s", "aip");
+    expect(code).toBe(2);
+    expect(envelope.errors[0]).toMatchObject({
+      code: "UNKNOWN_SERVICE",
+      suggestions: expect.arrayContaining(['Did you mean "api"?']),
+    });
+    expect(envelope.errors[0].message).toContain("api, web");
+    expect(tilt.runTilt).toHaveBeenCalledTimes(1);
+  });
+
+  it("orders valid names by edit distance when a near-miss service is requested", async () => {
+    tilt.runTilt.mockResolvedValueOnce(resources("zeta", "ok1"));
+    const { envelope, code } = await run("-s", "ok");
+    expect(code).toBe(2);
+    expect(envelope.errors[0]).toEqual({
+      code: "UNKNOWN_SERVICE",
+      message: "Unknown service ok. Valid names: ok1, zeta",
+      suggestions: ['Did you mean "ok1"?'],
+    });
+  });
+
+  it("uses the shared unknown-service factory for an unknown Tilt resource", async () => {
+    tilt.runTilt.mockResolvedValueOnce(resources("api", "web"));
+    const factory = vi.spyOn(errorFactories, "unknownServices");
+    const { envelope, code } = await run("-s", "aip");
+    expect(code).toBe(2);
+    expect(envelope.errors[0].suggestions).toContain('Did you mean "api"?');
+    expect(factory).toHaveBeenCalledWith(["aip"], ["api", "web"]);
+  });
+
+  it("renders close resource suggestions in text errors", async () => {
+    tilt.runTilt.mockResolvedValueOnce(resources("api", "web"));
+    const messages: string[] = [];
+    vi.spyOn(console, "error").mockImplementation((...parts: unknown[]) => {
+      messages.push(parts.map(String).join(" "));
+    });
+    let code: number | null = null;
+    exit.mockImplementation(((exitCode: number) => {
+      code ??= exitCode;
+      throw new Error("exit");
+    }) as never);
+
+    try {
+      await logsCommand.parseAsync(["-s", "aip"], { from: "user" });
+    } catch {
+      // The mocked process.exit ends the command under test.
+    }
+
+    expect(code).toBe(2);
+    expect(messages.join("\n")).toContain('Did you mean "api"?');
+  });
+
+  it("omits name suggestions for an unrelated unknown service", async () => {
+    tilt.runTilt.mockResolvedValueOnce(resources("api", "web"));
+    const { envelope, code } = await run("-s", "completely-unrelated");
+    expect(code).toBe(2);
+    expect(envelope.errors[0]).toMatchObject({ code: "UNKNOWN_SERVICE" });
+    expect(envelope.errors[0].suggestions).toBeUndefined();
+  });
+
+  it("reports a missing Tilt binary", async () => {
+    tilt.isTiltAvailable.mockResolvedValue(false);
+    const { envelope, code } = await run();
+    expect(code).toBe(1);
+    expect(envelope.errors[0].code).toBe("TILT_MISSING");
+  });
+
+  it("labels an unreachable Tilt TILT_NOT_RUNNING", async () => {
+    tilt.runTilt.mockResolvedValueOnce({
+      exitCode: 1,
+      stdout: "",
+      stderr: "dial tcp: connection refused",
+    });
+    const { envelope, code } = await run();
+    expect(code).toBe(1);
+    expect(envelope.errors[0].code).toBe("TILT_NOT_RUNNING");
+  });
+
+  it("labels a rejected argument TILT_LOGS_FAILED, not 'stack is down'", async () => {
+    tilt.runTilt.mockResolvedValueOnce({
+      exitCode: 1,
+      stdout: "",
+      stderr: 'invalid argument "x" for "--since"',
+    });
+    const { envelope } = await run();
+    expect(envelope.errors[0].code).toBe("TILT_LOGS_FAILED");
+  });
+
+  it.each([
+    [["--tail", "0"]],
+    [["--tail", "10001"]],
+    [["--since", ""]],
+    [["--since", "5"]],
+    [["--port", "65536"]],
+    [["--source", "other"]],
+    [["--source", ""]],
+  ])("rejects %j as USAGE (exit 2) without calling Tilt", async (args) => {
+    const { envelope, code } = await run(...args);
+    expect(code).toBe(2);
+    expect(envelope.errors[0].code).toBe("USAGE");
+    expect(tilt.runTilt).not.toHaveBeenCalled();
+  });
+
+  it("says days are unsupported and suggests 24h when --since uses d", async () => {
+    const { envelope, code } = await run("--since", "1d");
+    expect(code).toBe(2);
+    expect(envelope.errors[0]).toMatchObject({
+      code: "USAGE",
+      message: "--since must be a duration such as 30s, 5m or 1h",
+    });
+    expect(envelope.errors[0].suggestions?.join("\n")).toContain("Days are not supported");
+    expect(envelope.errors[0].suggestions?.join("\n")).toContain("24h");
+    expect(tilt.runTilt).not.toHaveBeenCalled();
+  });
+
+  it("gives the same units hint for a missing unit like 5m10", async () => {
+    const { envelope, code } = await run("--since", "5m10");
+    expect(code).toBe(2);
+    expect(envelope.errors[0].suggestions?.join("\n")).toContain("24h");
+    expect(tilt.runTilt).not.toHaveBeenCalled();
+  });
+
+  it.each([["24h"], ["1h30m"], ["1500ms"]])(
+    "accepts --since %j and reads the dated webview dump",
+    async (since) => {
+      tilt.runTilt.mockResolvedValueOnce(webviewDump([]));
+      const { code } = await run("--since", since);
+      expect(code).toBeNull();
+      expect(tilt.runTilt.mock.calls[0]?.[0]).toBe("dump");
+      expect(tilt.runTilt.mock.calls[0]?.[1]).toEqual(["webview", "--port", "10350"]);
+    },
+  );
+
+  it("prints the days hint in text mode when --since uses d", async () => {
+    let code: number | null = null;
+    exit.mockImplementation(((exitCode: number) => {
+      code ??= exitCode;
+      throw new Error("exit");
+    }) as never);
+
+    try {
+      await logsCommand.parseAsync(["--since", "1d"], { from: "user" });
+    } catch {
+      // The mocked process.exit ends the command under test.
+    }
+
+    expect(code).toBe(2);
+    expect(errors.join("\n")).toContain("--since must be a duration such as 30s, 5m or 1h");
+    expect(errors.join("\n")).toContain("24h");
+    expect(tilt.runTilt).not.toHaveBeenCalled();
+  });
+
+  it("streams logs directly to stdout with secret redaction in text mode", async () => {
+    secretMock.envSecretValues.mockReturnValue(["super-secret-token-1234"]);
+    tilt.runTilt.mockResolvedValueOnce(
+      ok("connecting to database with token super-secret-token-1234 successfully\n"),
+    );
+
+    const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    await logsCommand.parseAsync([], { from: "user" });
+
+    expect(stdoutSpy).toHaveBeenCalledWith(
+      "connecting to database with token [REDACTED] successfully\n",
+    );
+  });
+
+  it("redacts secrets from JSON envelope output", async () => {
+    secretMock.envSecretValues.mockReturnValue(["super-secret-password-xyz"]);
+    tilt.runTilt.mockResolvedValueOnce(
+      ok(`${logLine("database password is super-secret-password-xyz")}\n`),
+    );
+
+    const { envelope } = await run();
+    expect(JSON.stringify(envelope)).not.toContain("super-secret-password-xyz");
+    expect(JSON.stringify(envelope)).toContain("[REDACTED]");
+  });
+
+  it("reports ENV_UNREADABLE error in JSON mode when envSecretValues throws EnvUnreadableError", async () => {
+    secretMock.envSecretValues.mockImplementation(() => {
+      throw new EnvUnreadableError("/project/.env", "permission denied (EACCES)");
+    });
+
+    const { envelope, code } = await run();
+    expect(code).toBe(1);
+    expect(envelope.errors[0]).toMatchObject({
+      code: "ENV_UNREADABLE",
+      message: "Could not read /project/.env: permission denied (EACCES)",
+      suggestions: ["Fix the read permission on .env, or move it out of the project"],
+    });
+  });
+
+  it("reports ENV_UNREADABLE error in text mode when envSecretValues throws EnvUnreadableError", async () => {
+    secretMock.envSecretValues.mockImplementation(() => {
+      throw new EnvUnreadableError("/project/.env", "permission denied (EACCES)");
+    });
+
+    let code: number | null = null;
+    exit.mockImplementation(((c: number) => {
+      code ??= c;
+      throw new Error("exit");
+    }) as never);
+
+    try {
+      await logsCommand.parseAsync([], { from: "user" });
+    } catch {}
+
+    expect(code).toBe(1);
+    expect(errors.join("\n")).toContain("Could not read /project/.env: permission denied");
+    expect(errors.join("\n")).toContain(
+      "Fix the read permission on .env, or move it out of the project",
+    );
+  });
+
+  it("passes custom --port flag to tilt logs command", async () => {
+    tilt.runTilt.mockResolvedValueOnce(ok(""));
+    await run("--port", "12345");
+    const args = tilt.runTilt.mock.calls[0]?.[1] as string[];
+    expect(args).toEqual(expect.arrayContaining(["--port", "12345"]));
+  });
+
+  it("uses TILT_PORT environment variable when --port is not supplied", async () => {
+    process.env.TILT_PORT = "9999";
+    tilt.runTilt.mockResolvedValueOnce(ok(""));
+    await run();
+    const args = tilt.runTilt.mock.calls[0]?.[1] as string[];
+    expect(args).toEqual(expect.arrayContaining(["--port", "9999"]));
+  });
+
+  it("falls back to standard Tilt UI port (10350) when no port specified", async () => {
+    tilt.runTilt.mockResolvedValueOnce(ok(""));
+    await run();
+    const args = tilt.runTilt.mock.calls[0]?.[1] as string[];
+    expect(args).toEqual(expect.arrayContaining(["--port", "10350"]));
+  });
+
+  it("filters --since by the real event times in Tilt's webview dump, not the query time", async () => {
+    const now = Date.parse("2026-11-20T12:00:00Z");
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    tilt.runTilt
+      .mockResolvedValueOnce(resources("api"))
+      .mockResolvedValueOnce(
+        webviewDump([
+          segment("2026-11-20T11:58:00Z", "old build output"),
+          segment("2026-11-20T11:59:55Z", "new runtime line"),
+        ]),
+      );
+
+    const { envelope, code } = await run("--since", "30s", "--service", "api");
+
+    expect(code).toBeNull();
+    expect(envelope.data).toMatchObject({
+      services: ["api"],
+      tail: 200,
+      since: "30s",
+      lines: [
+        {
+          time: "2026-11-20T11:59:55.000Z",
+          resource: "api",
+          level: "info",
+          source: "runtime",
+          text: "new runtime line",
+        },
+      ],
+    });
+    expect(tilt.runTilt).toHaveBeenCalledTimes(2); // resource check, then the dated dump
+    expect(tilt.runTilt.mock.calls[1]?.[0]).toBe("dump");
+    expect(tilt.runTilt.mock.calls[1]?.[1]).toEqual(["webview", "--port", "10350"]);
+    expect(JSON.stringify(tilt.runTilt.mock.calls)).not.toContain("--since");
+    clock.mockRestore();
+  });
+
+  it("reports when Tilt returns no readable timestamps for --since", async () => {
+    tilt.runTilt.mockResolvedValueOnce(ok("not json"));
+    const { envelope, code } = await run("--since", "5s");
+    expect(code).toBe(1);
+    expect(envelope.errors[0]).toMatchObject({
+      code: "TILT_LOG_TIMES_UNAVAILABLE",
+      suggestions: expect.arrayContaining(["Omit --since to read all buffered logs"]),
+    });
+    expect(tilt.runTilt.mock.calls[0]?.[0]).toBe("dump");
+  });
+
+  it("tolerates tiltResourceNames listing failure and continues to fetch logs", async () => {
+    // When runTilt("get", ["uiresources"...]) returns exitCode 1, tiltResourceNames returns null
+    tilt.runTilt
+      .mockResolvedValueOnce({ exitCode: 1, stdout: "", stderr: "not found" })
+      .mockResolvedValueOnce(ok(`${logLine("log from svc")}\n`));
+
+    const { envelope, code } = await run("-s", "api");
+    expect(code).toBeNull();
+    expect(envelope.data).toMatchObject({
+      services: ["api"],
+      lines: [{ resource: "api", text: "log from svc" }],
+    });
+  });
+});
+
+describe("flisk logs --unhealthy", () => {
+  const states = (...items: Array<[string, string, string]>) =>
+    ok(
+      JSON.stringify({
+        items: items.map(([name, update, runtime]) => ({
+          metadata: { name },
+          status: { updateStatus: update, runtimeStatus: runtime },
+        })),
+      }),
+    );
+
+  it("asks Tilt for logs of only the failing services", async () => {
+    tilt.runTilt
+      .mockResolvedValueOnce(states(["api", "error", "none"], ["web", "ok", "ok"]))
+      .mockResolvedValueOnce(ok(`${logLine("boom")}\n`));
+    const { envelope, code } = await run("--unhealthy");
+    expect(code).toBeNull();
+    expect(envelope.data).toMatchObject({ lines: [{ text: "boom" }] });
+    const args = tilt.runTilt.mock.calls[1]?.[1] as string[];
+    expect(args.slice(args.indexOf("--") + 1)).toEqual(["api"]);
+  });
+
+  it("intersects with --service", async () => {
+    tilt.runTilt
+      .mockResolvedValueOnce(resources("api", "db", "web"))
+      .mockResolvedValueOnce(states(["api", "error", "none"], ["db", "error", "none"]))
+      .mockResolvedValueOnce(ok(""));
+    await run("--unhealthy", "--service", "db", "web");
+    const args = tilt.runTilt.mock.calls[2]?.[1] as string[];
+    expect(args.slice(args.indexOf("--") + 1)).toEqual(["db"]);
+    logsCommand.setOptionValue("service", undefined);
+  });
+
+  it("says so, without reading logs, when everything is healthy", async () => {
+    tilt.runTilt.mockResolvedValueOnce(states(["api", "ok", "ok"]));
+    const { envelope } = await run("--unhealthy");
+    expect(envelope.data).toMatchObject({ lines: [], unhealthy: [] });
+    expect(tilt.runTilt).toHaveBeenCalledTimes(1);
+  });
+
+  it("prints a plain sentence in human mode when everything is healthy", async () => {
+    tilt.runTilt.mockResolvedValueOnce(states(["api", "ok", "ok"]));
+    logsCommand.setOptionValue("json", false);
+    await logsCommand.parseAsync(["--unhealthy"], { from: "user" });
+    expect(out.join("\n")).toContain("All services are healthy");
+  });
+
+  it("fails like the other Tilt reads when Tilt cannot be queried", async () => {
+    tilt.runTilt.mockResolvedValueOnce({ exitCode: 1, stdout: "", stderr: "" });
+    const { envelope, code } = await run("--unhealthy");
+    expect(code).toBe(1);
+    expect(envelope.errors[0]?.code).toBe("TILT_NOT_RUNNING");
+  });
+});
+
+describe("flisk logs --source", () => {
+  const entry = (source: string, message: string) =>
+    JSON.stringify({ time: "t", resource: "api", level: "info", source, message });
+  const mixed = `${[
+    entry("build", "STEP 1/9 : FROM node"),
+    entry("build", "STEP 2/9 : COPY . ."),
+    entry("runtime", "listening"),
+    entry("runtime", "BOOM: DATABASE_URL missing"),
+  ].join("\n")}\n`;
+
+  it("returns only runtime lines and counts --tail against the lines kept", async () => {
+    tilt.runTilt.mockResolvedValueOnce(ok(mixed));
+    const { envelope, code } = await run("--source", "runtime", "--tail", "1");
+    expect(code).toBeNull();
+    expect(envelope.data).toMatchObject({
+      source: "runtime",
+      tail: 1,
+      lines: [{ source: "runtime", text: "BOOM: DATABASE_URL missing" }],
+    });
+    // Tilt is asked for its whole buffer: the build output before the runtime lines must not eat the tail.
+    const args = tilt.runTilt.mock.calls[0]?.[1] as string[];
+    expect(args).toEqual(expect.arrayContaining(["--tail", "10000", "--json"]));
+  });
+
+  it("returns only build lines for --source build", async () => {
+    tilt.runTilt.mockResolvedValueOnce(ok(mixed));
+    const { envelope } = await run("--source", "build");
+    const lines = (envelope.data as { lines: Array<{ source: string }> }).lines;
+    expect(lines).toHaveLength(2);
+    expect(lines.every((line) => line.source === "build")).toBe(true);
+  });
+
+  it("keeps every line and the old envelope shape when --source is omitted", async () => {
+    tilt.runTilt.mockResolvedValueOnce(ok(mixed));
+    const { envelope } = await run();
+    expect(envelope.data).not.toHaveProperty("source");
+    expect((envelope.data as { lines: unknown[] }).lines).toHaveLength(4);
+  });
+
+  it("still redacts secrets in the lines it returns", async () => {
+    secretMock.envSecretValues.mockReturnValue(["hunter2-secret"]);
+    tilt.runTilt.mockResolvedValueOnce(
+      ok(`${entry("runtime", "connect postgres://u:hunter2-secret@db failed")}\n`),
+    );
+    const { envelope } = await run("--source", "runtime");
+    const text = JSON.stringify(envelope);
+    expect(text).not.toContain("hunter2-secret");
+    expect(text).toContain("failed");
+  });
+
+  it("prints filtered lines as text without a --json flag from the user", async () => {
+    tilt.runTilt.mockResolvedValueOnce(ok(mixed));
+    logsCommand.setOptionValue("json", false);
+    await logsCommand.parseAsync(["--source", "runtime", "--tail", "1"], { from: "user" });
+    expect(out.join("\n")).toContain("api | BOOM: DATABASE_URL missing");
+    expect(out.join("\n")).not.toContain("STEP 1/9");
+  });
+});
+
+describe("log content filtering", () => {
+  it("applies source and tail selection before matching and context", async () => {
+    const now = new Date().toISOString();
+    tilt.runTilt.mockResolvedValueOnce(
+      webviewDump([
+        segment(now, "ERROR outside tail"),
+        segment(now, "before"),
+        segment(now, "ERROR build", "build:api"),
+        segment(now, "ERROR kept"),
+        segment(now, "after"),
+      ]),
+    );
+    const { envelope } = await run(
+      "--source",
+      "runtime",
+      "--tail",
+      "3",
+      "--since",
+      "5m",
+      "--grep",
+      "error",
+      "--context",
+      "1",
+    );
+    expect(envelope).toMatchObject({
+      data: {
+        lines: [
+          { text: "before", match: false },
+          { text: "ERROR kept", match: true },
+          { text: "after", match: false },
+        ],
+      },
+    });
+    expect(tilt.runTilt).toHaveBeenCalledWith(
+      "dump",
+      ["webview", "--port", "10350"],
+      expect.anything(),
+    );
+  });
+
+  it.each(["-1", "1.5", "9007199254740992"])("rejects invalid context %s", async (context) => {
+    const { code } = await run("--grep", "error", "--context", context);
+    expect(code).toBe(2);
+    expect(tilt.runTilt).not.toHaveBeenCalled();
+  });
+
+  it("keeps matching lines with surrounding context and marks JSON matches", async () => {
+    tilt.runTilt.mockResolvedValueOnce(
+      ok(
+        [logLine("before"), logLine("ERROR crash"), logLine("after"), logLine("unrelated")].join(
+          "\n",
+        ),
+      ),
+    );
+    const { envelope, code } = await run("--grep", "error", "--context", "1");
+    expect(code).toBeNull();
+    expect(envelope).toMatchObject({
+      data: {
+        lines: [
+          { text: "before", match: false },
+          { text: "ERROR crash", match: true },
+          { text: "after", match: false },
+        ],
+      },
+    });
+  });
+
+  it("returns an empty successful snapshot for no matches", async () => {
+    tilt.runTilt.mockResolvedValueOnce(ok(logLine("ordinary output")));
+    const { envelope, code } = await run("--grep", "ERROR");
+    expect(code).toBeNull();
+    expect(envelope).toMatchObject({ data: { lines: [] }, errors: [] });
+  });
+
+  it("matches meta-characters in the pattern literally", async () => {
+    tilt.runTilt.mockResolvedValueOnce(
+      ok([logLine("plain"), logLine("value [ok] here")].join("\n")),
+    );
+    const { envelope, code } = await run("--grep", "[ok]");
+    expect(code).toBeNull();
+    expect(envelope).toMatchObject({
+      data: { lines: [{ text: "value [ok] here", match: true }] },
+    });
+  });
+
+  it("rejects context without a pattern", async () => {
+    const { envelope, code } = await run("--context", "1");
+    expect(code).toBe(2);
+    expect(envelope.errors[0]).toMatchObject({ code: "USAGE" });
+  });
+});

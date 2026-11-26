@@ -1,0 +1,7 @@
+{
+  "appName": "orders-api",
+  "appType": "backend",
+  "stack": "orders",
+  "port": "4100",
+  "schemaVersion": 1
+}

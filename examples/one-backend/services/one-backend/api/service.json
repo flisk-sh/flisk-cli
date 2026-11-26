@@ -1,0 +1,10 @@
+{
+  "$schema": "https://flisk.sh/schema.service.json",
+  "schemaVersion": 1,
+  "appName": "api-backend",
+  "appType": "backend",
+  "stack": "one-backend",
+  "port": 4000,
+  "healthCheckPath": "/health",
+  "dependsOn": []
+}

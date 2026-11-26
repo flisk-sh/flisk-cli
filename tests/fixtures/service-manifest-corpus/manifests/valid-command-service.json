@@ -1,0 +1,6 @@
+{
+  "appName": "dev-tools",
+  "appType": "backend",
+  "command": "node server.js",
+  "schemaVersion": 1
+}

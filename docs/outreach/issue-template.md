@@ -1,0 +1,27 @@
+# Issue template
+
+Title: `Evaluate Flisk CLI for <list name>?`
+
+```markdown
+**Disclosure:** I maintain Flisk CLI ([flisk-sh/flisk](https://github.com/flisk-sh/flisk), MIT).
+
+## What it does
+Flisk CLI runs a set of local services as Docker containers through Tilt, driven by `service.json` files (`flisk up`). It is local development orchestration, not a production deploy tool.
+
+## Why this repo
+Your <list name> (`<list_path>`) lists <quote the line or category that fits>.
+
+## How to verify
+- License: MIT
+- Install: `npm install -g @flisk-sh/flisk` or the prebuilt binary installer
+- Checksums: `checksums.txt` is published with each release in flisk-sh/releases; the installer verifies SHA-256
+- Docker optional: simple services run as local processes; container stacks need Docker and Tilt (WSL2 on Windows); macOS, Linux, Windows
+- No audit or certification exists
+
+Full facts: <link to docs/outreach/tool-allowlist-packet.md>
+
+## The ask
+Please consider whether Flisk CLI fits <list name>. Add, reject, or ignore are all fine; I won't follow up after a decline.
+```
+
+No urgency, no "your users need this", no endorsement claims.

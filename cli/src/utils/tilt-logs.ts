@@ -1,0 +1,236 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+export interface LogLine {
+  time: string | null;
+  resource: string | null;
+  level: string | null;
+  source: string | null;
+  text: string;
+}
+
+export const DEFAULT_LOG_TAIL = 200;
+/** Upper bound for --tail so a snapshot stays small enough for an agent to read. */
+export const MAX_LOG_TAIL = 10_000;
+
+const NANOSECONDS: Record<string, number> = {
+  ns: 1,
+  us: 1e3,
+  µs: 1e3,
+  ms: 1e6,
+  s: 1e9,
+  m: 6e10,
+  h: 3.6e12,
+};
+// Go's time.Duration is an int64 of nanoseconds, so anything beyond this is rejected by `tilt logs`.
+const MAX_DURATION_NANOSECONDS = 2 ** 63 - 1;
+
+/**
+ * Go-style duration such as 30s, 5m, 1h or 1h30m, within roughly the range Go's ParseDuration accepts.
+ * The sum is a JS number, so values within a few nanoseconds of the int64 limit can disagree with Go; this only needs to
+ * reject absurd input, and Tilt remains the final judge (its rejection is reported as TILT_LOGS_FAILED).
+ */
+export function isValidSince(value: string): boolean {
+  if (!/^(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+$/.test(value)) return false;
+  let total = 0;
+  for (const [, amount, unit] of value.matchAll(/(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)/g)) {
+    total += Number(amount) * (NANOSECONDS[unit as string] ?? 0);
+  }
+  return total <= MAX_DURATION_NANOSECONDS;
+}
+
+/** A valid --since duration in milliseconds, for logs Flisk reads itself (local processes) rather than through Tilt. */
+export function sinceMilliseconds(value: string): number {
+  let total = 0;
+  for (const [, amount, unit] of value.matchAll(/(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)/g)) {
+    total += Number(amount) * (NANOSECONDS[unit as string] ?? 0);
+  }
+  return total / 1e6;
+}
+
+export { isValidPort } from "./validation.js";
+
+export function isValidTail(value: string): boolean {
+  return /^[1-9]\d*$/.test(value) && Number(value) <= MAX_LOG_TAIL;
+}
+
+/**
+ * Turn a `time` from Tilt's log store into an RFC3339 string. Tilt writes Go MicroTime strings such as
+ * `2026-11-20T12:34:56.123456Z`; `Date.parse` accepts them, but we normalize so every consumer sees one shape.
+ */
+function normalizedTime(value: unknown): string | null {
+  if (typeof value !== "string" || value === "") return null;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : new Date(parsed).toISOString();
+}
+
+const TILT_LEVELS: Record<string, string> = {
+  INFO: "info",
+  VERBOSE: "verbose",
+  DEBUG: "debug",
+  WARN: "warn",
+  ERROR: "error",
+};
+
+/**
+ * Parse the log list in `tilt dump webview` output. The webview dump carries the timestamps Tilt recorded with
+ * each segment; the `tilt logs` path was observed dating lines with the query time in #4197. Returns null when
+ * Tilt did not return a webview dump we can read.
+ */
+export function parseTiltWebviewLogLines(output: string, limit: number): LogLine[] | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output) as unknown;
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+  const view = parsed as Record<string, unknown>;
+  if (!view.logList || typeof view.logList !== "object") return null;
+  const logList = view.logList as Record<string, unknown>;
+  const spans =
+    logList.spans && typeof logList.spans === "object"
+      ? (logList.spans as Record<string, unknown>)
+      : {};
+  const segments = Array.isArray(logList.segments) ? logList.segments : [];
+  const lines: LogLine[] = [];
+  for (const entry of segments) {
+    if (!entry || typeof entry !== "object") continue;
+    const segment = entry as Record<string, unknown>;
+    const spanId = typeof segment.spanId === "string" ? segment.spanId : "";
+    const span = spans[spanId];
+    const manifestName =
+      span && typeof span === "object" ? (span as Record<string, unknown>).manifestName : undefined;
+    const rawText = typeof segment.text === "string" ? segment.text : "";
+    const level =
+      typeof segment.level === "string" ? (TILT_LEVELS[segment.level.toUpperCase()] ?? null) : null;
+    lines.push({
+      time: normalizedTime(segment.time),
+      resource: typeof manifestName === "string" && manifestName ? manifestName : null,
+      level,
+      // This is Tilt's own build/runtime distinction, from internal/hud/client/json_printer.go.
+      source: spanId.startsWith("build:") || spanId.startsWith("cmdimage:") ? "build" : "runtime",
+      text: rawText.endsWith("\n") ? rawText.slice(0, -1) : rawText,
+    });
+  }
+  return lines.slice(-limit);
+}
+
+/** Keep only lines Tilt dated at or after `now - sinceMs`; lines without a usable time cannot prove they are new. */
+export function filterLogLinesSince<T extends { time: string | null }>(
+  lines: readonly T[],
+  sinceMs: number,
+  now: number = Date.now(),
+): T[] {
+  const cutoff = now - sinceMs;
+  return lines.filter((line) => {
+    if (line.time === null) return false;
+    const time = Date.parse(line.time);
+    return !Number.isNaN(time) && time >= cutoff;
+  });
+}
+
+/** Parse `tilt logs --json` (JSON Lines) into normalized lines, keeping at most the last `limit`. Unparseable lines are skipped. */
+export function parseTiltLogLines(output: string, limit: number): LogLine[] {
+  const lines: LogLine[] = [];
+  for (const raw of output.split("\n")) {
+    if (!raw.trim()) continue;
+    try {
+      const entry = JSON.parse(raw) as Record<string, unknown>;
+      const str = (value: unknown): string | null =>
+        typeof value === "string" && value !== "" ? value : null;
+      lines.push({
+        time: str(entry.time),
+        resource: str(entry.resource),
+        level: str(entry.level),
+        source: str(entry.source),
+        text: typeof entry.message === "string" ? entry.message : "",
+      });
+    } catch {
+      // Tilt can print a non-JSON notice before the stream; it is not a log line.
+    }
+  }
+  return lines.slice(-limit);
+}
+
+export const LOG_SOURCES = ["runtime", "build"] as const;
+export type LogSource = (typeof LOG_SOURCES)[number];
+
+export function isValidLogSource(value: string): value is LogSource {
+  return (LOG_SOURCES as readonly string[]).includes(value);
+}
+
+/**
+ * Keep only lines from one source. Tilt marks image build output "build" and everything a running service prints
+ * "runtime"; a line with no source (local-process logs, which have no build step) is runtime output.
+ */
+export function filterLogSource<T extends { source: string | null }>(
+  lines: readonly T[],
+  source: LogSource,
+): T[] {
+  return lines.filter((line) => (line.source === "build") === (source === "build"));
+}
+
+/** Escape every regular expression meta-character so caller-supplied text is matched literally. */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Compile a smart-case content filter from caller-supplied text. The pattern is escaped first, so
+ * it is matched as plain text: a command-line argument or MCP argument cannot inject an expression
+ * for the RegExp engine to execute (CWE-400). A pattern without uppercase characters ignores case.
+ */
+export function compileLogGrep(pattern: string): RegExp {
+  // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- the pattern is escaped above
+  return new RegExp(escapeRegExp(pattern), pattern === pattern.toLowerCase() ? "i" : "");
+}
+
+/** Context is a non-negative safe integer; it is clipped to the selected log window. */
+export function isValidLogContext(value: string): boolean {
+  return /^\d+$/.test(value) && Number.isSafeInteger(Number(value));
+}
+
+/**
+ * Match redacted content within the selected window, retaining neighbors from the same service only.
+ * Tilt can batch multiple physical lines in one message. Expand those only for content filtering,
+ * preserving metadata and input order. Merge overlapping context ranges so no line appears twice.
+ */
+export function filterLogContent<T extends { resource: string | null; text: string }>(
+  lines: readonly T[],
+  pattern: RegExp,
+  context: number,
+): Array<T & { match: boolean }> {
+  const expanded = lines.flatMap((line) => {
+    const text = line.text.replace(/\r?\n$/, "");
+    return text.split(/\r?\n/).map((part) => ({ ...line, text: part }));
+  });
+  const matches = expanded.map((line) => pattern.test(line.text));
+  const services = new Map<string | null, number[]>();
+  for (const [index, line] of expanded.entries()) {
+    const indices = services.get(line.resource) ?? [];
+    indices.push(index);
+    services.set(line.resource, indices);
+  }
+  const keep = new Set<number>();
+  for (const indices of services.values()) {
+    let end = -1;
+    for (const [position, index] of indices.entries()) {
+      if (!matches[index]) continue;
+      const start = Math.max(end + 1, position - context, 0);
+      end = Math.min(position + context, indices.length - 1);
+      for (let neighbor = start; neighbor <= end; neighbor++) {
+        keep.add(indices[neighbor] as number);
+      }
+    }
+  }
+  return expanded.flatMap((line, index) =>
+    keep.has(index) ? [{ ...line, match: matches[index] as boolean }] : [],
+  );
+}
+
+/** True when `tilt logs` failed because no Tilt server answered, as opposed to rejecting its arguments. */
+export function isTiltConnectionFailure(stderr: string): boolean {
+  return /connection refused|connecting to Tilt|no such host|dial tcp|websocket_token/i.test(
+    stderr,
+  );
+}

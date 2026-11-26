@@ -1,0 +1,80 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import { describe, expect, it } from "vitest";
+import { portConflictFix } from "../port-conflict-fix.js";
+
+describe("portConflictFix", () => {
+  it("names the env var that moves a known Flisk port", () => {
+    expect(portConflictFix("host port 5432 is already allocated")).toBe(
+      "Fix: stop the process using port 5432 (find it with: lsof -nP -iTCP:5432 -sTCP:LISTEN), or set FLISK_POSTGRES_PORT to a free port and run flisk up",
+    );
+  });
+
+  it("maps the ingress ports to their env vars", () => {
+    expect(portConflictFix("host port 80 is already allocated")).toContain("FLISK_HTTP_PORT");
+    expect(portConflictFix("host port 443 is already allocated")).toContain("FLISK_HTTPS_PORT");
+  });
+
+  it("gives only the way to find the holder for other ports", () => {
+    expect(portConflictFix("host port 9000 is already allocated")).toBe(
+      "Fix: stop the process using port 9000 (find it with: lsof -nP -iTCP:9000 -sTCP:LISTEN)",
+    );
+  });
+
+  it("reads the raw Docker bind error too", () => {
+    expect(portConflictFix("Bind for 0.0.0.0:5432 failed: port is already allocated")).toContain(
+      "FLISK_POSTGRES_PORT",
+    );
+  });
+
+  it("gives no next step when the port is not known", () => {
+    expect(portConflictFix("a required host port is already allocated")).toBeNull();
+  });
+
+  it("gives no next step for other failures", () => {
+    expect(portConflictFix("ConnectionRefused downloading package manifest")).toBeNull();
+  });
+
+  it("names the occupant when it is known", () => {
+    expect(
+      portConflictFix("host port 5432 is already allocated", { pid: 4321, command: "postgres" }),
+    ).toBe(
+      "Fix: port 5432 is held by postgres (pid 4321). Stop it, or set FLISK_POSTGRES_PORT to a free port and run flisk up",
+    );
+  });
+
+  it("names the occupant for a port without an env var", () => {
+    expect(
+      portConflictFix("host port 9000 is already allocated", { pid: 7, command: "node" }),
+    ).toBe("Fix: port 9000 is held by node (pid 7). Stop it");
+  });
+
+  it("names a Docker container and the command that stops it (#4124)", () => {
+    expect(
+      portConflictFix("host port 15434 is already allocated", {
+        pid: 0,
+        command: "docker",
+        container: "flisk_demo_postgres",
+      }),
+    ).toBe(
+      "Fix: port 15434 is held by the Docker container flisk_demo_postgres. Stop it (docker stop flisk_demo_postgres), or set FLISK_POSTGRES_PORT to a free port and run flisk up",
+    );
+  });
+
+  it("names the env var for a fallback-range port the plan can pick (#4216)", () => {
+    expect(portConflictFix("host port 8080 is already allocated")).toContain("FLISK_HTTP_PORT");
+    expect(portConflictFix("host port 15433 is already allocated")).toContain(
+      "FLISK_POSTGRES_PORT",
+    );
+  });
+
+  it("still offers the env var that moves a known port when a container holds it", () => {
+    expect(
+      portConflictFix("host port 5432 is already allocated", {
+        pid: 0,
+        command: "docker",
+        container: "db",
+      }),
+    ).toContain("or set FLISK_POSTGRES_PORT");
+  });
+});

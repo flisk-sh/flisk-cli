@@ -1,0 +1,164 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+/// <reference types="vite/client" />
+
+import * as fs from "node:fs";
+import { describe, expect, it, vi } from "vitest";
+import pkg from "../../../package.json" with { type: "json" };
+import { createTempDir, runFlisk } from "../../test-support/index.js";
+import { listedCommandNames, showDemoHelp, showHelp } from "../help.js";
+import { openCommand } from "../open.js";
+import { getRegisteredCommands } from "../registry.js";
+
+// Commands that exist for maintainers of this repository, not for people using Flisk.
+const NOT_LISTED = new Set(["maintainers"]);
+
+describe("flisk --help", () => {
+  it("describes resource, status and open consistently with their behavior", () => {
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, "log").mockImplementation((...args) => {
+      logs.push(args.map(String).join(" "));
+    });
+    try {
+      showHelp();
+      const output = logs.join("\n");
+      expect(output).toMatch(/resource\s+Create a new resource, or register an existing one/);
+      expect(output).toMatch(/status\s+Show status of resources and stacks/);
+      expect(output).toMatch(/open\s+Open the first ready frontend in your browser/);
+      expect(openCommand.helpInformation()).toContain("Open the first ready frontend");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("describes project setup and validation in the command list", () => {
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, "log").mockImplementation((...args) => {
+      logs.push(args.map(String).join(" "));
+    });
+    try {
+      showHelp();
+      expect(logs.join("\n")).toMatch(
+        /project\s+Initialize or validate project-level configuration/,
+      );
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("lists every command that the CLI registers", () => {
+    const commands = getRegisteredCommands();
+    expect(commands.length).toBeGreaterThan(15);
+
+    const listed = new Set(listedCommandNames());
+    const missing = commands
+      .map((command) => command.name())
+      .filter((name) => !NOT_LISTED.has(name) && !listed.has(name));
+
+    expect(missing, "add a row to COMMAND_GROUPS in commands/help.ts").toEqual([]);
+  });
+
+  it("renders formatted banner, groups, global options, and quick start", () => {
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, "log").mockImplementation((...args) => {
+      logs.push(args.map(String).join(" "));
+    });
+    try {
+      showHelp();
+      const output = logs.join("\n");
+      expect(output).toContain("flisk");
+      expect(output).toContain(pkg.version);
+      expect(output).toContain("Project Level");
+      expect(output).toContain("Stack Level");
+      expect(output).toContain("Resource Level");
+      expect(output).toContain("Lifecycle");
+      expect(output).toContain("Networking");
+      expect(output).toContain("Utilities");
+      expect(output).toContain("Global Options:");
+      expect(output).toContain("-v, --version");
+      expect(output).toContain("-h, --help");
+      expect(output).toContain("--verbose");
+      expect(output).toContain("Quick start:");
+      expect(output).toContain("Examples:");
+      expect(output).toContain("https://github.com/flisk-sh/flisk");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("lists the demo flags for flisk demo --help", () => {
+    const logs: string[] = [];
+    const logSpy = vi.spyOn(console, "log").mockImplementation((...args) => {
+      logs.push(args.map(String).join(" "));
+    });
+    try {
+      showDemoHelp();
+      const output = logs.join("\n");
+      expect(output).toContain("Usage: flisk demo [options]");
+      expect(output).toContain("--project <dir>");
+      expect(output).toContain("--keep");
+      expect(output).toContain("--no-docker");
+      expect(output).toContain("-y, --yes");
+      expect(output).not.toContain("Project Level");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("lists the one-command demo in flisk --help", () => {
+    const dir = createTempDir("flisk-help-demo-");
+    try {
+      const res = runFlisk(["--help"], { cwd: dir });
+      expect(res.status).toBe(0);
+      expect(res.stdout).toMatch(/demo\s+Clone, boot and open a small app/);
+      expect(res.stdout).toContain("--no-docker");
+      expect(res.stdout).toContain("--project <dir>");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("prints the demo's own help for flisk demo --help and flisk help demo", () => {
+    const dir = createTempDir("flisk-demo-help-");
+    try {
+      for (const args of [
+        ["demo", "--help"],
+        ["help", "demo"],
+      ]) {
+        const res = runFlisk(args, { cwd: dir });
+        expect(res.status).toBe(0);
+        expect(res.stdout).toContain("Usage: flisk demo [options]");
+        expect(res.stdout).toContain("--no-docker");
+        expect(res.stdout).toContain("--project <dir>");
+        expect(res.stdout).toContain("~/.flisk/flisk-demo");
+        expect(res.stdout).toMatch(/remove|delete/i);
+        expect(res.stdout).not.toContain("Project Level");
+        expect(res.stdout).not.toContain("Quick start:");
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unknown commands with exit code 2", () => {
+    const dir = createTempDir("flisk-unknown-cmd-");
+    try {
+      const res = runFlisk(["unknown-command-xyz"], { cwd: dir });
+      expect(res.status).toBe(2);
+      expect(res.stderr).toContain("error: unknown command 'unknown-command-xyz'");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unknown command target passed to help with exit code 2", () => {
+    const dir = createTempDir("flisk-unknown-help-");
+    try {
+      const res = runFlisk(["help", "unknown-target-xyz"], { cwd: dir });
+      expect(res.status).toBe(2);
+      expect(res.stderr).toContain("error: unknown command 'unknown-target-xyz'");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

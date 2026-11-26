@@ -1,0 +1,12 @@
+name = "flisk-discord-bot-trigger"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+# Runs on a timer only, so it has no public URL.
+workers_dev = false
+
+[triggers]
+# Every 3 minutes: 480 dispatches a day instead of 1,440 (#3910).
+crons = ["*/3 * * * *"]
+
+# Needs one secret, GITHUB_DISPATCH_TOKEN. See README.md.

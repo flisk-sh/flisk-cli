@@ -1,0 +1,25 @@
+{
+  "$schema": "https://flisk.sh/schema.service.json",
+  "schemaVersion": 1,
+  "appName": "db-migrate",
+  "appType": "bring-your-own",
+  "stack": "nosia",
+  "port": 4000,
+  "image": "dilolabs/nosia:latest",
+  "exposeViaProxy": false,
+  "dependsOn": [
+    {
+      "name": "postgres-db",
+      "condition": "service_healthy"
+    }
+  ],
+  "env": {
+    "DATABASE_URL": "${DATABASE_URL}",
+    "EMBEDDING_DIMENSIONS": "${EMBEDDING_DIMENSIONS}",
+    "SECRET_KEY_BASE": "${SECRET_KEY_BASE}"
+  },
+  "restart": "no",
+  "container": {
+    "command": ["bundle", "exec", "rails", "db:prepare"]
+  }
+}

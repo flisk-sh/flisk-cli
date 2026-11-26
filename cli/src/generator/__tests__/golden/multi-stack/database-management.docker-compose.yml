@@ -1,0 +1,37 @@
+###############################################################################
+# SYSTEM-GENERATED - DO NOT EDIT
+# Stack feature: database-management
+# Source: .flisk/project.json phases.*.enabledStacks includes "database-management"
+# Regenerate with: flisk config regenerate
+# Not a standalone Compose file: the external network and DB_PASSWORD come from flisk up.
+# For a standalone file use: flisk export compose
+###############################################################################
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: multi_stack_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: multi_stack
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: postgres
+    ports:
+      - "${FLISK_BIND_ADDRESS:-127.0.0.1}:${FLISK_POSTGRES_PORT:-15432}:5432"
+    volumes:
+      - multi_stack_postgres_data:/var/lib/postgresql/data
+    networks:
+      - database
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U multi_stack -d postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+networks:
+  database:
+    name: multi_stack_database
+    external: true
+
+volumes:
+  multi_stack_postgres_data:

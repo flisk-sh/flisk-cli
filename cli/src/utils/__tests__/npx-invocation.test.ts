@@ -1,0 +1,215 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { createTempDir } from "../../test-support/temp-project.js";
+import {
+  findPackageRunner,
+  npxInvocation,
+  packageRunnerError,
+  packageRunnerInvocation,
+  quoteCmdArgument,
+  safePackageSpec,
+} from "../npx-invocation.js";
+
+const NODE_DIR = "C:\\Program Files\\nodejs";
+const NODE_EXE = `${NODE_DIR}\\node.exe`;
+const NPX_CLI = `${NODE_DIR}\\node_modules\\npm\\bin\\npx-cli.js`;
+
+/** Arguments that cmd.exe would split, expand or run as a second command when joined unquoted (#4004). */
+const HOSTILE_ARGS = [
+  "C:\\Users\\Jane Smith\\shop",
+  "build&echo PWNED",
+  "a|b",
+  "%PATH%",
+  "x^y",
+  'say "hi"',
+  "trailing\\",
+  "<in>",
+  "wow!",
+  "",
+];
+
+describe("npxInvocation", () => {
+  it("runs npx as is outside Windows", () => {
+    expect(npxInvocation(["--yes", "pkg", "a b"], { platform: "linux" })).toEqual({
+      command: "npx",
+      args: ["--yes", "pkg", "a b"],
+      shell: false,
+      windowsVerbatimArguments: false,
+    });
+  });
+
+  it("runs npm's npx-cli.js with node.exe on Windows, so no shell sees the arguments", () => {
+    const invocation = npxInvocation(["--yes", "pkg", ...HOSTILE_ARGS], {
+      platform: "win32",
+      execPath: NODE_EXE,
+      exists: (path) => path === NPX_CLI,
+    });
+    expect(invocation).toEqual({
+      command: NODE_EXE,
+      args: [NPX_CLI, "--yes", "pkg", ...HOSTILE_ARGS],
+      shell: false,
+      windowsVerbatimArguments: false,
+    });
+  });
+
+  it("does not look for npx-cli.js next to an executable that is not node (the flisk binary, bun)", () => {
+    for (const execPath of ["C:\\tools\\flisk.exe", "C:\\bun\\bun.exe"]) {
+      const invocation = npxInvocation(["--yes", "pkg"], {
+        platform: "win32",
+        execPath,
+        exists: () => true,
+        comSpec: "C:\\Windows\\system32\\cmd.exe",
+      });
+      expect(invocation.command).toBe("C:\\Windows\\system32\\cmd.exe");
+    }
+  });
+
+  it("ignores the ComSpec environment value when choosing the shell", () => {
+    const before = process.env.ComSpec;
+    process.env.ComSpec = "C:\\evil\\cmd.exe";
+    try {
+      const invocation = npxInvocation(["--yes", "pkg"], {
+        platform: "win32",
+        execPath: "C:\\bun\\bun.exe",
+      });
+      expect(invocation.command).toBe("cmd.exe");
+    } finally {
+      if (before === undefined) delete process.env.ComSpec;
+      else process.env.ComSpec = before;
+    }
+  });
+
+  it("falls back to npx.cmd through cmd.exe with every argument quoted", () => {
+    const invocation = npxInvocation(["--yes", "pkg", "C:\\Users\\Jane Smith\\shop", "a&b"], {
+      platform: "win32",
+      execPath: NODE_EXE,
+      exists: () => false,
+      comSpec: "C:\\Windows\\system32\\cmd.exe",
+    });
+    expect(invocation).toEqual({
+      command: "C:\\Windows\\system32\\cmd.exe",
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        `"npx.cmd ${["--yes", "pkg", "C:\\Users\\Jane Smith\\shop", "a&b"].map(quoteCmdArgument).join(" ")}"`,
+      ],
+      shell: false,
+      windowsVerbatimArguments: true,
+    });
+  });
+});
+
+describe("findPackageRunner", () => {
+  it("prefers npx, falls back to bunx, and keeps npx as the error fallback when neither is on PATH", () => {
+    const dir = mkdtempSync(join(tmpdir(), "flisk-runner-path-"));
+    try {
+      expect(findPackageRunner(dir, "linux")).toBe("npx");
+      writeFileSync(join(dir, "bunx"), "");
+      expect(findPackageRunner(dir, "linux")).toBe("bunx");
+      writeFileSync(join(dir, "npx"), "");
+      expect(findPackageRunner(dir, "linux")).toBe("npx");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("packageRunnerInvocation", () => {
+  it("runs bunx without --yes when only bunx is on PATH", () => {
+    const dir = mkdtempSync(join(tmpdir(), "flisk-runner-path-"));
+    try {
+      writeFileSync(join(dir, "bunx"), "");
+      expect(
+        packageRunnerInvocation(["flisk-import@1", "dir with space"], {
+          pathEnv: dir,
+          platform: "linux",
+        }),
+      ).toEqual({
+        command: "bunx",
+        args: ["flisk-import@1", "dir with space"],
+        shell: false,
+        windowsVerbatimArguments: false,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the npx call, including --yes, when neither runner is on PATH", () => {
+    const dir = mkdtempSync(join(tmpdir(), "flisk-runner-path-"));
+    try {
+      const invocation = packageRunnerInvocation(["flisk-import@1"], {
+        pathEnv: dir,
+        platform: "linux",
+      });
+      expect(invocation.command).toBe("npx");
+      expect(invocation.args).toEqual(["--yes", "flisk-import@1"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("packageRunnerError", () => {
+  it("names both remedies when neither runner could be started", () => {
+    expect(packageRunnerError("flisk export", 'Executable not found in $PATH: "npx"')).toBe(
+      'flisk export: could not run npx or bunx (Executable not found in $PATH: "npx"). Install Node.js (npx) or Bun (bunx) and retry.',
+    );
+  });
+});
+
+describe("quoteCmdArgument", () => {
+  it("quotes and caret-escapes cmd.exe metacharacters for a batch file", () => {
+    expect(quoteCmdArgument("plain")).toBe('^^^"plain^^^"');
+    expect(quoteCmdArgument("a b")).toBe('^^^"a^^^ b^^^"');
+    expect(quoteCmdArgument("a&b")).toBe('^^^"a^^^&b^^^"');
+    expect(quoteCmdArgument("%PATH%")).toBe('^^^"^^^%PATH^^^%^^^"');
+    expect(quoteCmdArgument('say "hi"')).toBe('^^^"say^^^ \\^^^"hi\\^^^"^^^"');
+    expect(quoteCmdArgument("trailing\\")).toBe('^^^"trailing\\\\^^^"');
+  });
+
+  // The real check: what a batch file (like npx.cmd) hands to node after cmd.exe has parsed the line.
+  it.runIf(process.platform === "win32")(
+    "survives cmd.exe and a batch file unchanged on Windows",
+    () => {
+      const dir = join(createTempDir("flisk-npx-quote-"), "fixture & space");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, "echo.js"),
+        "process.stdout.write(JSON.stringify(process.argv.slice(2)));\n",
+      );
+      writeFileSync(join(dir, "echo.cmd"), '@node "%~dp0echo.js" %*\r\n');
+      const marker = join(dir, "marker.txt");
+      const args = [...HOSTILE_ARGS, "x&echo PWNED>marker.txt"];
+      const line = `".\\echo.cmd ${args.map(quoteCmdArgument).join(" ")}"`;
+      const result = spawnSync("cmd.exe", ["/d", "/s", "/c", line], {
+        cwd: dir,
+        windowsVerbatimArguments: true,
+        encoding: "utf8",
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual(args);
+      expect(existsSync(marker)).toBe(false);
+    },
+  );
+});
+
+describe("safePackageSpec", () => {
+  it("keeps plain specs and falls back on options or shell metacharacters", () => {
+    expect(safePackageSpec("flisk-import@1", "d")).toBe("flisk-import@1");
+    expect(safePackageSpec("@scope/pkg@^1.2.3", "d")).toBe("@scope/pkg@^1.2.3");
+    expect(safePackageSpec("./local.tgz", "d")).toBe("./local.tgz");
+    expect(safePackageSpec(undefined, "d")).toBe("d");
+    expect(safePackageSpec("--call=evil", "d")).toBe("d");
+    expect(safePackageSpec("pkg & calc", "d")).toBe("d");
+    expect(safePackageSpec("pkg;rm", "d")).toBe("d");
+    expect(safePackageSpec("$(x)", "d")).toBe("d");
+  });
+});

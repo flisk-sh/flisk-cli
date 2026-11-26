@@ -1,0 +1,78 @@
+# GitHub's CodeQL code scanning (free for public repos). Findings appear under Security > Code scanning.
+name: 🔀 PR | Security | CodeQL
+
+# Trigger set, kept small on purpose (regression test: scripts/check-codeql-triggers.test.mjs):
+# - pull_request: Scorecard grades SAST coverage per merged PR commit, and PR runs keep CodeQL alert history.
+# - merge_group: scans the exact tree the queue may merge, so the queued result covers the final commit.
+# - schedule: catches new queries in old code once a week.
+# No `push:` trigger to main: those commits were already scanned by their PR and merge-group runs.
+on:
+  pull_request:
+  merge_group:
+  schedule:
+    - cron: "17 4 * * 1" # weekly, so new queries catch old code
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Keep each PR head SHA's CodeQL run: Scorecard evaluates SAST coverage per
+  # merged PR commit, so cancelling an older run can leave that SHA unscanned.
+  cancel-in-progress: ${{ github.event_name != 'pull_request' }}
+
+jobs:
+  # Keep one result category per language: the main ruleset requires both CodeQL analyses.
+  analyze:
+    name: 🔬 Analyze (${{ matrix.language }})
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, javascript-typescript]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      security-events: write # upload SARIF results
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 2 # the PR merge commit and its base, to list what the PR changes
+      # A pull request that touches no Starlark has nothing for the Starlark analyzer to find, so that step is skipped
+      # while the job still passes. Merge groups and the weekly run always scan.
+      - name: Does this change touch Starlark?
+        id: changed
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          run=true
+          if [ "$EVENT" = pull_request ]; then
+            if git diff --name-only HEAD^1 HEAD | grep -Eq '\.(star|bzl)$|(^|/)Tiltfile$|^\.github/workflows/codeql\.yml$'; then
+              run=true
+            else
+              run=false
+              echo "No Starlark files changed in this pull request; skipping the Starlark analysis."
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+        env:
+          # Overlay analysis uploads a fresh overlay-base database to the Actions cache on each
+          # default-branch run, and nothing removes the old ones: by 2026-11 the family held
+          # 6.2 GB of the 10 GB budget and was evicting the Bun caches every job restores
+          # (#3895). A build-mode: none scan of a ~3 MB CLI gains little from an incremental
+          # base, so the scan runs full. `actions` is not overlay-eligible, so this only
+          # changes the javascript-typescript leg.
+          CODEQL_OVERLAY_DATABASE_MODE: "none"
+      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          category: /language:${{ matrix.language }}
+      # Starlark (Tiltfiles, *.star) has no CodeQL extractor. This unofficial community analyzer reports through SARIF into
+      # the same Code scanning view. Pinned to a full commit like every other action here.
+      - if: ${{ !cancelled() && steps.changed.outputs.run == 'true' && matrix.language == 'actions' }}
+        uses: flisk-sh/codeql-starlark@2dfbd614fa9097279c0938e3469b86bc43930dfc # v0.2.2

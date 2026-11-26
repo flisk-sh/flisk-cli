@@ -1,0 +1,7 @@
+{
+  "appName": "queue-worker",
+  "appType": "worker",
+  "stack": "orders",
+  "port": 6100,
+  "schemaVersion": 1
+}

@@ -1,0 +1,1024 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { captureExit, type ExitCapture, parseEnvelope } from "../../test-support/index.js";
+import type { CheckResult, DoctorAction } from "../../types/index.js";
+import { WEBCONTAINER_DOCS, WEBCONTAINER_UP_MESSAGE } from "../../utils/agent-host.js";
+import { checkCodingAgents } from "../../utils/doctor-agents.js";
+import { hasFailedActions } from "../../utils/doctor-fix.js";
+import {
+  collectDoctorChecks,
+  createDoctorReport,
+  getDoctorExitCode,
+} from "../../utils/doctor-report.js";
+import { getHostPortPlan } from "../../utils/host-port-config.js";
+import {
+  EnvUnreadableError,
+  envSecretValues,
+  OUTPUT_WITHHELD,
+  projectSecretValues,
+} from "../../utils/secret-redaction.js";
+import {
+  checkWindowsDockerMode,
+  checkWindowsHostConfiguration,
+  checkWindowsRuntimeTools,
+} from "../../utils/windows-doctor.js";
+import { doctorCommand, NATIVE_WINDOWS_DOCTOR_MESSAGE } from "../doctor.js";
+
+vi.mock("../../utils/secret-redaction.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../utils/secret-redaction.js")>();
+  return {
+    ...actual,
+    envSecretValues: vi.fn(actual.envSecretValues),
+    projectSecretValues: vi.fn(actual.projectSecretValues),
+  };
+});
+
+vi.mock("../../utils/doctor-report.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../utils/doctor-report.js")>();
+  return {
+    ...actual,
+    collectDoctorChecks: vi.fn(actual.collectDoctorChecks),
+  };
+});
+
+vi.mock("../../utils/host-port-config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../utils/host-port-config.js")>();
+  return {
+    ...actual,
+    getHostPortPlan: vi.fn(actual.getHostPortPlan),
+  };
+});
+
+vi.mock("../../utils/doctor-agents.js", () => ({
+  checkCodingAgents: vi.fn(() => ({
+    name: "Coding agents",
+    didPass: true,
+    isWarning: true,
+    message: "2 coding agents appear to work in this checkout",
+    fix: "Run each agent in its own git worktree",
+    observed: { kind: "coding-agents", agents: 2 },
+  })),
+}));
+
+vi.mock("../../utils/windows-doctor.js", () => ({
+  checkWindowsRuntimeTools: vi.fn(() => ({
+    name: "Windows Runtime Tools",
+    didPass: true,
+    message:
+      "Docker (C:\\Program Files\\Docker\\Docker\\resources\\bin\\docker.exe) and Tilt found on PATH",
+  })),
+  checkWindowsDockerMode: vi.fn(() => ({
+    name: "Docker container mode",
+    didPass: false,
+    message:
+      "Docker Desktop is using Windows containers. Switch to Linux containers. Flisk stacks are Linux images.",
+    fix: "Switch Docker Desktop to Linux containers. Flisk does not run Windows containers.",
+  })),
+  checkWindowsHostConfiguration: vi.fn(async () => ({
+    name: "Windows ports and DNS",
+    didPass: false,
+    message:
+      "Windows did not resolve *.flisk.localhost to 127.0.0.1. Browser URLs with hostnames will fail until you fix hosts or use the 127.0.0.1 URLs printed by flisk networks.\nAdd these lines to C:\\Windows\\System32\\drivers\\etc\\hosts (Administrator Notepad):\n127.0.0.1 flisk.localhost\n127.0.0.1 example.flisk.localhost\ngit core.autocrlf is true; generated files may get CRLF while Docker Linux containers expect LF. Recommended: git config core.autocrlf input in Flisk repos.\nDocker Desktop Settings → Resources → File sharing must include this project directory.",
+    fix: "Windows did not resolve *.flisk.localhost to 127.0.0.1. Browser URLs with hostnames will fail until you fix hosts or use the 127.0.0.1 URLs printed by flisk networks.",
+  })),
+}));
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.mocked(envSecretValues).mockReturnValue([]);
+  vi.mocked(projectSecretValues).mockReturnValue([]);
+  doctorCommand.setOptionValue("json", false);
+  doctorCommand.setOptionValue("problemsOnly", false);
+  doctorCommand.setOptionValue("all", false);
+  doctorCommand.setOptionValue("ping", true);
+  doctorCommand.setOptionValue("pingTimeout", "3000");
+  doctorCommand.setOptionValue("strict", false);
+  doctorCommand.setOptionValue("fix", false);
+  doctorCommand.setOptionValue("dryRun", false);
+  doctorCommand.setOptionValue("scope", "project");
+  doctorCommand.setOptionValue("yes", false);
+  doctorCommand.setOptionValue("agents", false);
+});
+
+function captureOutput(): { log: ReturnType<typeof vi.spyOn>; exit: ExitCapture["exit"] } {
+  const log = vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const { exit } = captureExit();
+  return { log, exit };
+}
+
+const PASSING_CHECK: CheckResult = {
+  durationMs: 0,
+  name: "Container Runtime",
+  didPass: true,
+  message: "Docker daemon is running",
+};
+
+const FAILING_CHECK: CheckResult = {
+  durationMs: 0,
+  name: "Tilt CLI",
+  didPass: false,
+  message: "Tilt CLI not found",
+  fix: "curl -fsSL https://raw.githubusercontent.com/tilt-dev/tilt/master/scripts/install.sh | bash",
+};
+
+const SKIPPED_CHECK: CheckResult = {
+  durationMs: 0,
+  name: "Service Health",
+  didPass: true,
+  isSkipped: true,
+  message: "Skipped (--no-ping)",
+};
+
+describe("doctor JSON command", () => {
+  it.each(["0", "-1", "1.5", "10ms", "NaN", "9007199254740992"])(
+    "reports invalid timeout %s without probes",
+    async (timeout) => {
+      const { log, exit } = captureOutput();
+      await expect(
+        doctorCommand.parseAsync(["--json", "--ping-timeout", timeout], { from: "user" }),
+      ).rejects.toThrow("exit");
+      expect(exit).toHaveBeenCalledWith(2);
+      expect(log).toHaveBeenCalledTimes(1);
+      const report = parseEnvelope(String(log.mock.calls[0]?.[0]));
+      expect(report.schemaVersion).toBe(1);
+      // A usage error measures nothing, so it must not claim the folder is outside a project.
+      expect(report.data).toBeNull();
+      expect(report.errors[0].code).toBe("USAGE");
+    },
+  );
+
+  it("uses the same invalid-timeout exit for text mode", async () => {
+    const { log, exit } = captureOutput();
+    await expect(
+      doctorCommand.parseAsync(["--ping-timeout", "0"], { from: "user" }),
+    ).rejects.toThrow("exit");
+    expect(exit).toHaveBeenCalledWith(2);
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it("reports native Windows as a blocking finding with Windows diagnostics in data.checks", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    if (!platform) throw new Error("Missing process.platform descriptor");
+    const { log, exit } = captureOutput();
+    try {
+      Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+      await expect(doctorCommand.parseAsync(["--json"], { from: "user" })).rejects.toThrow("exit");
+      expect(exit).toHaveBeenCalledWith(1);
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(checkWindowsRuntimeTools).toHaveBeenCalledOnce();
+      expect(checkWindowsDockerMode).toHaveBeenCalledOnce();
+      expect(checkWindowsHostConfiguration).toHaveBeenCalledOnce();
+
+      const rawStdout = String(log.mock.calls[0]?.[0]);
+      expect(rawStdout).not.toContain("Flisk Doctor");
+      expect(rawStdout).not.toContain("Checking environment...");
+      expect(rawStdout).not.toMatch(/[🔍✓✗○⚠]/u);
+
+      const report = parseEnvelope(rawStdout);
+      expect(report.data.ready).toBe(false);
+      expect(report.data.checks[0].name).toBe("Native Windows support");
+      expect(report.data.checks[0].message).toBe(NATIVE_WINDOWS_DOCTOR_MESSAGE);
+      expect(report.data.checks[0].fix).toContain("Open Ubuntu (WSL2)");
+      expect(report.data.checks.map((check: CheckResult) => check.name)).toEqual([
+        "Native Windows support",
+        "Windows Runtime Tools",
+        "Docker container mode",
+        "Windows ports and DNS",
+      ]);
+      expect(report.data.checks[2].message).toContain("Windows containers");
+      expect(report.data.checks[3].message).toContain("flisk.localhost");
+      expect(report.data.checks[3].message).toContain("core.autocrlf");
+      expect(report.data.host).toMatchObject({ kind: "native-windows", canUp: false });
+      expect(report.errors).toEqual([]);
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+  });
+
+  it("preserves passing, failing (with fix), and skipped check fields in createDoctorReport", () => {
+    const failingReport = createDoctorReport([PASSING_CHECK, FAILING_CHECK, SKIPPED_CHECK], true);
+    const parsedFailing = JSON.parse(JSON.stringify(failingReport));
+    expect(parsedFailing.data.ready).toBe(false);
+    expect(parsedFailing.data.checks).toEqual([
+      {
+        durationMs: 0,
+        name: "Container Runtime",
+        didPass: true,
+        message: "Docker daemon is running",
+      },
+      {
+        durationMs: 0,
+        name: "Tilt CLI",
+        didPass: false,
+        message: "Tilt CLI not found",
+        fix: "curl -fsSL https://raw.githubusercontent.com/tilt-dev/tilt/master/scripts/install.sh | bash",
+      },
+      {
+        durationMs: 0,
+        name: "Service Health",
+        didPass: true,
+        isSkipped: true,
+        message: "Skipped (--no-ping)",
+      },
+    ]);
+    expect(getDoctorExitCode(failingReport)).toBe(1);
+
+    const passingReport = createDoctorReport([PASSING_CHECK, SKIPPED_CHECK], true);
+    const parsedPassing = JSON.parse(JSON.stringify(passingReport));
+    expect(parsedPassing.data.ready).toBe(true);
+    expect(parsedPassing.data.checks).toEqual([PASSING_CHECK, SKIPPED_CHECK]);
+    expect(getDoctorExitCode(passingReport)).toBe(0);
+  });
+
+  it("includes commit in doctor report data when commit is provided", () => {
+    const report = createDoctorReport(
+      [PASSING_CHECK],
+      true,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "doctor-commit-12345",
+    );
+    expect(report.data.commit).toBe("doctor-commit-12345");
+    expect(report.data.commitSha).toBe("doctor-commit-12345");
+  });
+
+  it("includes buildCache in doctor report data when present in checks", () => {
+    const buildCacheCheck = {
+      name: "Docker Build Cache",
+      didPass: true,
+      message: "11.82GB across 780 entries",
+      buildCache: {
+        size: "11.82GB",
+        entries: 780,
+        reclaimable: "11.82GB",
+      },
+    };
+    const report = createDoctorReport([PASSING_CHECK, buildCacheCheck], true);
+    expect(report.data.buildCache).toEqual({
+      size: "11.82GB",
+      entries: 780,
+      reclaimable: "11.82GB",
+    });
+  });
+
+  it("emits a single JSON document on Linux without human banners and matches text mode exit code 1 on failure", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    if (!platform) throw new Error("Missing process.platform descriptor");
+    vi.mocked(getHostPortPlan).mockResolvedValue({
+      ingressHttp: 80,
+      ingressHttps: 443,
+      postgres: 5432,
+      requested: { ingressHttp: 80, ingressHttps: 443, postgres: 5432 },
+      explicit: { ingressHttp: false, ingressHttps: false, postgres: false },
+      reason: { ingressHttp: "preferred", ingressHttps: "preferred", postgres: "preferred" },
+    });
+    vi.mocked(collectDoctorChecks).mockResolvedValue({
+      checks: [PASSING_CHECK, FAILING_CHECK, SKIPPED_CHECK],
+      errors: [],
+    });
+
+    try {
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+
+      const jsonRun = captureOutput();
+      await expect(
+        doctorCommand.parseAsync(["--json", "--no-ping"], { from: "user" }),
+      ).rejects.toThrow("exit");
+      expect(jsonRun.exit).toHaveBeenCalledWith(1);
+      expect(jsonRun.log).toHaveBeenCalledTimes(1);
+
+      const rawStdout = String(jsonRun.log.mock.calls[0]?.[0]);
+      expect(rawStdout).not.toContain("Flisk Doctor");
+      expect(rawStdout).not.toContain("Checking environment...");
+      expect(rawStdout).not.toMatch(/[🔍✓✗○⚠]/u);
+
+      const parsed = JSON.parse(rawStdout);
+      const report = parseEnvelope(rawStdout);
+      expect(parsed).toEqual(report);
+      expect(report.data.ready).toBe(false);
+      // Failing checks are ordered before passing and skipped checks by orderDoctorResults
+      expect(report.data.checks).toEqual([FAILING_CHECK, PASSING_CHECK, SKIPPED_CHECK]);
+      expect(report.errors).toEqual([]);
+      expect(report.data.commit).toBeDefined();
+      expect(report.data.commitSha).toBeDefined();
+
+      jsonRun.log.mockRestore();
+      jsonRun.exit.mockRestore();
+      doctorCommand.setOptionValue("json", false);
+      doctorCommand.setOptionValue("ping", true);
+
+      const textRun = captureOutput();
+      await expect(doctorCommand.parseAsync(["--no-ping"], { from: "user" })).rejects.toThrow(
+        "exit",
+      );
+      expect(textRun.exit).toHaveBeenCalledWith(1);
+      const textLines = textRun.log.mock.calls.map((call: unknown[]) => String(call[0])).join("\n");
+      expect(textLines).toContain("Flisk Doctor");
+      expect(textLines).toContain("Checking environment...");
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+  });
+
+  it("exits 0 in both --json and text mode when all non-skipped checks pass", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    if (!platform) throw new Error("Missing process.platform descriptor");
+    vi.mocked(getHostPortPlan).mockResolvedValue({
+      ingressHttp: 80,
+      ingressHttps: 443,
+      postgres: 5432,
+      requested: { ingressHttp: 80, ingressHttps: 443, postgres: 5432 },
+      explicit: { ingressHttp: false, ingressHttps: false, postgres: false },
+      reason: { ingressHttp: "preferred", ingressHttps: "preferred", postgres: "preferred" },
+    });
+    vi.mocked(collectDoctorChecks).mockResolvedValue({
+      checks: [PASSING_CHECK, SKIPPED_CHECK],
+      errors: [],
+    });
+
+    try {
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+
+      const jsonRun = captureOutput();
+      await doctorCommand.parseAsync(["--json", "--no-ping"], { from: "user" });
+      expect(jsonRun.exit).not.toHaveBeenCalled();
+      expect(jsonRun.log).toHaveBeenCalledTimes(1);
+
+      const rawStdout = String(jsonRun.log.mock.calls[0]?.[0]);
+      expect(rawStdout).not.toContain("Flisk Doctor");
+      expect(rawStdout).not.toContain("Checking environment...");
+      const report = parseEnvelope(rawStdout);
+      expect(report.data.ready).toBe(true);
+      expect(report.data.checks).toEqual([PASSING_CHECK, SKIPPED_CHECK]);
+
+      jsonRun.log.mockRestore();
+      jsonRun.exit.mockRestore();
+      doctorCommand.setOptionValue("json", false);
+      doctorCommand.setOptionValue("ping", true);
+
+      const textRun = captureOutput();
+      await doctorCommand.parseAsync(["--no-ping"], { from: "user" });
+      expect(textRun.exit).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+  });
+
+  it("reports invalid --scope, --dry-run, and --yes in JSON envelope with USAGE code", async () => {
+    const cases = [
+      {
+        args: ["--json", "--scope", "cluster", "--fix"],
+        expectedError: '--scope must be project or machine, got "cluster"',
+      },
+      {
+        args: ["--json", "--scope", "machine"],
+        expectedError: "--scope only applies with --fix",
+      },
+      {
+        args: ["--json", "--dry-run"],
+        expectedError: "--dry-run only applies with --fix",
+      },
+      {
+        args: ["--json", "--yes"],
+        expectedError: "--yes only applies with --fix",
+      },
+    ];
+
+    for (const { args, expectedError } of cases) {
+      const { log, exit } = captureOutput();
+      try {
+        await expect(doctorCommand.parseAsync(args, { from: "user" })).rejects.toThrow("exit");
+        expect(exit).toHaveBeenCalledWith(2);
+        expect(log).toHaveBeenCalledTimes(1);
+        const report = parseEnvelope(String(log.mock.calls[0]?.[0]));
+        expect(report.schemaVersion).toBe(1);
+        expect(report.data).toBeNull();
+        expect(report.errors[0]).toEqual({ code: "USAGE", message: expectedError });
+      } finally {
+        log.mockRestore();
+        exit.mockRestore();
+        doctorCommand.setOptionValue("fix", false);
+        doctorCommand.setOptionValue("dryRun", false);
+        doctorCommand.setOptionValue("scope", "project");
+        doctorCommand.setOptionValue("yes", false);
+      }
+    }
+  });
+
+  it("rejects an unknown FLISK_SECRET_PROVIDER with a USAGE JSON report and exit 2", async () => {
+    const saved = process.env.FLISK_SECRET_PROVIDER;
+    const { log, exit } = captureOutput();
+    process.env.FLISK_SECRET_PROVIDER = "keychan";
+    try {
+      await expect(doctorCommand.parseAsync(["--json"], { from: "user" })).rejects.toThrow("exit");
+      expect(exit).toHaveBeenCalledWith(2);
+      const report = parseEnvelope(String(log.mock.calls[0]?.[0]));
+      expect(report.data).toBeNull();
+      expect(report.errors[0].code).toBe("USAGE");
+      expect(report.errors[0].message).toContain('"keychan"');
+      expect(report.errors[0].message).toContain("env-file, infisical");
+    } finally {
+      if (saved === undefined) delete process.env.FLISK_SECRET_PROVIDER;
+      else process.env.FLISK_SECRET_PROVIDER = saved;
+      log.mockRestore();
+      exit.mockRestore();
+    }
+  });
+
+  it("handles Commander unknown options with USAGE JSON report via exitOverride", async () => {
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const { log, exit } = captureOutput();
+    try {
+      await expect(
+        doctorCommand.parseAsync(["--json", "--bogus-flag-123"], { from: "user" }),
+      ).rejects.toThrow("exit");
+      expect(exit).toHaveBeenCalledWith(2);
+      expect(log).toHaveBeenCalledTimes(1);
+      const report = parseEnvelope(String(log.mock.calls[0]?.[0]));
+      expect(report.schemaVersion).toBe(1);
+      expect(report.data).toBeNull();
+      expect(report.errors[0].code).toBe("USAGE");
+      expect(report.errors[0].message).toContain("unknown option '--bogus-flag-123'");
+    } finally {
+      stderrSpy.mockRestore();
+      log.mockRestore();
+      exit.mockRestore();
+    }
+  });
+
+  it("reports WebContainer host as a blocking finding in JSON mode", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    if (!platform) throw new Error("Missing process.platform descriptor");
+    const versions = process.versions as Record<string, string | undefined>;
+    const prevWebContainer = versions.webcontainer;
+    const { log, exit } = captureOutput();
+    try {
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+      versions.webcontainer = "1";
+
+      await expect(doctorCommand.parseAsync(["--json"], { from: "user" })).rejects.toThrow("exit");
+      expect(exit).toHaveBeenCalledWith(1);
+      expect(log).toHaveBeenCalledTimes(1);
+
+      const rawStdout = String(log.mock.calls[0]?.[0]);
+      expect(rawStdout).not.toContain("Flisk Doctor");
+      expect(rawStdout).not.toMatch(/[🔍✓✗○⚠]/u);
+
+      const report = parseEnvelope(rawStdout);
+      expect(report.data.ready).toBe(false);
+      expect(report.data.host).toMatchObject({ kind: "webcontainer", canUp: false });
+      expect(report.data.checks[0].name).toBe("Host");
+      expect(report.data.checks[0].message).toBe(WEBCONTAINER_UP_MESSAGE);
+      expect(report.data.checks[0].fix).toContain(WEBCONTAINER_DOCS);
+    } finally {
+      if (prevWebContainer !== undefined) {
+        versions.webcontainer = prevWebContainer;
+      } else {
+        delete versions.webcontainer;
+      }
+      Object.defineProperty(process, "platform", platform);
+      log.mockRestore();
+      exit.mockRestore();
+    }
+  });
+
+  it("includes public env secrets warning in JSON output with ready=true and exits 0", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    if (!platform) throw new Error("Missing process.platform descriptor");
+    const secretKey = [
+      "sk",
+      "live",
+      "51M00000000000000000000000000000000000000000000000000000000",
+    ].join("_");
+    vi.mocked(getHostPortPlan).mockResolvedValue({
+      ingressHttp: 80,
+      ingressHttps: 443,
+      postgres: 5432,
+      requested: { ingressHttp: 80, ingressHttps: 443, postgres: 5432 },
+      explicit: { ingressHttp: false, ingressHttps: false, postgres: false },
+      reason: { ingressHttp: "preferred", ingressHttps: "preferred", postgres: "preferred" },
+    });
+    vi.mocked(collectDoctorChecks).mockResolvedValue({
+      checks: [
+        PASSING_CHECK,
+        {
+          name: "Public Environment Secrets",
+          didPass: true,
+          isWarning: true,
+          message:
+            "Potential secret-looking values detected in public environment variables: NEXT_PUBLIC_STRIPE (.env)",
+          fix: "Move secrets to server-side variables or API routes. Public variables (NEXT_PUBLIC_*, VITE_*) are embedded into client bundles.",
+        },
+      ],
+      errors: [],
+    });
+
+    try {
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+
+      const { log, exit } = captureOutput();
+      await doctorCommand.parseAsync(["--json", "--no-ping"], { from: "user" });
+      expect(exit).not.toHaveBeenCalled();
+
+      const rawStdout = String(log.mock.calls[0]?.[0]);
+      expect(rawStdout).not.toContain(secretKey);
+
+      const report = parseEnvelope(rawStdout);
+      expect(report.data.ready).toBe(true);
+      expect(report.data.checks).toHaveLength(2);
+      expect(report.data.checks[1]).toMatchObject({
+        name: "Public Environment Secrets",
+        didPass: true,
+        isWarning: true,
+      });
+      expect(report.data.checks[1].message).toContain("NEXT_PUBLIC_STRIPE (.env)");
+      expect(report.data.checks[1].message).not.toContain(secretKey);
+      expect(report.data.warnings).toContain(report.data.checks[1].message);
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+      doctorCommand.setOptionValue("json", false);
+      doctorCommand.setOptionValue("ping", true);
+    }
+  });
+
+  it("redacts secret values across check results, fixes, and error messages in JSON output", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    if (!platform) throw new Error("Missing process.platform descriptor");
+    const secretKey = "super-secret-production-token-9988";
+    vi.mocked(envSecretValues).mockReturnValue([secretKey]);
+    vi.mocked(getHostPortPlan).mockResolvedValue({
+      ingressHttp: 80,
+      ingressHttps: 443,
+      postgres: 5432,
+      requested: { ingressHttp: 80, ingressHttps: 443, postgres: 5432 },
+      explicit: { ingressHttp: false, ingressHttps: false, postgres: false },
+      reason: { ingressHttp: "preferred", ingressHttps: "preferred", postgres: "preferred" },
+    });
+    vi.mocked(collectDoctorChecks).mockResolvedValue({
+      checks: [
+        {
+          name: "API Connection",
+          didPass: false,
+          message: `Connection failed with token ${secretKey}`,
+          fix: `Verify key ${secretKey} in dashboard`,
+        },
+      ],
+      errors: [
+        {
+          code: "INTERNAL",
+          message: `Probe leaked secret: ${secretKey}`,
+        },
+      ],
+    });
+
+    try {
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+
+      const { log, exit } = captureOutput();
+      await expect(
+        doctorCommand.parseAsync(["--json", "--no-ping"], { from: "user" }),
+      ).rejects.toThrow("exit");
+      expect(exit).toHaveBeenCalledWith(2);
+
+      const rawStdout = String(log.mock.calls[0]?.[0]);
+      expect(rawStdout).not.toContain(secretKey);
+      expect(rawStdout).toContain("[REDACTED]");
+
+      const report = parseEnvelope(rawStdout);
+      expect(report.data.checks[0].message).toBe("Connection failed with token [REDACTED]");
+      expect(report.data.checks[0].fix).toBe("Verify key [REDACTED] in dashboard");
+      expect(report.errors[0].message).toBe("Probe leaked secret: [REDACTED]");
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+  });
+
+  it("masks check error messages in the text report", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    if (!platform) throw new Error("Missing process.platform descriptor");
+    const secretKey = "text-mode-secret-in-a-path-4455";
+    vi.mocked(projectSecretValues).mockReturnValue([secretKey]);
+    vi.mocked(getHostPortPlan).mockResolvedValue({
+      ingressHttp: 80,
+      ingressHttps: 443,
+      postgres: 5432,
+      requested: { ingressHttp: 80, ingressHttps: 443, postgres: 5432 },
+      explicit: { ingressHttp: false, ingressHttps: false, postgres: false },
+      reason: { ingressHttp: "preferred", ingressHttps: "preferred", postgres: "preferred" },
+    });
+    vi.mocked(collectDoctorChecks).mockResolvedValue({
+      checks: [PASSING_CHECK],
+      errors: [{ code: "INTERNAL", message: `ENOENT: no such file, scandir '/x/${secretKey}'` }],
+    });
+    try {
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      captureExit();
+      await doctorCommand.parseAsync(["--no-ping"], { from: "user" }).catch(() => {});
+      const printed = [...error.mock.calls, ...log.mock.calls].flat().map(String).join("\n");
+      expect(printed).toContain(
+        "Doctor check failed: ENOENT: no such file, scandir '/x/[REDACTED]'",
+      );
+      expect(printed).not.toContain(secretKey);
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+  });
+
+  it("withholds the text report and exits 1 when the env files cannot be read", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    if (!platform) throw new Error("Missing process.platform descriptor");
+    vi.mocked(projectSecretValues).mockReturnValue(null);
+    vi.mocked(getHostPortPlan).mockResolvedValue({
+      ingressHttp: 80,
+      ingressHttps: 443,
+      postgres: 5432,
+      requested: { ingressHttp: 80, ingressHttps: 443, postgres: 5432 },
+      explicit: { ingressHttp: false, ingressHttps: false, postgres: false },
+      reason: { ingressHttp: "preferred", ingressHttps: "preferred", postgres: "preferred" },
+    });
+    vi.mocked(collectDoctorChecks).mockResolvedValue({
+      checks: [{ ...FAILING_CHECK, message: "opaque-unmaskable-value-6677" }],
+      errors: [{ code: "INTERNAL", message: "opaque-unmaskable-value-6677" }],
+    });
+    try {
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { exit } = captureExit();
+      await expect(doctorCommand.parseAsync(["--no-ping"], { from: "user" })).rejects.toThrow(
+        "exit",
+      );
+      expect(exit).toHaveBeenCalledWith(1);
+      const printed = [...error.mock.calls, ...log.mock.calls].flat().map(String).join("\n");
+      expect(printed).toContain(OUTPUT_WITHHELD);
+      expect(printed).not.toContain("opaque-unmaskable-value-6677");
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+  });
+
+  it("reports EnvUnreadableError in JSON envelope with code ENV_UNREADABLE and exits 1", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    if (!platform) throw new Error("Missing process.platform descriptor");
+    vi.mocked(envSecretValues).mockImplementation(() => {
+      throw new EnvUnreadableError(".env", "unreadable permissions (EACCES)");
+    });
+    vi.mocked(getHostPortPlan).mockResolvedValue({
+      ingressHttp: 80,
+      ingressHttps: 443,
+      postgres: 5432,
+      requested: { ingressHttp: 80, ingressHttps: 443, postgres: 5432 },
+      explicit: { ingressHttp: false, ingressHttps: false, postgres: false },
+      reason: { ingressHttp: "preferred", ingressHttps: "preferred", postgres: "preferred" },
+    });
+    vi.mocked(collectDoctorChecks).mockResolvedValue({
+      checks: [PASSING_CHECK],
+      errors: [],
+    });
+
+    try {
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+
+      const { log, exit } = captureOutput();
+      await expect(
+        doctorCommand.parseAsync(["--json", "--no-ping"], { from: "user" }),
+      ).rejects.toThrow("exit");
+      expect(exit).toHaveBeenCalledWith(1);
+
+      const rawStdout = String(log.mock.calls[0]?.[0]);
+      const report = parseEnvelope(rawStdout);
+      expect(report.data.ready).toBe(false);
+      expect(report.data.checks).toEqual([]);
+      expect(report.errors).toHaveLength(1);
+      expect(report.errors[0].code).toBe("ENV_UNREADABLE");
+      expect(report.errors[0].message).toContain("unreadable permissions");
+    } finally {
+      vi.mocked(envSecretValues).mockReturnValue([]);
+      Object.defineProperty(process, "platform", platform);
+    }
+  });
+
+  it("includes planned doctor fix actions in JSON report and fails ready state when an action fails", () => {
+    const passingAction: DoctorAction = {
+      id: "prune-networks",
+      check: "Docker networks",
+      scope: "project",
+      command: "docker network prune -f",
+      status: "applied",
+      reason: "pruned 2 networks",
+    };
+    const failedAction: DoctorAction = {
+      id: "stop-tilt",
+      check: "Tilt instances",
+      scope: "project",
+      command: "kill -9 9999",
+      status: "failed",
+      reason: "process not found",
+    };
+
+    const reportWithPassingAction = createDoctorReport([PASSING_CHECK], true);
+    reportWithPassingAction.data.actions = [passingAction];
+    expect(hasFailedActions(reportWithPassingAction.data.actions)).toBe(false);
+    expect(reportWithPassingAction.data.ready).toBe(true);
+    expect(getDoctorExitCode(reportWithPassingAction)).toBe(0);
+
+    // A failed fix action is what flips `ready` in the command; this test pins the helper
+    // that decides it and the exit code a non-ready report maps to.
+    const reportWithFailedAction = createDoctorReport([PASSING_CHECK], true);
+    reportWithFailedAction.data.actions = [failedAction];
+    expect(hasFailedActions(reportWithFailedAction.data.actions)).toBe(true);
+    expect(
+      getDoctorExitCode({
+        ...reportWithFailedAction,
+        data: { ...reportWithFailedAction.data, ready: false },
+      }),
+    ).toBe(1);
+  });
+
+  it("emits complete JSON output schema with port breakdown and mocked probe results", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    if (!platform) throw new Error("Missing process.platform descriptor");
+    vi.mocked(getHostPortPlan).mockResolvedValue({
+      ingressHttp: 8080,
+      ingressHttps: 8443,
+      postgres: 5433,
+      requested: { ingressHttp: 80, ingressHttps: 443, postgres: 5432 },
+      explicit: { ingressHttp: true, ingressHttps: true, postgres: true },
+      reason: {
+        ingressHttp: "env override",
+        ingressHttps: "env override",
+        postgres: "env override",
+      },
+    });
+
+    const runtimeCheck: CheckResult = {
+      durationMs: 0,
+      name: "Container Runtime",
+      didPass: true,
+      message: "Docker daemon is running",
+    };
+    const probeFailingCheck: CheckResult = {
+      durationMs: 0,
+      name: "Service Health",
+      didPass: false,
+      message: "http://api.flisk.localhost:8080/health returned 503 Service Unavailable",
+      fix: "flisk logs to inspect container health",
+    };
+    const probePassingCheck: CheckResult = {
+      durationMs: 0,
+      name: "Advertised Endpoints",
+      didPass: true,
+      message: "All 2 advertised routes responded with expected HTTP status",
+    };
+
+    vi.mocked(collectDoctorChecks).mockResolvedValue({
+      checks: [runtimeCheck, probeFailingCheck, probePassingCheck],
+      errors: [],
+    });
+
+    try {
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+
+      const { log, exit } = captureOutput();
+      await expect(doctorCommand.parseAsync(["--json"], { from: "user" })).rejects.toThrow("exit");
+      expect(exit).toHaveBeenCalledWith(1);
+
+      const rawStdout = String(log.mock.calls[0]?.[0]);
+      const report = parseEnvelope(rawStdout);
+
+      expect(report.schemaVersion).toBe(1);
+      expect(report.data.ready).toBe(false);
+      expect(report.data.ports).toEqual({
+        http: { requested: 80, chosen: 8080, explicit: true, reason: "env override" },
+        https: { requested: 443, chosen: 8443, explicit: true, reason: "env override" },
+        postgres: { requested: 5432, chosen: 5433, explicit: true, reason: "env override" },
+      });
+      expect(report.data.host).toMatchObject({
+        canUp: true,
+        containerRuntimeReachable: true,
+      });
+
+      // Failing checks ordered first by orderDoctorResults
+      expect(report.data.checks).toEqual([probeFailingCheck, runtimeCheck, probePassingCheck]);
+      expect(report.errors).toEqual([]);
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+  });
+
+  it("includes observed port owner in doctor --json report and check result", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    if (!platform) throw new Error("Missing process.platform descriptor");
+    try {
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+      const portCheckWithObserved: CheckResult = {
+        name: "Host Ports",
+        didPass: false,
+        message:
+          "Port 8080 is already in use.\n\nOwner: Docker container shop-api\nImage: example/shop-api:latest\nPort: 8080",
+        fix: "Change FLISK_HTTP_PORT to an available port, or manually stop the conflicting container.",
+        observed: {
+          ownerType: "docker",
+          container: "shop-api",
+          image: "example/shop-api:latest",
+          port: 8080,
+          setting: "FLISK_HTTP_PORT",
+        },
+      };
+
+      vi.mocked(collectDoctorChecks).mockResolvedValue({
+        checks: [portCheckWithObserved],
+        errors: [],
+      });
+
+      const { log, exit } = captureOutput();
+      await expect(doctorCommand.parseAsync(["--json"], { from: "user" })).rejects.toThrow("exit");
+      expect(exit).toHaveBeenCalledWith(1);
+
+      const rawStdout = String(log.mock.calls[0]?.[0]);
+      const report = parseEnvelope(rawStdout);
+
+      expect(report.data.ready).toBe(false);
+      expect(report.data.observed).toMatchObject({
+        ownerType: "docker",
+        container: "shop-api",
+        image: "example/shop-api:latest",
+        port: 8080,
+        setting: "FLISK_HTTP_PORT",
+      });
+      expect(report.data.checks[0].observed).toMatchObject({
+        ownerType: "docker",
+        container: "shop-api",
+        port: 8080,
+      });
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+  });
+
+  describe("--problems-only filtering", () => {
+    const mockChecks: CheckResult[] = [
+      { name: "P1", didPass: true, message: "P1 passed" },
+      { name: "P2", didPass: true, message: "P2 passed" },
+      { name: "P3", didPass: true, message: "P3 passed" },
+      { name: "S1", didPass: true, isSkipped: true, message: "S1 skipped" },
+      { name: "F1", didPass: false, message: "F1 failed", fix: "Fix F1" },
+      { name: "F2", didPass: false, message: "F2 failed", fix: "Fix F2" },
+    ];
+
+    it.each([
+      {
+        flags: ["--json", "--problems-only"],
+        checks: mockChecks,
+        expectedExit: 1,
+        expectedReady: false,
+        expectedCheckNames: ["F1", "F2"],
+        expectedSummary: { passed: 3, skipped: 1, failed: 2 },
+      },
+      {
+        flags: ["--json"],
+        checks: mockChecks,
+        expectedExit: 1,
+        expectedReady: false,
+        expectedCheckCount: 6,
+        expectedSummary: undefined,
+      },
+      {
+        flags: ["--json", "--problems-only"],
+        checks: mockChecks.slice(0, 4),
+        expectedExit: 0,
+        expectedReady: true,
+        expectedCheckNames: [],
+        expectedSummary: { passed: 3, skipped: 1, failed: 0 },
+      },
+    ])(
+      "evaluates $flags with $checks.length checks",
+      async ({
+        flags,
+        checks,
+        expectedExit,
+        expectedReady,
+        expectedCheckNames,
+        expectedCheckCount,
+        expectedSummary,
+      }) => {
+        const platform = Object.getOwnPropertyDescriptor(process, "platform");
+        if (!platform) throw new Error("Missing process.platform descriptor");
+        try {
+          Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+          vi.mocked(collectDoctorChecks).mockResolvedValue({ checks, errors: [] });
+
+          const { log, exit } = captureOutput();
+          if (expectedExit !== 0) {
+            await expect(doctorCommand.parseAsync(flags, { from: "user" })).rejects.toThrow("exit");
+            expect(exit).toHaveBeenCalledWith(expectedExit);
+          } else {
+            await doctorCommand.parseAsync(flags, { from: "user" });
+          }
+
+          const rawStdout = String(log.mock.calls[0]?.[0]);
+          const report = parseEnvelope(rawStdout);
+
+          expect(report.data.ready).toBe(expectedReady);
+          if (expectedCheckNames !== undefined) {
+            expect(report.data.checks.map((c: CheckResult) => c.name)).toEqual(expectedCheckNames);
+          }
+          if (expectedCheckCount !== undefined) {
+            expect(report.data.checks).toHaveLength(expectedCheckCount);
+          }
+          expect(report.data.summary).toEqual(expectedSummary);
+        } finally {
+          Object.defineProperty(process, "platform", platform);
+        }
+      },
+    );
+  });
+});
+
+describe("doctor --agents opt-in check", () => {
+  const linuxPortPlan = {
+    ingressHttp: 80,
+    ingressHttps: 443,
+    postgres: 5432,
+    requested: { ingressHttp: 80, ingressHttps: 443, postgres: 5432 },
+    explicit: { ingressHttp: false, ingressHttps: false, postgres: false },
+    reason: { ingressHttp: "preferred", ingressHttps: "preferred", postgres: "preferred" },
+  };
+
+  it("adds the coding-agents check only when --agents is passed", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    if (!platform) throw new Error("Missing process.platform descriptor");
+    vi.mocked(getHostPortPlan).mockResolvedValue(linuxPortPlan);
+    vi.mocked(collectDoctorChecks).mockResolvedValue({ checks: [], errors: [] });
+    vi.mocked(checkCodingAgents).mockReturnValue({
+      name: "Coding agents",
+      didPass: true,
+      isWarning: true,
+      message: "2 coding agents appear to work in this checkout",
+      fix: "Run each agent in its own git worktree",
+    });
+
+    try {
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+
+      const first = captureOutput();
+      await doctorCommand.parseAsync(["--json", "--no-ping"], { from: "user" });
+      const machineChecksWithout = vi.mocked(collectDoctorChecks).mock.calls.at(-1)?.[0] ?? [];
+      expect(checkCodingAgents).not.toHaveBeenCalled();
+      first.log.mockRestore();
+      first.exit.mockRestore();
+
+      const second = captureOutput();
+      await doctorCommand.parseAsync(["--json", "--no-ping", "--agents"], { from: "user" });
+      const machineChecksWith = vi.mocked(collectDoctorChecks).mock.calls.at(-1)?.[0] ?? [];
+
+      expect(machineChecksWith.length).toBe(machineChecksWithout.length + 1);
+
+      // The appended check is the agents check: invoking it runs the mocked util.
+      const appended = machineChecksWith[machineChecksWith.length - 1];
+      const result = await appended?.();
+      expect(result).toMatchObject({ name: "Coding agents", isWarning: true });
+      expect(checkCodingAgents).toHaveBeenCalledTimes(1);
+      expect(checkCodingAgents).toHaveBeenCalledWith(
+        expect.objectContaining({ strict: undefined, startDir: expect.any(String) }),
+      );
+      second.log.mockRestore();
+      second.exit.mockRestore();
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+  });
+
+  it("reports the coding-agents check in the --json output when --agents is passed", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    if (!platform) throw new Error("Missing process.platform descriptor");
+    vi.mocked(getHostPortPlan).mockResolvedValue(linuxPortPlan);
+    vi.mocked(collectDoctorChecks).mockImplementationOnce(async (machineChecks) => {
+      const agentsCheck = machineChecks[machineChecks.length - 1];
+      const result = agentsCheck ? await agentsCheck() : null;
+      return { checks: result ? [result] : [], errors: [] };
+    });
+
+    try {
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+
+      const { log, exit } = captureOutput();
+      await doctorCommand.parseAsync(["--json", "--agents", "--no-ping"], { from: "user" });
+      expect(exit).not.toHaveBeenCalled();
+
+      const report = parseEnvelope(String(log.mock.calls[0]?.[0]));
+      const entry = report.data.checks.find((check: CheckResult) => check.name === "Coding agents");
+      expect(entry).toMatchObject({ didPass: true, isWarning: true });
+      expect(report.data.warnings).toContain(entry.message);
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
+  });
+});

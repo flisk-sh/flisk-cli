@@ -1,0 +1,265 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import {
+  BASE_TEMPLATE,
+  createPackageJson,
+  createResourceProject,
+  createResourceTestTsconfig,
+  createResourceTsconfig,
+  describe,
+  execSync,
+  expect,
+  it,
+  join,
+  mkdirSync,
+  mkdtempSync,
+  PRISMA_CONFIG_TEMPLATE,
+  PRISMA_SCHEMA_TEMPLATE,
+  ROOT_TSCONFIG_BASE,
+  readFileSync,
+  rmSync,
+  runResourceCli,
+  spawnSync,
+  TSCONFIG_TEMPLATE,
+  TYPE_SPECIFIC,
+  tmpdir,
+  writeFileSync,
+} from "./test-support.js";
+
+describe("package.json template", () => {
+  it("scopes a scaffolded package to the project name instead of a literal @project (#5480)", () => {
+    const packageJson = createPackageJson(
+      "api",
+      "backend",
+      undefined,
+      false,
+      undefined,
+      false,
+      "p2",
+    );
+    expect(packageJson.name).toBe("@p2/api");
+  });
+
+  it("leaves a package unscoped when no project name is available (#5480)", () => {
+    expect(createPackageJson("api", "backend").name).toBe("api");
+  });
+
+  it("leaves a package unscoped when the project name normalizes to nothing (#5480)", () => {
+    const name = createPackageJson(
+      "api",
+      "backend",
+      undefined,
+      false,
+      undefined,
+      false,
+      "!!!",
+    ).name;
+    expect(name).toBe("api");
+  });
+
+  it("uses the configured project name for a scaffolded service package (#5480)", () => {
+    const projectRoot = createResourceProject();
+    try {
+      writeFileSync(
+        join(projectRoot, ".flisk", "project.json"),
+        `${JSON.stringify({ project: { name: "shop" } }, null, 2)}\n`,
+      );
+      const result = runResourceCli(projectRoot, [
+        "api",
+        "--type",
+        "backend",
+        "--local",
+        "--stack",
+        "app",
+        "--yes",
+      ]);
+      expect(result.status, result.stderr).toBe(0);
+      const packageJson = JSON.parse(
+        readFileSync(join(projectRoot, "services", "app", "api", "package.json"), "utf8"),
+      );
+      expect(packageJson.name).toBe("@shop/api");
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("pins Prisma 7 packages when Prisma is enabled", () => {
+    const service = createPackageJson("orders-api", "backend", undefined, true);
+    expect(service.dependencies).toMatchObject({
+      prisma: "^7.5.0",
+      "@prisma/client": "^7.5.0",
+      "@prisma/adapter-pg": "^7.5.0",
+      pg: "^8.13.0",
+    });
+    // Code that imports 'pg' next to the adapter fails the image's `tsc` (TS7016) without its types.
+    expect(service.devDependencies).toHaveProperty("@types/pg");
+    expect(service.scripts.start).toBe("bun run dist/index.js");
+  });
+
+  it("uses the Prisma 7 client generator and generated config shape", () => {
+    expect(PRISMA_SCHEMA_TEMPLATE).toContain('provider = "prisma-client"');
+    expect(PRISMA_SCHEMA_TEMPLATE).toContain('output   = "../generated/prisma"');
+    expect(PRISMA_SCHEMA_TEMPLATE).not.toContain("url");
+    expect(PRISMA_CONFIG_TEMPLATE).toContain("process.env.DATABASE_URL");
+  });
+  it("should create backend package.json with Hono using createPackageJson", () => {
+    const name = "test-backend";
+    const type = "backend";
+
+    const packageJson = createPackageJson(name, type, undefined, false, undefined, false, "p2");
+
+    expect(packageJson.name).toBe(`@p2/${name}`);
+    expect(packageJson).toHaveProperty("dependencies");
+    expect(packageJson.dependencies).toHaveProperty("hono");
+    expect(packageJson.dependencies).not.toHaveProperty("vite");
+    expect(packageJson.scripts.dev).toBe("bun run --watch src/index.ts");
+  });
+
+  it("scaffolds a package.json script for every resource type's dev command (#3740)", () => {
+    // #3740: a worker's service.json ran `bun run worker`, but the worker
+    // package.json template has no "worker" script, so a fresh worker
+    // could not start. The dev command of every scaffolded resource type
+    // must name a script its generated package.json actually has.
+    for (const type of ["backend", "frontend", "worker", "mcp", "agent"] as const) {
+      const devCommand = TYPE_SPECIFIC[type].dev?.command ?? BASE_TEMPLATE.dev.command;
+      const match = /^bun run (\S+)$/.exec(devCommand);
+      expect(match, `${type}: service.json dev.command "${devCommand}"`).not.toBeNull();
+      if (!match) throw new Error(`${type}: invalid dev.command "${devCommand}"`);
+      const scripts = createPackageJson("test-resource", type).scripts as Record<string, string>;
+      expect(scripts, `${type}: generated package.json scripts`).toHaveProperty(match[1]);
+    }
+  });
+
+  it("guards the frontend dev/build scripts with a clear message when the generated Vite config is missing", () => {
+    const scripts = createPackageJson("test-frontend", "frontend").scripts as Record<
+      string,
+      string
+    >;
+    expect(scripts.prebuild).toContain("vite.config.build.autogenerated.ts");
+    expect(scripts.predev).toContain("vite.config.frontend.autogenerated.ts");
+    // Backends and workers have no generated Vite config, so no guard.
+    expect(createPackageJson("api", "backend").scripts).not.toHaveProperty("prebuild");
+
+    const hasBun = spawnSync("bun", ["--version"], { encoding: "utf-8" }).status === 0;
+    if (!hasBun) return;
+
+    const dir = mkdtempSync(join(tmpdir(), "flisk-frontend-guard-"));
+    try {
+      let stderr = "";
+      try {
+        execSync(scripts.prebuild as string, { cwd: dir, stdio: "pipe" });
+        throw new Error("prebuild should have failed");
+      } catch (error) {
+        stderr = String((error as { stderr?: Buffer }).stderr ?? error);
+      }
+      expect(stderr).toContain("flisk up");
+      expect(stderr).toContain(".autogenerated/vite.config.build.autogenerated.ts");
+
+      mkdirSync(join(dir, ".autogenerated"));
+      writeFileSync(join(dir, ".autogenerated/vite.config.build.autogenerated.ts"), "");
+      execSync(scripts.prebuild as string, { cwd: dir, stdio: "pipe" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("should create frontend package.json with Vite using createPackageJson", () => {
+    const name = "test-frontend";
+    const type = "frontend";
+
+    const packageJson = createPackageJson(name, type, undefined, false, undefined, false, "p2");
+
+    expect(packageJson.name).toBe(`@p2/${name}`);
+    expect(packageJson.dependencies).not.toHaveProperty("hono");
+    expect(packageJson.devDependencies).toHaveProperty("vite");
+    expect(packageJson.devDependencies).toHaveProperty("@vitejs/plugin-react");
+    expect(packageJson.dependencies).toHaveProperty("react");
+    expect(packageJson.dependencies).toHaveProperty("react-dom");
+    expect(packageJson.scripts.dev).toBe(
+      "vite --config .autogenerated/vite.config.frontend.autogenerated.ts",
+    );
+  });
+
+  it("keeps frontend framework dependencies out of backend packages", () => {
+    const packageJson = createPackageJson("test-backend", "backend");
+
+    expect(packageJson.dependencies).not.toHaveProperty("react");
+    expect(packageJson.devDependencies).not.toHaveProperty("@vitejs/plugin-react");
+  });
+
+  it("should create worker package.json using createPackageJson", () => {
+    const name = "test-worker";
+    const type = "worker";
+
+    const packageJson = createPackageJson(name, type, undefined, false, undefined, false, "p2");
+
+    expect(packageJson.name).toBe(`@p2/${name}`);
+    expect(packageJson.dependencies).toHaveProperty("hono");
+    expect(packageJson.scripts.build).toBe("tsc");
+  });
+});
+
+describe("tsconfig template", () => {
+  it("keeps the strict options in one root base instead of copying them into every service", () => {
+    expect(ROOT_TSCONFIG_BASE.compilerOptions).toMatchObject({
+      target: "ES2022",
+      module: "ESNext",
+      moduleResolution: "bundler",
+      strict: true,
+      esModuleInterop: true,
+      skipLibCheck: true,
+      forceConsistentCasingInFileNames: true,
+    });
+    expect(TSCONFIG_TEMPLATE.compilerOptions).not.toHaveProperty("target");
+    expect(TSCONFIG_TEMPLATE.compilerOptions).not.toHaveProperty("strict");
+    expect(TSCONFIG_TEMPLATE.include).toContain("src/**/*");
+  });
+
+  it("extends the base from each compiled scaffold at its own relative path", () => {
+    for (const type of ["backend", "worker", "mcp", "agent", "bring-your-own"] as const) {
+      const config = createResourceTsconfig(type, undefined, "../../tsconfig.base.json");
+      expect(config.extends).toBe("../../tsconfig.base.json");
+      expect(config.compilerOptions).toHaveProperty("outDir", "./dist");
+      expect(config.compilerOptions).toHaveProperty("rootDir", "./src");
+      expect(config.include).toContain("src/**/*");
+    }
+  });
+
+  it("type-checks a Vite app without emitting JavaScript, declarations or maps", () => {
+    const frontend = createResourceTsconfig("frontend");
+    expect(frontend.compilerOptions.noEmit).toBe(true);
+    expect(frontend.compilerOptions).not.toHaveProperty("outDir");
+    expect(frontend.compilerOptions).not.toHaveProperty("declaration");
+    expect(frontend.compilerOptions).not.toHaveProperty("declarationMap");
+    expect(frontend.include).toContain(".autogenerated/**/*.ts");
+    expect(createResourceTsconfig("backend").compilerOptions).not.toHaveProperty("noEmit");
+  });
+
+  it("adds JSX settings through the React provider while keeping the base framework-neutral", () => {
+    expect(ROOT_TSCONFIG_BASE.compilerOptions).not.toHaveProperty("jsx");
+    expect(createResourceTsconfig("frontend").compilerOptions).toHaveProperty("jsx", "react-jsx");
+    expect(createResourceTsconfig("backend").compilerOptions).not.toHaveProperty("jsx");
+  });
+
+  it("lists node types for non-frontend resources (TS7 does not auto-include @types)", () => {
+    for (const type of ["backend", "worker", "mcp", "agent"] as const) {
+      expect(createResourceTsconfig(type).compilerOptions.types).toEqual(["node"]);
+    }
+    expect(createResourceTsconfig("frontend").compilerOptions).not.toHaveProperty("types");
+  });
+
+  it("adds a no-emit test config covering scaffolded tests and generated Vite config", () => {
+    const config = createResourceTestTsconfig();
+    expect(config.extends).toBe("./tsconfig.json");
+    expect(config.compilerOptions).toMatchObject({
+      noEmit: true,
+      rootDir: ".",
+      declaration: false,
+      declarationMap: false,
+      sourceMap: false,
+    });
+    expect(config.include).toContain("tests/**/*");
+    expect(config.include).toContain(".autogenerated/**/*.ts");
+    expect(createResourceTestTsconfig(true).include).toContain("next-env.d.ts");
+  });
+});

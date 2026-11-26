@@ -1,0 +1,9 @@
+{
+  "appName": "shop-web",
+  "appType": "frontend",
+  "stack": "shop",
+  "port": 3100,
+  "backendName": "orders-api",
+  "basePath": "/shop",
+  "schemaVersion": 1
+}

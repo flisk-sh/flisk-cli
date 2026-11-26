@@ -1,0 +1,430 @@
+# `service.json` reference
+
+Each Flisk resource is described by a `service.json` file in the resource directory. The file drives resource discovery, generated Tilt and Docker configuration, routing, dependency ordering, and editor assistance.
+
+The [service schema](../runtime/engine/schemas/service-schema.json) is the source of truth for JSON types and editor validation. The CLI is authoritative at runtime: `flisk config verify` applies the manifest and generated-output checks described below, while `flisk doctor` performs environment, readiness, and discovery-time safety checks. The published schema URL is:
+
+```text
+https://flisk.sh/schema.service.json
+```
+
+## Minimal examples
+
+The smallest service is a local process: its name, its type and the command that starts it. `flisk up` runs it without Docker or Tilt, and generates no files for it. See [Run your app without Docker](run-without-docker.md).
+
+```json
+{
+  "$schema": "https://flisk.sh/schema.service.json",
+  "schemaVersion": 1,
+  "appName": "api",
+  "appType": "backend",
+  "command": "node server.js",
+  "port": 4000,
+  "healthCheckPath": "/health"
+}
+```
+
+The examples below run in containers that Flisk builds and routes.
+
+A backend resource needs a backend port. The usual backend range is `4000`–`4999`.
+
+```json
+{
+  "$schema": "https://flisk.sh/schema.service.json",
+  "schemaVersion": 1,
+  "appName": "orders-backend",
+  "appType": "backend",
+  "stack": "shop",
+  "port": 4000,
+  "healthCheckPath": "/health",
+  "dependsOn": []
+}
+```
+
+A frontend normally uses a port in the `3000`–`3999` range. `framework` is optional; omitting it keeps the default React provider.
+
+```json
+{
+  "$schema": "https://flisk.sh/schema.service.json",
+  "schemaVersion": 1,
+  "appName": "orders-app",
+  "appType": "frontend",
+  "stack": "shop",
+  "port": 3000,
+  "backendName": "orders-backend",
+  "basePath": "/shop"
+}
+```
+
+A worker is a background process that reads from NATS. The service schema requires `featuresEnabled` to contain `"nats"` for a worker. Change `appName`, `stack`, `queueGroup`, and `subjects` to match your own service. The `nats` block is optional and sets the queue group and the subjects the worker subscribes to; see the `nats` field under [Configuration, secrets, and integrations](#configuration-secrets-and-integrations) and the [resource features guide](resource-features.md).
+
+```json
+{
+  "$schema": "https://flisk.sh/schema.service.json",
+  "schemaVersion": 1,
+  "appName": "email-worker",
+  "appType": "worker",
+  "stack": "shop",
+  "port": 6000,
+  "featuresEnabled": ["nats"],
+  "nats": {
+    "queueGroup": "email-workers",
+    "subjects": ["email.send"]
+  },
+  "dependsOn": []
+}
+```
+
+A worker has no HTTP server, so it needs no `healthCheckPath` or `traefik` block: Flisk gives it no proxy route and no HTTP health check. `port` is optional for a worker; if you set it, use the `6000`–`6999` range.
+
+An MCP (Model Context Protocol) server is an API resource like a backend: it uses the `4000`–`5999` HTTP-service range (wider than a backend's `4000`–`4999`, shared with `bring-your-own` and `agent` resources), runs behind the Traefik API host, and speaks Streamable HTTP — clients POST JSON-RPC messages to its `/mcp` route on the public proxy URL. The generated scaffold also serves a plain `GET /health` endpoint, so the default health check needs no override. An MCP resource has no `framework` or `language` setting; `flisk resource <name> --type mcp` generates one fixed scaffold (a `@modelcontextprotocol/sdk` server).
+
+```json
+{
+  "$schema": "https://flisk.sh/schema.service.json",
+  "schemaVersion": 1,
+  "appName": "tools-mcp-server",
+  "appType": "mcp",
+  "stack": "ai",
+  "port": 4002,
+  "healthCheckPath": "/health",
+  "featuresEnabled": [],
+  "dependsOn": ["knowledge-db"]
+}
+```
+
+`featuresEnabled` is optional; leave it empty or omit it unless the server opts into a platform feature. `dependsOn` follows the same rule as any other resource — it lists resources that must start first (here a database the tools read from). See the [AI Agents in Flisk guide](agents/ai-agents.md) for the MCP hosting model.
+
+Run `flisk resource <name> --type backend`, `flisk resource <name> --type frontend`, `flisk resource <name> --type worker`, or `flisk resource <name> --type mcp` to generate a starting manifest. Existing examples are in [`examples/flisk-example`](../examples/flisk-example).
+
+## Required identity and compatibility fields
+
+| Field | Type and default | Applies to | Description |
+| --- | --- | --- | --- |
+| `$schema` | string; optional | all | Editor metadata. Point it at the published schema URL for completion and inline validation. |
+| `schemaVersion` | integer; **required**, currently `1` | all | Version of the Flisk manifest contract. An unsupported version is rejected; Flisk does not guess how to migrate it. |
+| `appName` | string; **required** | all | Resource identifier. Use lowercase letters, numbers, and hyphens; it should match the resource directory name. |
+| `appType` | enum; required when `type` is absent | all | Resource kind: `backend`, `frontend`, `library`, `sdk`, `worker`, `migrator`, `mcp`, `agent`, `database`, or `bring-your-own`. Provide either `appType` or the legacy `type` field. |
+| `type` | enum; legacy alias for `appType` | existing manifests | Older manifests may use `type`; provide it when `appType` is absent. Use `appType` in new files. During config migration, Flisk copies the legacy value to `appType`. |
+| `stack` | string; **required** | all | Groups related resources and influences database names, routes, and generated dependency configuration. |
+
+A service that declares `command` needs `schemaVersion`, `appName` and `appType`; `stack` is optional for it, and the legacy `type` is not accepted in its place.
+
+## Local process fields
+
+| Field | Type and default | Applies to | Description |
+| --- | --- | --- | --- |
+| `command` | shell command; optional | local processes | Runs the service as a local process instead of a container: `flisk up` starts it from the service directory with `PORT` set to `port`, waits for it, restarts it when it exits, and stops it on `flisk down`. Cannot be combined with `image` or `dockerfile`. Every service that `flisk up` starts declares it, or is a ready-made `image` that a mixed run starts with `docker run` (a database, a cache; see [run-without-docker.md](run-without-docker.md#a-database-or-cache-in-docker-mixed-run)), or none declares it. Not the same as `dev.command`, the dev command inside a generated container. |
+| `toolchain` | `<tool>@<version>`; optional | local processes | The runtime the command needs: `node@24`, `bun@1.3`, `python@3.12`, `go@1.23`, `deno@2` or `ruby@3.3`. `flisk doctor` and `flisk up` compare it with the program on `PATH` (every part given must match, so `node@24` accepts 24.1.0) and refuse to start on a mismatch, naming the service and both versions. Without it, a `.nvmrc`, `.node-version` or `.python-version` in the service folder is a hint: a mismatch only warns. Flisk installs nothing. |
+| `env` | string map; optional | services | Environment variables for the command or service. Values may use `${VAR}` or `${VAR:-default}` from the project `.env`, the shell, or built-in checkout variables (`FLISK_CHECKOUT_ID`, `FLISK_CHECKOUT_NAME`), or `${<migrator>:<KEY>}` (or `${<migrator>:<KEY>:-default}`) from an authorized migrator declared in `dependsOn` (#2864). |
+
+### Per-checkout variables (`FLISK_CHECKOUT_ID` and `FLISK_CHECKOUT_NAME`)
+
+Every service started by Flisk across local processes, Docker, and Tilt receives two checkout-scoped environment variables:
+
+- `FLISK_CHECKOUT_ID`: an 8-character lowercase hex identifier stable for the checkout, stored alongside its canonical absolute path in the gitignored `.flisk/.project-id` file. If a checkout folder is copied or moved to a different path, Flisk detects the path mismatch and generates a new id so two copies never share one.
+- `FLISK_CHECKOUT_NAME`: the checkout folder name, lowercased and sanitized to `[a-z0-9-]` characters only.
+
+For a linked git worktree (where `.git` is a file starting with `gitdir:`), `FLISK_CHECKOUT_NAME` also names the stack's Traefik host: URLs and generated routes use `app.<checkout-name>.flisk-project.localhost` and `api.<checkout-name>.flisk-project.localhost`, so two checkouts of the same project route side by side. If another running stack already uses that checkout name, `flisk up` appends the first four characters of `FLISK_CHECKOUT_ID` and records the suffix in the gitignored `.flisk/.project-id` file, so later commands print the same host. A main checkout keeps the project's original `<project>.localhost` domain unless `FLISK_CHECKOUT_HOST=always` is set, which opts it into the same checkout naming. `FLISK_SERVICE_BASE_URL` and `FLISK_PUBLIC_HOST` still take precedence for printed URLs, in that order; they do not rewrite generated Traefik routes.
+
+`FLISK_CHECKOUT_DOMAIN` is exported to Tilt and other child processes with the resolved checkout domain, or an empty string when the checkout keeps the project's original host. `FLISK_CHECKOUT_HOST_SUFFIX` pins the suffix appended to the checkout name; set it to a short `-<hex>` value to choose an explicit host instead of letting `flisk up` derive one from a collision. Both are written for the current process only and are re-derived on the next command.
+
+Both variables are available to `${...}` expansion (including `${VAR:-default}`) in `service.json` `env`, `command`, and `healthCheck` strings (`healthCheck.path`, `healthCheckPath`, and `healthCheck.command`). In `env` and `healthCheck` strings Flisk expands the references itself, so the value — including quotes or `$()` — reaches the process as one literal argument and is never reparsed as shell syntax. In a local `command` the platform shell expands them at launch from the service's environment (the project `.env` and the shell through the run, plus the service's own `env`): quote the reference (`"${VAR}"`) when the value may hold spaces, because an unquoted `${VAR}` is split into several shell arguments like any other shell word. In container stacks, Flisk passes them into generated Compose files through `${FLISK_CHECKOUT_ID:-}` and `${FLISK_CHECKOUT_NAME:-}` interpolation so the literal id is never written into generated files or `service.json`. Both `flisk status --json` and `flisk config verify --json` report `checkout: { "id": "...", "name": "..." }`.
+
+For a local process, `port`, `healthCheckPath`, `dependsOn` and `restart: "no"` keep their meaning, without the container port ranges.
+
+`appType` determines more than the label shown in the UI. It selects the generator and validation rules. A `worker` must declare the `nats` feature, while `bring-your-own` resources need a `Dockerfile` or `image` and do not receive an application scaffold. A `database` resource declares the project's Postgres: it needs `"framework": "postgres"` and has no `port`, `command`, `image` or `dockerfile` (see [the example below](#example-postgres-then-a-migrator-then-an-api)).
+
+## Ports, runtimes, and providers
+
+| Field | Type and default | Applies to | Description |
+| --- | --- | --- | --- |
+| `port` | integer; type-specific | backend, frontend, `mcp`, `bring-your-own` | External development port. Backends use `4000`–`4999`; MCP and BYO resources use `4000`–`5999`; frontends use `3000`–`3999`. The internal container port remains `3000`. |
+| `runtime` | `"bun"` or `"node"`; defaults to `"bun"` | generated services | Runtime used for the resource. |
+| `language` | provider id; omitted means Bun for legacy backends | backend | Backend language provider, such as `bun`, `python`, `go`, `rust`, or `node`. The CLI provider registry, not this document or the schema examples, defines the current ids. |
+| `framework` | provider id; omitted means React for frontends and Hono for Bun backends | frontend and backend | Selects the registered framework provider. Unknown ids fail before a resource is written. |
+| `featuresEnabled` | string array; generator-selected when omitted | generated resources | Platform and generator features, such as `nats`, `prisma`, `redis`, `infisical`, `vitest`, `traefik`, `websocket`, `graphql`, `grpc`, `api-client`, `env-config`, `vite`, `tsconfig`, `dockerfile`, `nginx`, `playwright`, `agents-md`, `ddd`, and `sablier`. See the complete [resource features guide](resource-features.md). |
+| `replicas` | integer; defaults to `1` | runnable services | Number of containers to run. The supported range is `1`–`10`; Traefik load-balances across replicas. |
+| `enabled` | boolean; optional | all | Whether the resource is enabled by the project configuration. |
+| `profiles` | list of names; optional | all | Opt-in profiles, such as `["admin"]`. `flisk up` leaves the service out unless `--profile` names one of them (or `--only` names the service), so heavy parts that are not needed every day stay off by default. Without it the service always starts. See [memory footprint](benchmarks/memory-footprint.md#keeping-the-default-run-small-profiles). |
+
+The `language` and `framework` properties intentionally use an open id pattern in the JSON Schema. The CLI registries are the contract because provider ids can be added without editing the schema.
+
+## Dependencies, routes, and health checks
+
+| Field | Type and default | Applies to | Description |
+| --- | --- | --- | --- |
+| `dependsOn` | array of strings or objects; optional | all | Resources or stacks that must start before this resource. Each entry can be a string name (`"db"`) or an object (`{"name": "db", "condition": "service_healthy"}`). Valid conditions: `service_started`, `service_healthy`, and `service_completed_successfully`. Informs focus mode, health checks, startup gate ordering, and generated frontend environment values. |
+| `dependencies` | string array; deprecated | existing manifests | Legacy spelling for `dependsOn`. It is still read for compatibility; use `dependsOn` in new files. |
+| `basePath` | path string; defaults from the stack | frontends | Public route prefix for frontend traffic. |
+| `backendName` | resource name; auto-computed for frontends | frontends | Associated backend resource. |
+| `apiPath` | path string; optional | API resources | API route exposed by the resource when applicable. |
+| `apiBasePath` | `"/api"` by default | legacy/engine integrations | Base path used for API routes in Traefik. New manifests normally rely on the generated route unless an integration needs this override. |
+| `healthCheckPath` | path string; defaults to `/health` for HTTP API resources | HTTP resources | Container health endpoint. Traefik uses it too unless `traefik.healthCheck` is set. Omit it for a non-HTTP BYO resource. |
+| `healthCheck` | `true`, `false`, or an object; optional | API, BYO and native `command` resources | `false` (or `{ "enabled": false }`) turns health checks off: the container gets no health check and Traefik no health probe, and a native `command` service counts as ready only while the same process stays alive for the one-second readiness grace; one that exits during that second is a failed start and is restarted. Without it, a native service is ready once its `healthCheckPath` answers or, with no path, once its port listens. An object can set `required: false` (default `true`) so the health check still runs and is reported by `flisk status` and `flisk up` warnings, without blocking `flisk up` or `flisk up --wait` when an optional sidecar is unhealthy. A service that waits on it with an explicit `condition: "service_healthy"` still waits for the probe to pass: that explicit condition overrides `required: false`. It can also set one probe: `path` (an HTTP path; replaces `healthCheckPath`), `port` (ready when that TCP port accepts a connection, for a service with no HTTP route such as a gRPC server or a database proxy), or `command` (ready when it exits 0, such as `["grpc_health_probe", "-addr=:9090"]`; it runs inside the container, or on the host from the service folder for a local process). With `port` or `command` there is no HTTP probe and Traefik gets no health path. It can also set `interval`, `timeout` and `startPeriod` in seconds and `retries`. For the generated container health check these tune the Compose probe; for a local process that was ready, the supervisor re-probes with the same signal every `interval` seconds (default 5) and reports `unhealthy` with the reason after `retries` consecutive failures (default 3). One success returns it to `ready`. `onFailure: "restart"` restarts an unhealthy local process under the same crash-loop limit (default `"report"`); `healthCheck: false` is never re-probed. Frontends keep their own probe. |
+| `traefik` | object; generated when omitted | routable resources | Routing overrides: `host`, `pathPrefix`, and `healthCheck`. |
+| `exposeViaProxy` | boolean; defaults to `true` for BYO | BYO resources | Set `false` to keep a BYO resource off Traefik; it then has no public route or HTTP health probe. |
+| `webUi` | boolean; defaults to `false` | BYO resources | Set `true` for an app that serves pages from `/`: it is routed on `<name>.<project>.localhost` with no path prefix, instead of `/api/<name>`. See [byo.md](byo.md#web-uis-webui). |
+| `smoke` | object; optional | routable HTTP resources | Post-start checks through the public proxy URL. Use `via: "proxy"` and one or more HTTP `steps`. See the [`smoke` configuration guide](configuration.md#smoke-check-the-public-url-after-flisk-up). |
+
+`healthCheckPath` is an inside-the-container readiness probe. A `smoke` block is different: it verifies the public route printed by `flisk up`, and can perform a safe write/read-back flow. Do not use a full URL in a smoke step; its `path` is appended to the public URL.
+
+### Example: one service that depends on another
+
+Say `orders-backend` calls `inventory-backend` and should start after it. Put each manifest in its own directory under `services/`:
+
+```text
+services/
+  inventory-backend/service.json
+  orders-backend/service.json
+```
+
+`services/inventory-backend/service.json` has no dependencies:
+
+```json
+{
+  "schemaVersion": 1,
+  "appName": "inventory-backend",
+  "appType": "backend",
+  "stack": "shop",
+  "port": 4001,
+  "healthCheckPath": "/health",
+  "dependsOn": []
+}
+```
+
+`services/orders-backend/service.json` lists the service it needs in `dependsOn`:
+
+```json
+{
+  "schemaVersion": 1,
+  "appName": "orders-backend",
+  "appType": "backend",
+  "stack": "shop",
+  "port": 4000,
+  "healthCheckPath": "/health",
+  "dependsOn": ["inventory-backend"]
+}
+```
+
+What this does on `flisk up`:
+
+- The generated Tiltfile gives `orders-backend` a Tilt `resource_deps` entry for `inventory-backend`, so Tilt starts `orders-backend` after `inventory-backend` is ready. Tilt decides when a resource is ready; for a container that has a health check, such as the `healthCheckPath` above, that is when the check passes.
+- `flisk up --only orders-backend` also starts `inventory-backend`, because a requested service brings in the services it lists in `dependsOn`. `flisk up --dry-run --json --only orders-backend` shows this under `declaredDependencies`.
+- A `dependsOn` name that matches no service is reported as an error when the manifests are checked. `postgres` and `database-management` are the exception: they refer to the shared platform Postgres.
+
+This is only local startup ordering for `flisk up`. It does not describe how you deploy the services, and it does not make `orders-backend` retry or wait if `inventory-backend` stops later. Each manifest field is described in the table above; see [`flisk up`](cheat-sheet.md#flisk-up-stack-name-alias-deploy) for `--only` and [Machine-readable CLI](reference/machine-readable-cli.md) for the JSON output.
+
+### Compose-style dependency conditions
+
+Instead of plain string names, entries in `dependsOn` can specify a Compose dependency condition object:
+
+```json
+{
+  "dependsOn": [
+    { "name": "shop-db", "condition": "service_healthy" },
+    { "name": "orders-api-migrator", "condition": "service_completed_successfully" },
+    { "name": "cache", "condition": "service_started" }
+  ]
+}
+```
+
+Supported conditions:
+
+- `service_started`: Waits only for the dependency container to start running. No companion health check or completion gate is created.
+- `service_healthy`: Gates startup on the dependency's health check reporting `healthy` via a companion `<svc>-healthy` resource. Designed for long-running services (databases, backend APIs, redis).
+- `service_completed_successfully`: Gates startup on a one-shot job exiting with code 0 via a companion `<job>-done` resource. Designed for one-shot tasks (database migrators, seeders).
+
+Without a condition, a name waits as `service_started` does, with two exceptions: a one-shot job waits as `service_completed_successfully`, and the project's Postgres (`postgres`, `database-management`, or the name of a `database` resource) waits as `service_healthy`. A running Postgres container is not yet one that accepts connections, so a service that names it starts only once the `postgres-healthy` check passes. Services that do not name Postgres are never held back by it. Write `{ "name": "postgres", "condition": "service_started" }` to start as soon as the container runs.
+
+#### Direct service dependencies vs. stack dependencies
+
+- **Direct service dependencies:** When `name` specifies a direct service or database, Flisk enforces strict semantic validity. Specifying `service_healthy` on a one-shot job is invalid because migrators exit rather than running continuous health checks. Specifying `service_completed_successfully` on a persistent service is invalid because long-running services do not exit. In both cases, Flisk fails with an actionable manifest error.
+- **Full-stack dependencies:** When `name` specifies an entire stack (e.g. `{"name": "shop", "condition": "service_healthy"}`), the condition expands intelligently across all backend-side members of the stack: persistent services route to health gates (`<svc>-healthy`) while database migrators route to completion gates (`<job>-done`). This allows dependent services to wait for an entire heterogeneous stack without triggering condition mismatch errors.
+
+### Example: Postgres, then a migrator, then an API
+
+A database-backed service usually needs three things in order: Postgres is up, the migrations have run, then the API starts. The `dependsOn` field expresses each step. The scaffold writes this pair for you: `flisk resource orders-api --type backend --stack shop --feature prisma` creates `orders-api` and `orders-api-migrator`.
+
+```text
+services/shop/
+  orders-api-migrator/service.json
+  orders-api/service.json
+```
+
+Postgres can be declared as a resource of its own. `flisk resource shop-db --type database --stack shop` writes `services/shop/shop-db/service.json`:
+
+```json
+{
+  "$schema": "https://flisk.sh/schema.service.json",
+  "schemaVersion": 1,
+  "appName": "shop-db",
+  "appType": "database",
+  "framework": "postgres",
+  "stack": "shop"
+}
+```
+
+A service then waits for it by name (`"dependsOn": ["shop-db"]`), like any other resource. The database resource is the shared platform Postgres that Flisk runs for the project: it gets no container of its own, each stack still gets its own database in it (`databaseName`, `FLISK_{stack}` by default), and services get `DATABASE_URL` as before. Declaring one starts Postgres even when the project turned the database capability off (`flisk up --no-database`). `framework` is `postgres` today; other databases may follow.
+
+Without a database resource, `postgres` (or `database-management`) in `dependsOn` names the same shared Postgres, and existing projects keep working unchanged. The example below uses that name.
+
+`services/shop/orders-api-migrator/service.json` waits for Postgres:
+
+```json
+{
+  "$schema": "https://flisk.sh/schema.service.json",
+  "schemaVersion": 1,
+  "appName": "orders-api-migrator",
+  "appType": "migrator",
+  "stack": "shop",
+  "featuresEnabled": ["prisma"],
+  "dependsOn": ["postgres"]
+}
+```
+
+`services/shop/orders-api/service.json` waits for the migrator, so it starts last:
+
+```json
+{
+  "$schema": "https://flisk.sh/schema.service.json",
+  "schemaVersion": 1,
+  "appName": "orders-api",
+  "appType": "backend",
+  "stack": "shop",
+  "port": 4000,
+  "healthCheckPath": "/health",
+  "featuresEnabled": ["prisma"],
+  "dependsOn": ["orders-api-migrator"]
+}
+```
+
+Reading it from the bottom up: `orders-api` lists `orders-api-migrator`, and the migrator lists `postgres`, so the order is Postgres, then the migrator, then the API. Each name in `dependsOn` is the `appName` of another manifest. As in the earlier example, each entry becomes a Tilt `resource_deps` edge, and a name that matches no service (other than the two Postgres names) is reported when the manifests are checked.
+
+Keep the migration command in the migrator, not in the API's start command. The migrator runs when `flisk up` starts it, and the API only starts after it, so restarting the API does not re-run migrations. The scaffolded migrator's `start` script is `prisma migrate deploy`. A `migrator` gets a one-shot Compose service: `restart: "no"`, no `PORT`, no health check and no Traefik route. `flisk up` and `flisk status` count it as ready once it exits 0, and as failed if it exits with another code. A service that lists the migrator in `dependsOn` starts only after the migrator exited 0: Tilt shows a `<migrator>-done` resource that waits for that, and when the migrator fails, the services after it are not started. For a migrator that is not Prisma, see [One-shot jobs](byo.md#one-shot-jobs-migrations-seeders) and the runnable [`examples/byo-jobs/`](../examples/byo-jobs/README.md), which set `"restart": "no"` so the job is not started again after it exits.
+
+The two manifests above pass the service schema and `flisk config verify` (no manifest or dependency error). That Tilt holds the API until the migrator finishes is **not checked here**, because it needs a running stack.
+
+### Migrator output propagation
+
+A migrator or seeder job can generate service tokens, IDs, or credentials and pass them to downstream services that declare it in `dependsOn` (#2864).
+
+1. **The migrator writes outputs:** Flisk passes the `$FLISK_OUTPUT` environment variable to every one-shot job. The migrator writes `KEY=value` lines to that file:
+   ```bash
+   printf "SERVICE_TOKEN=%s\n" "$generated_token" > "$FLISK_OUTPUT"
+   ```
+2. **The dependent service consumes the output:** In the dependent service's `service.json`, reference the output using `${<migrator>:<KEY>}`:
+   ```json
+   {
+     "dependsOn": ["orders-api-migrator"],
+     "env": {
+       "PLATFORM_API_KEY": "${orders-api-migrator:SERVICE_TOKEN}"
+     }
+   }
+   ```
+   A fallback may also be provided: `${orders-api-migrator:SERVICE_TOKEN:-default_token}`.
+3. **Security and lifecycle:**
+   - **Authorization:** Only services that declare the migrator directly in `dependsOn` are authorized to receive its outputs. Referencing an unauthorized migrator throws a `FliskError`.
+   - **Secret protection:** Outputs are stored in the local `.flisk/outputs/` state directory with restrictive permissions (`0o600`). Secret values are never committed, never evaluated as shell code, and never exposed in `flisk status --json`, `flisk up --dry-run`, or process diagnostic logs.
+   - **Clean lifecycle:** Outputs are purged before each rerun so stale credentials from failed or past runs are never reused, and cleaned up on `flisk down`.
+
+
+## Build and container fields
+
+| Field | Type and default | Applies to | Description |
+| --- | --- | --- | --- |
+| `dockerfile` | path string; generated Dockerfile by default | any container resource | Dockerfile path relative to the resource or build context. A path outside `.autogenerated/` is the user's own Dockerfile: Flisk builds from it and generates only the env file and YAML mirror for the service, no framework, proxy, client, or build files. |
+| `buildContext` | path string; resource directory by default | BYO | Docker build context relative to the resource directory. When set, `dockerfile` is relative to this context. |
+| `image` | image reference; optional | BYO | Use an existing image instead of building a Dockerfile. |
+| `restart` | `no`, `on-failure`, `unless-stopped`, or `always`; defaults to `unless-stopped` | BYO | Docker Compose restart policy. Use `no` or `on-failure` for one-shot jobs such as migrations. |
+| `syncs` | string array; generated by type when omitted | generated services | Directories to sync for hot reload. Backends default to `src` and `prisma`; frontends default to `src` and `public`. |
+| `dev` | object; optional | provider-specific | Development and watch settings. Supports `liveReload` (opt-in `true` for the Go watcher; `false` turns off the default Bun watcher) and opt-in `testOnSave` (runs pytest on save for Python backends in a separate Tilt resource). |
+| `build` | object; optional | provider-specific/legacy | Additional build settings consumed by the relevant generator. |
+
+### Development options (`dev`)
+
+The `dev` object configures development-time behavior for language runtimes that own their development cycle:
+
+- `dev.liveReload` (boolean): Go services opt in with `true` to get in-container compilation and hot reload via `flisk-go-watch`. Bun backends, workers, agents and MCP servers reload by default: when the `dev` script in `package.json` runs under `bun --watch` or `--hot` (the scaffolded `bun run --watch src/index.ts` does), Flisk builds a `development` image that runs that script, and an edit is copied into the running container and restarts it. Set `false` to run the compiled `dist` build instead, or write your own `dockerfile`, which Flisk builds as its `production` target. A `dev` script that does not watch keeps the compiled build. The setting is ignored, with a warning, for other languages and app types.
+- `dev.testOnSave` (boolean or object, Python services): Enables automatic pytest execution in the development container when Python source files or tests change.
+
+#### Python `dev.testOnSave`
+
+When enabled, Flisk registers an independent Tilt test resource (`<service>-test`) that executes `pytest` inside the running container whenever files under `src/` or test directories are modified.
+
+```json
+{
+  "dev": {
+    "testOnSave": true
+  }
+}
+```
+
+To specify a custom test folder instead of the default `tests`:
+
+```json
+{
+  "dev": {
+    "testOnSave": {
+      "enabled": true,
+      "path": "tests/unit"
+    }
+  }
+}
+```
+
+Key operational guarantees:
+- **Opt-in and zero drift:** When `testOnSave` is omitted or `false`, no test resource is registered and generated files are byte-for-byte identical to baseline.
+- **Fault isolation:** Pytest executes via `docker compose exec` inside the service container. A test failure marks the `<service>-test` resource red in Tilt but **never** marks the application service as crashed or restarts it. The app continues serving traffic normally.
+- **Dependency requirement:** `pytest` must be installed in the service development container (e.g. via `pyproject.toml` dev dependencies or `pip install -e ".[dev]"`). If pytest is missing, the test resource outputs actionable diagnostic instructions.
+
+## Configuration, secrets, and integrations
+
+| Field | Type and default | Applies to | Description |
+| --- | --- | --- | --- |
+| `params` | string map; optional | all | Non-secret values such as `BASE_URL` or `PORT`. |
+| `envVars` | object; deprecated | existing manifests | Legacy alias for `params`, read only when `params` is absent. |
+| `secrets` | object; optional | all | Secret names to inject from the project `.env` or the configured secret provider. Use `required` and optionally `optional`; never put secret values in this file. |
+| `provides` | string map; optional | any resource | Connection settings, such as `REDIS_URL`, that every service listing this resource in `dependsOn` gets in its generated env file. Never a secret. See [bring-your-own](byo.md#connection-settings-for-the-services-that-depend-on-it-provides). |
+| `providers` | object; optional | container services | External endpoints the service calls (IBM Quantum, Amazon Braket, a hosted model API), each with an optional `tokenSecret` and a local `fallback`. See [bring-your-own](byo.md#external-providers-ibm-quantum-amazon-braket-hosted-apis). |
+| `nats` | object; optional | services using NATS | Custom `queueGroup` and `subjects`. Flisk generates NATS configuration when `nats` is enabled in `featuresEnabled`. |
+| `databaseName` | string; generated from the stack by default | database-backed services | Overrides the generated database name. |
+| `playwright` | boolean; defaults to `false` | generated frontend/services | Requests a generated Playwright configuration when enabled. |
+| `sablier` | object; disabled unless enabled | licensed services | On-demand scaling. Options are `enable`, `deferStart`, `group`, and `sessionDuration`. This is a Premium feature and requires `FLISK_LICENSE_KEY`; it is not available merely by adding the JSON block. |
+| `name` | string; legacy/generated metadata | existing manifests | Retained for compatibility with older generated manifests. Prefer `appName` for the resource identity. |
+
+Do not add `jwtSecret` or other secret values to `service.json`. Flisk ignores `jwtSecret` and reports that it must be removed; put secret names in `secrets` and values in the project’s ignored `.env` or the configured provider.
+
+Unknown fields are preserved so projects can carry application-specific metadata, but Flisk reports them as warnings. A warning is not evidence that the field affects generated infrastructure.
+
+## Validation and troubleshooting
+
+Run the checks that match the change:
+
+```bash
+flisk config verify
+flisk doctor
+```
+
+The JSON Schema catches editor-time type, enum, required-field, and port-range mistakes. The CLI additionally checks the manifest path and generated-output safety. Typical messages include:
+
+```text
+services/shop/api/service.json.appType: required field is missing
+services/shop/api/service.json.schemaVersion: unsupported version 2 (supported: 1)
+services/shop/api/service.json.healthCheckPath: must be a path such as /health (no spaces, line breaks or YAML syntax)
+```
+
+The manifest validator rejects line breaks and control characters in values that reach generated YAML. It also validates the structure of `smoke`, including a non-empty `steps` array, absolute path fragments beginning with `/`, and `save` selectors such as `$.id`.
+
+If an older manifest has `type` instead of `appType`, run the config migration flow and review the diff. Flisk preserves unknown fields and warns about deprecated `dependencies`, `envVars`, and ignored secret fields rather than silently deleting them.
+
+## Keeping this reference current
+
+When adding or changing a manifest field, update all of these together:
+
+1. `cli/src/types/resources.ts` (`ResourceConfigFields`, re-exported by `cli/src/types/index.ts`) for the TypeScript contract.
+2. `runtime/engine/schemas/service-schema.json` for editor validation and descriptions.
+3. `cli/src/utils/service-manifest.ts` or the matching `cli/src/utils/service-manifest-*.ts` slice module when runtime validation, deprecation, or safety behavior changes.
+4. This reference and the short overview in [`cli/README.md`](../cli/README.md).
+
+The published schema is a post-merge artifact. Pull requests should validate the repository copy offline; do not treat a stale published URL as permission to document behavior that is not present on `main`.

@@ -1,0 +1,84 @@
+# Self-Contained Generated Projects
+
+## Purpose
+
+Define runnable generated services, local extension vendoring, and portable generated configuration.
+
+## Requirements
+
+### Requirement: Generated Services Compile On First Run
+
+Generated backend services must always emit valid Bun source code.
+
+#### Scenario: Backend template with banner logs
+
+- **WHEN** a user runs `flisk resource api --type backend --stack pre-alpha --path services/pre-alpha/api`
+- **THEN** the generated `src/index.ts` contains `console.log('\n🚀 api running ...')` with an escaped `\n`
+- **AND** `bun run src/index.ts` starts the server without a syntax error
+
+#### Scenario: Health endpoint serves
+
+- **WHEN** the generated service is running
+- **THEN** `GET /health` responds `{"status":"ok","service":"<name>"}`
+
+### Requirement: Extension Vendored Into Generated Projects
+
+Every generated project must contain the Flisk Tilt extension so `flisk up` works offline.
+
+#### Scenario: Project generation
+
+- **WHEN** a user runs `flisk project --yes`
+- **THEN** `.flisk/.flisk-out/flisk-cli-ext/` is created containing `Tiltfile`, `engine/`, `discovery/`, `specs/`, and `ext/`
+- **AND** the generation log reports `Vendored Flisk extension -> .flisk/.flisk-out/flisk-cli-ext/`
+
+#### Scenario: Extension source auto-detection
+
+- **WHEN** generating a project
+- **THEN** the extension source is resolved in order: `$FLISK_EXTENSION_SOURCE`, an executable-adjacent `flisk-cli` checkout, then a `../flisk-cli` sibling of the project root
+
+### Requirement: Tiltfile Loads Extension Locally
+
+The generated Tiltfile must resolve the extension without any GitHub dependency.
+
+#### Scenario: Vendored copy present
+
+- **WHEN** `.flisk/.flisk-out/flisk-cli-ext/` exists next to the Tiltfile
+- **THEN** the Tiltfile registers `file://<vendored path>` as the extension repo
+- **AND** `load('ext://flisk-cli', ...)` succeeds without cloning
+
+#### Scenario: Explicit extension path override
+
+- **WHEN** the vendored copy is absent but `$FLISK_EXTENSION_PATH` points at a valid flisk-cli checkout
+- **THEN** the Tiltfile uses that path
+
+#### Scenario: No extension available
+
+- **WHEN** neither the vendored copy nor `$FLISK_EXTENSION_PATH` exists
+- **THEN** loading fails fast with a single actionable error listing the three recovery options, with no retry loop
+
+### Requirement: No Machine-Specific Paths In Generated Output
+
+Generated Tiltfiles must never contain hardcoded author or machine paths.
+
+#### Scenario: Fresh generation on any machine
+
+- **WHEN** any user generates a project
+- **THEN** the generated `Tiltfile` has no absolute host-specific paths and no private GitHub repo URL fallback
+
+#### Scenario: Local probe is truthful
+
+- **WHEN** the Tiltfile probes for the vendored directory
+- **THEN** the probe echoes its outcome (`test -d <path> && echo yes || echo no`) so detection reflects the filesystem
+
+### Requirement: Bun scaffold tests use the Bun runtime
+
+Fresh shared Bun resource scaffolds SHALL run their generated tests without a separate Node.js installation.
+
+#### Scenario: Run tests on a Bun-only host
+- **WHEN** a backend, worker, MCP, agent or frontend using the shared Bun scaffold is created and its dependencies installed
+- **THEN** its test script uses bun test, its watch script uses bun test --watch, and generated tests import bun:test
+- **AND** the scaffold does not require Vitest as a development dependency
+
+#### Scenario: Other language provider
+- **WHEN** a backend provider owns its package and test files, such as Node.js
+- **THEN** its existing provider-specific runner remains unchanged

@@ -1,0 +1,195 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import { describe, expect, it } from "vitest";
+import { deriveServiceStates } from "../service-runtime-state.js";
+
+function item(name: string, update: string, runtime: string, extra: object = {}) {
+  return { metadata: { name }, status: { updateStatus: update, runtimeStatus: runtime, ...extra } };
+}
+const json = (...items: object[]) => JSON.stringify({ items });
+const deps = { api: ["postgres"], web: ["api"] };
+
+describe("deriveServiceStates", () => {
+  it("does not call an api ready when its running process has a failed database", () => {
+    const states = deriveServiceStates(
+      json(item("postgres", "error", "none"), item("api", "ok", "ok")),
+      deps,
+    );
+    expect(states.postgres).toMatchObject({ status: "error" });
+    expect(states.api).toEqual({
+      status: "error",
+      reason: "postgres failed",
+      blockedBy: ["postgres"],
+    });
+  });
+
+  it("blocks a service that reaches the failure through another service", () => {
+    const states = deriveServiceStates(
+      json(item("postgres", "error", "none"), item("api", "ok", "ok"), item("web", "ok", "ok")),
+      deps,
+    );
+    expect(states.web).toMatchObject({ status: "error", blockedBy: ["postgres"] });
+  });
+
+  it("marks a service blocked by a failure even while it is still pending", () => {
+    const states = deriveServiceStates(
+      json(item("postgres", "error", "none"), item("api", "pending", "pending")),
+      deps,
+    );
+    expect(states.api).toMatchObject({ status: "error", blockedBy: ["postgres"] });
+  });
+
+  it("keeps a ready service pending while its dependency is still building", () => {
+    const states = deriveServiceStates(
+      json(item("postgres", "in_progress", "not_applicable"), item("api", "ok", "ok")),
+      deps,
+    );
+    expect(states.postgres).toEqual({ status: "pending" });
+    expect(states.api).toEqual({ status: "pending", reason: "waiting for postgres" });
+  });
+
+  it("shows a running api as waiting while its database health check has not passed", () => {
+    const states = deriveServiceStates(
+      json(
+        item("postgres", "ok", "ok", { composeResourceInfo: { healthStatus: "starting" } }),
+        item("api", "ok", "ok"),
+      ),
+      deps,
+    );
+    expect(states.postgres).toEqual({ status: "pending" });
+    expect(states.api).toEqual({ status: "pending", reason: "waiting for postgres" });
+  });
+
+  it("reports an unhealthy database as failed and the api as blocked by it", () => {
+    const states = deriveServiceStates(
+      json(
+        item("postgres", "ok", "ok", { composeResourceInfo: { healthStatus: "unhealthy" } }),
+        item("api", "ok", "ok"),
+      ),
+      deps,
+    );
+    expect(states.postgres).toEqual({
+      status: "error",
+      reason: "container is running, but its health check is failing",
+    });
+    expect(states.api).toEqual({
+      status: "error",
+      reason: "postgres failed",
+      blockedBy: ["postgres"],
+    });
+  });
+
+  it("reports everything ready when everything is", () => {
+    const states = deriveServiceStates(
+      json(item("postgres", "ok", "ok"), item("api", "ok", "ok"), item("web", "ok", "ok")),
+      deps,
+    );
+    expect(states).toEqual({
+      postgres: { status: "ready" },
+      api: { status: "ready" },
+      web: { status: "ready" },
+    });
+  });
+
+  it("shows an idle deferred service as unknown and does not let it block its dependents", () => {
+    const states = deriveServiceStates(
+      json(item("idle", "none", "none"), item("api", "ok", "ok")),
+      { api: ["idle"] },
+      new Set(["idle"]),
+    );
+    expect(states.idle).toMatchObject({ status: "unknown" });
+    expect(states.api).toEqual({ status: "ready" });
+  });
+
+  it("leaves out the Tiltfile, disabled resources and services Tilt does not list", () => {
+    const states = deriveServiceStates(
+      json(
+        item("(Tiltfile)", "ok", "not_applicable"),
+        item("other-phase", "none", "none", { disableStatus: { state: "Disabled" } }),
+        item("api", "ok", "ok"),
+      ),
+      { api: ["not-in-tilt"] },
+    );
+    expect(Object.keys(states)).toEqual(["api"]);
+    expect(states.api).toEqual({ status: "ready" });
+  });
+
+  it("returns no states for a Tilt response with no items", () => {
+    expect(deriveServiceStates(JSON.stringify({}), deps)).toEqual({});
+  });
+
+  // Tilt lists a resource the moment it registers it, before it reports any status; that is not ready (#3952 main run).
+  it("treats an item with no status as pending", () => {
+    const states = deriveServiceStates(json({ metadata: { name: "api" } }), deps);
+    expect(states).toEqual({ api: { status: "pending" } });
+  });
+
+  it("treats a deferred item with no status as waiting for its first request", () => {
+    const states = deriveServiceStates(json({ metadata: { name: "idle" } }), {}, new Set(["idle"]));
+    expect(states).toEqual({ idle: { status: "unknown", reason: "starts on its first request" } });
+  });
+
+  it("blocks a running deferred service once a dependency has failed", () => {
+    const states = deriveServiceStates(
+      json(item("postgres", "error", "none"), item("idle", "ok", "ok")),
+      { idle: ["postgres"] },
+      new Set(["idle"]),
+    );
+    expect(states.idle).toEqual({
+      status: "error",
+      reason: "postgres failed",
+      blockedBy: ["postgres"],
+    });
+  });
+
+  it("lists every failed dependency once, in a stable order", () => {
+    const states = deriveServiceStates(
+      json(
+        item("redis", "error", "none"),
+        item("postgres", "error", "none"),
+        item("api", "ok", "ok"),
+      ),
+      { api: ["redis", "postgres"] },
+    );
+    expect(states.api).toEqual({
+      status: "error",
+      reason: "postgres, redis failed",
+      blockedBy: ["postgres", "redis"],
+    });
+  });
+
+  it("shows a migrator that exited 0 as ready, and the services that wait on it too", () => {
+    // Tilt reports an exited-0 compose container as runtime ok; the migrator has no Docker health check.
+    const states = deriveServiceStates(
+      json(
+        item("postgres", "ok", "ok"),
+        item("migrations", "ok", "ok", { composeResourceInfo: {} }),
+        item("api", "ok", "ok"),
+      ),
+      { migrations: ["postgres"], api: ["migrations"] },
+    );
+    expect(states.migrations).toEqual({ status: "ready" });
+    expect(states.api).toEqual({ status: "ready" });
+  });
+
+  it("shows a migrator that exited non-zero as failed, and the services that wait on it as blocked", () => {
+    const states = deriveServiceStates(
+      json(
+        item("postgres", "ok", "ok"),
+        item("migrations", "ok", "error", { composeResourceInfo: {} }),
+        item("api", "pending", "pending"),
+      ),
+      { migrations: ["postgres"], api: ["migrations"] },
+    );
+    expect(states.migrations).toMatchObject({ status: "error" });
+    expect(states.api).toEqual({
+      status: "error",
+      reason: "migrations failed",
+      blockedBy: ["migrations"],
+    });
+  });
+
+  it("rejects malformed Tilt output instead of reporting services as ready", () => {
+    expect(() => deriveServiceStates("{not json", deps)).toThrow(SyntaxError);
+  });
+});

@@ -1,0 +1,25 @@
+# Accepted findings, reviewed in the PR that added them. Remove each line once npm ships a bundled dependency that fixes it.
+#
+# undici 6.29.0 and ip-address 10.7.2 are bundled inside npm 12.2.1 (the latest npm), pinned in .github/npm-cli/package-lock.json.
+# The fixes are in undici 6.29.1 and ip-address 10.7.4, which no npm release carries yet, and a bundled dependency cannot be
+# overridden from a lockfile. The npm CLI only runs inside the release workflow to publish the package with OIDC, against
+# registry.npmjs.org. It is not shipped to users and does not run on user input. All three advisories are denial of service.
+CVE-2026-109869 exp:2026-12-01
+CVE-2026-109924 exp:2026-12-01
+CVE-2026-111997 exp:2026-12-01
+
+# glob 13.0.6 and minimatch 10.2.5 are bundled inside npm 12.2.1 (the latest npm), same situation as above: the fixes are in glob
+# 14.0.2 and minimatch 11.0.1. Both are denial of service on crafted patterns, and the release workflow passes neither any input.
+CVE-2026-118773 exp:2026-12-01
+CVE-2026-118764 exp:2026-12-01
+
+# DS-0002 (image runs as root) on scripts/release/flisk-image.Dockerfile: the image drives the host's Docker through the mounted
+# /var/run/docker.sock, which a fixed non-root user cannot open. Whoever can use the socket already has root on the host, and the
+# Dockerfile explains how a caller drops privileges with --user. `USER root` there states the choice.
+DS-0002 exp:2027-11-01
+AVD-DS-0002 exp:2027-11-01
+
+# DS-0026 (no HEALTHCHECK) on tests/e2e/fixtures/byo-no-curl/Dockerfile: the fixture is a busybox image without curl so the e2e
+# test can check the diagnostic when Flisk's own health probe fails. Adding HEALTHCHECK NONE changes that diagnostic and fails the test.
+DS-0026 exp:2027-11-01
+AVD-DS-0026 exp:2027-11-01

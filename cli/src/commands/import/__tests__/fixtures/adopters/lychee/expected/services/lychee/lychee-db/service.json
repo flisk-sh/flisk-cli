@@ -1,0 +1,39 @@
+{
+  "$schema": "https://flisk.sh/schema.service.json",
+  "schemaVersion": 1,
+  "appName": "lychee-db",
+  "appType": "bring-your-own",
+  "stack": "lychee",
+  "port": 3306,
+  "healthCheck": {
+    "command": ["healthcheck.sh", "--connect", "--innodb_initialized"],
+    "interval": 5,
+    "timeout": 3,
+    "retries": 10,
+    "startPeriod": 10
+  },
+  "image": "mariadb:11",
+  "exposeViaProxy": false,
+  "env": {
+    "MYSQL_DATABASE": "${DB_DATABASE:-lychee}",
+    "MYSQL_PASSWORD": "${DB_PASSWORD:-password}",
+    "MYSQL_ROOT_PASSWORD": "${DB_ROOT_PASSWORD:-rootpassword}",
+    "MYSQL_USER": "${DB_USERNAME:-lychee}"
+  },
+  "restart": "unless-stopped",
+  "container": {
+    "capAdd": ["SETGID", "SETUID", "DAC_OVERRIDE", "CHOWN"],
+    "capDrop": ["ALL"],
+    "securityOpt": ["no-new-privileges:true"],
+    "tmpfs": ["/tmp:noexec,nosuid,nodev,size=200m"],
+    "networkAliases": ["lychee_db"]
+  },
+  "envFile": ["../../../.env"],
+  "volumes": [
+    {
+      "source": "mysql",
+      "target": "/var/lib/mysql",
+      "name": "lychee_prod_mysql"
+    }
+  ]
+}

@@ -1,0 +1,260 @@
+# Contributing a backend language provider
+
+`flisk resource --type backend` scaffolds Bun + Hono. That is the historical default and it does not change: omit `--language` and the output is byte-identical to before providers existed. Python, Go, Rust and Node are explicit, opt-in providers. Add one language per pull request, using a lowercase id. Start by copying the Python provider and its tests.
+
+Frontend frameworks follow a [similar recipe](frontend-framework-providers.md). The difference is deliberate: frontend providers all produce Vite apps that share one Docker and nginx path, while a Python process needs its own base image and reload command. Backend providers therefore own their Dockerfile and reload behavior; everything else stays shared.
+
+## Backend frameworks on the Bun runtime
+
+Hono is the default Bun framework. `flisk resource api --type backend --framework express` scaffolds Express 5 (or `--framework elysia`
+Elysia 1, `--framework fastify` Fastify 5, `--framework nestjs` NestJS 11, `--framework koa` Koa 3, or `--framework h3` h3 1.x on `node:http`) on the same
+Bun image instead: same Dockerfile, `tsconfig.json`, health routes, `PORT` read and `0.0.0.0` binding, with `express` and
+`@types/express` (or `elysia`, `fastify`, the `@nestjs/*` packages) in place of `hono`. NestJS also sets `experimentalDecorators` and
+`emitDecoratorMetadata` in the service's `tsconfig.json` (the engine's generated Docker tsconfig already sets them), through the
+provider's optional `compilerOptions`. The id is saved as `framework` in `service.json`; omitting the flag writes no
+`framework` field and the output is byte-identical to before. A framework cannot be combined with a language that owns its
+runtime (`--language python`, `--language go`, `--language rust` or `--language node`).
+
+An interactive terminal asks which framework to use and lists Hono first. The picker offers only the frameworks the
+requested language allows, so a language that owns its runtime (Python, Go, Rust, Node) is never asked. `--yes`, a piped
+run and a script never ask either: they keep the historical Hono scaffold.
+
+| File | Responsibility |
+| --- | --- |
+| `cli/src/backend-frameworks/<id>.ts` | Framework id, dependencies, dev dependencies, and the `src/index.ts` template |
+| `cli/src/backend-frameworks/registry.ts` | Registers the provider. `DEFAULT_BACKEND_FRAMEWORK` stays `hono` |
+
+To add one: copy `express.ts`, register it, add tests like `resource-backend-frameworks.test.ts`, and check it with a real
+`flisk up` (the Bun image runs `tsc`, so the type package matters). The engine needs no change: it reads `framework` only for
+frontends.
+
+`flisk resource --type backend --frameworks` lists the registered backend frameworks with the id, the display name, the
+language they are scaffolded with (`bun`, which is also the runtime), their compatibility with the requested language, and
+the command that creates them:
+
+```bash
+flisk resource --type backend --frameworks
+# hono       Bun + Hono       bun       compatible with bun        flisk resource <name> --type backend --framework hono
+# express    Bun + Express    bun       compatible with bun        flisk resource <name> --type backend --framework express
+# elysia     Bun + Elysia     bun       compatible with bun        flisk resource <name> --type backend --framework elysia
+# fastify    Bun + Fastify    bun       compatible with bun        flisk resource <name> --type backend --framework fastify
+# h3         Bun + h3         bun       compatible with bun        flisk resource <name> --type backend --framework h3
+# koa        Bun + Koa        bun       compatible with bun        flisk resource <name> --type backend --framework koa
+# nestjs     Bun + NestJS     bun       compatible with bun        flisk resource <name> --type backend --framework nestjs
+```
+
+The compatibility cell names the language it is judged against (`bun` is the default backend language). Add
+`--language <id>` to see which frameworks that language rules out: a language that owns its runtime marks every
+framework as `incompatible with --language <id>`, so the invalid combination is visible before a resource is created.
+A requested `--language` is part of the printed command, so a copied row scaffolds the language the listing was asked
+about instead of silently falling back to Bun:
+
+```bash
+flisk resource --type backend --language python --frameworks
+# hono       Bun + Hono       bun       incompatible with --language python    flisk resource <name> --type backend --language python
+```
+
+## Python
+
+`flisk resource api --type backend --language python --stack shop` scaffolds `pyproject.toml`, `src/main.py` (FastAPI, `GET /health`, reads `PORT`, listens on `0.0.0.0`), and `tests/test_health.py` (`pytest`). The engine generates a `python:3.12-slim` multi-stage Dockerfile (`base`, `test`, `production`).
+
+### Opt-in pytest on save (`dev.testOnSave`)
+
+Python services can automatically execute pytest inside the running container whenever source or test files change:
+
+```json
+{
+  "dev": {
+    "testOnSave": true
+  }
+}
+```
+
+You can also customize the test directory (defaults to `tests`):
+
+```json
+{
+  "dev": {
+    "testOnSave": {
+      "enabled": true,
+      "path": "tests/unit"
+    }
+  }
+}
+```
+
+- **Separate Tilt resource:** Flisk registers an independent `<service>-test` local resource in Tilt that watches `src/`, `pyproject.toml`, and the test directory.
+- **Service isolation:** Pytest executes via `docker compose exec` inside the service container. A test failure marks the test resource red in Tilt, but the application service remains healthy and keeps running without restart.
+- **Recovery:** Fixing the code or test automatically reruns pytest in the next pass and clears the failure to green.
+- **Zero baseline drift:** When `dev.testOnSave` is omitted or false, Flisk registers zero test resources, and generated files remain byte-for-byte identical to baseline.
+- **Pytest requirement:** The container must have `pytest` installed (configured in `pyproject.toml` dev dependencies). If missing, Flisk outputs a clear diagnostic hint.
+
+### Measured: the Python dev loop through `flisk up`
+
+Measured with `tests/e2e/journeys/dev-loop/python-dev-loop.sh` (a throwaway scaffolded `--language python` service, through Traefik, polled every 25 ms)
+on an Apple-silicon Mac with Colima, on a busy machine (load average about 4), 5 one-line edits to `src/main.py`. These are one run on one machine, not a benchmark.
+
+| Step | `flisk up` | plain `uvicorn --reload` |
+|---|---|---|
+| First start to `/health` 200 (image build and dependency install) | 41 s | not measured |
+| Start again with the image already built | 19 s | not measured |
+| Save to new response, median | 0.50 s | 0.24 s |
+| Save to new response, range | 0.42 s to 1.48 s | 0.08 s to 0.27 s |
+| Longest stretch of non-200 answers | 1.03 s (1 of 5 edits) | 0 s |
+
+Edits to `src/` are synced into the running container and uvicorn `--reload` restarts the process: the image was not rebuilt in any of the edits.
+Compared with `uvicorn --reload` on the host, the Flisk loop is slower by roughly 0.3 s at the median and had one edit with a brief outage, the
+cost of the sync into the container and the proxy hop. Changing `pyproject.toml`, `uv.lock` or `requirements.txt` still rebuilds the image.
+
+## Go
+
+`flisk resource api --type backend --language go --stack shop` scaffolds `go.mod`, `main.go` (standard-library `net/http`, `GET /health`,
+reads `PORT`, listens on every interface) and `main_test.go`. The engine generates the image: a `golang:1.27` build stage
+(`CGO_ENABLED=0 go build`), a `test` stage that runs `go test ./...`, and a small `debian:bookworm-slim` `production` stage with a
+health check. It has no package.json, Prisma or Bun configuration, and `--framework` cannot be combined with it.
+
+By default Go is compiled into the image and has no reload process, so there is **no live update**: Tilt rebuilds the image when a watched
+file changes. (The engine returns no live-update rules for Go unless you opt in below; building a `sync()` step and then discarding it makes Tilt fail with
+"live_update steps that were created but not used".) Checked with a real `flisk up`: the generated image builds, `go test ./...` passes
+in the `test` stage, and `GET /api/<name>/health` answers `200` through Traefik.
+
+### Opt-in live reload
+
+Add `dev.liveReload` to the service's `service.json` and run `flisk up` again:
+
+```json
+{ "dev": { "liveReload": true } }
+```
+
+Tilt then builds the image's `development` target instead of `production`, copies each edit into the running container, and a small
+watcher (`flisk-go-watch`, written into the image by the engine) recompiles and restarts the app. An ordinary edit is not an image rebuild.
+Without the switch nothing changes. `liveReload: true` on a language that has no watcher logs a warning and is ignored. Bun backends need no switch: they reload by default when their `dev` script runs under `bun --watch`, and `liveReload: false` opts out (see [`service.json` reference](service-json.md#development-options-dev)).
+
+- **Build, then swap.** A change is compiled into a staging binary while the running app keeps serving. Only when that build succeeds is
+  the old process stopped and the new binary started, so a slow compile or a compile error never takes the service down. Air, the first
+  watcher tried, stops the app as soon as it sees a change and compiles afterwards (`engine.go`, `start` calls `stopBin` before
+  `buildRun`). Measured through Traefik, that left the app unreachable for the whole compile, and in 2 of 6 edits a Traefik health
+  check landed in the gap and answered `503` for a further 10 seconds (see [Measured](#measured-edit-to-ready-through-traefik)).
+- **Compile errors** are printed by `go build` into the container log, so they appear in the Tilt log of the service, and the log says
+  `[flisk] build failed; the last good build keeps running`. The last good build keeps answering requests; save a fix and it rebuilds.
+- **What restarts the app:** a change to any file in the service folder except dot-directories (`.git`, `.autogenerated`), `tmp/`,
+  `*_test.go` and `*.md`. Files read by `go:embed` therefore count. The watcher compares path, modification time and size every 0.2 s.
+- **What rebuilds the image:** `go.mod`, `go.sum` and the generated Dockerfile (`.autogenerated/`). They are not copied into the running
+  container, because a restart cannot apply them: Tilt rebuilds the image, which downloads the modules again, and recreates the container.
+  To add a dependency, edit `go.mod` and `go.sum` (for example `go get` or `go mod tidy` on your machine, or in a `golang` container if
+  Go is not installed) and save; expect an image build, not a 1 to 2 second reload.
+- **Caches.** Dependencies are fetched before the sources are copied, so a source edit never refetches them, and the image is primed
+  with one `go build`, which leaves the module and build caches in the image the watcher runs from. The first edit therefore recompiles
+  only your package, not the standard library.
+- **Debugging.** The watcher builds with `-ldflags='-s -w'`, which drops debug information and shortens the link step. A debugger
+  such as delve cannot attach to that binary. If you need one, build the `development` target without the flag yourself.
+- **Go version.** The image is `golang:1.27-bookworm` with `GOTOOLCHAIN=auto`, so a `go.mod` that asks for a newer Go (Gin 1.12 asks
+  for 1.25) makes Go download that toolchain on the first image build instead of stopping with `go.mod requires go >= 1.25`. The
+  default `production` and `test` stages set the same variable.
+- **Watcher limits.** The loop is synchronous: a file saved while `go build` is running is not in that binary, and is picked up on the
+  next pass. If the app exits on its own (a panic at startup, say), the watcher does not restart it until the next file change; the log
+  says `waiting for a change to rebuild`, which is easy to mistake for a hung reload.
+- **One module per service folder.** Only the service folder is copied into the image, so a `replace` to a directory outside it fails the
+  image build at `go mod download` (checked on the `development` target only; the default image copies the same single folder, but I did not run it). A `go.work` workspace was not tried.
+
+### Gin and other Go frameworks
+
+The native provider scaffolds standard-library `net/http`, but any framework works if the service listens on `$PORT` on every interface
+and answers `GET /health`. For Gin, replace `main.go` and `go.mod` with your own (Gin needs `go 1.25`, see above), add the `go.sum`
+that `go mod tidy` writes, and set `dev.liveReload`. [`examples/byo/gin`](../examples/byo/gin/README.md) is the app to start from.
+
+Checked with a real `flisk up`: the Gin example (Gin 1.12.0, `go 1.25.0`, plus a `version` field on `GET /` for the script to edit) as a native Go
+service with `liveReload`, through `tests/e2e/journeys/dev-loop/go-dev-loop.sh` with `GO_SERVICE_DIR` pointing at it. Edit-to-ready over 8 edits was
+2.25 s / 3.14 s / 5.82 s (min / median / max, load average about 7, a larger binary than the scaffold), the app was unreachable for at most
+0.20 s, a broken edit put the compiler error in the Tilt log while the last good build kept serving, and a `go.mod` change rebuilt the image and
+recreated the container in 124 s, including the Go 1.25 toolchain download. First start was 146 s.
+
+`tests/e2e/journeys/dev-loop/go-dev-loop.sh` also passed, one run each on the same Mac, for the other three Go examples under `examples/byo`: Fiber v2.52.5
+(`go 1.23`), Echo v4.16.0 and chi v5.3.2 (both `go 1.25`). The examples in the repository have no `go.sum` and no `version` field, so for
+these runs I added a `go.sum` (from `go mod tidy`) and a `version` field on `GET /` locally; the committed examples are unchanged. These
+were 5 edits each, not the Gin run's 8, at a load average of 7 to 10: median edit-to-ready 1.85 s (Fiber), 1.57 s (Echo) and 1.55 s (chi),
+the app down for at most 0.13 s, no Traefik `503`, the compiler error in the Tilt log, and a `go.mod` change rebuilding the image in 38 to
+50 s. That is not directly comparable with the Gin run's 124 s for the same step: the runs differ in load and Docker cache state, and I did
+not isolate why.
+
+A bring-your-own container (`--type bring-your-own`, including that example's Dockerfile) has no live reload, because Flisk does not
+generate its image: see [docs/byo.md](byo.md#limits). Use the native Go provider when you want the loop above.
+
+### Measured: edit-to-ready through Traefik
+
+`tests/e2e/journeys/dev-loop/go-dev-loop.sh` runs the scaffolded service with `liveReload` through a real `flisk up`, edits `main.go`, and polls the
+route through Traefik every 25 ms until the edited response appears. "Rebuild" is the container's own clock from `change detected` to
+`restarted`; "sync+poll" is the rest (Tilt copying the file in, the watcher's 0.2 s poll, and Traefik).
+
+| Run (8 edits unless noted) | Edit-to-ready (min / median / max) | App unreachable during an edit | Edits with a Traefik 503 |
+| --- | --- | --- | --- |
+| `flisk-go-watch` (this guide) | 1.31 s / 1.63 s / 2.50 s | at most 0.13 s | 0 of 8 |
+| Air (the first watcher), same script | 3.27 s / 3.73 s / 16.96 s (only 6 of 8 edits finished; edits 7 and 8 were not served within 20 s, cause not diagnosed) | 1.8 to 5.7 s on 5 of 6, over the script's limit each time | 2 of 6 (10 s each) |
+
+Both rows are one run on an Apple-silicon Mac running Docker Desktop, with a load average of about 9 from other work, a single-file
+service, and a Docker host whose image cache was already warm. Of the watcher's 1.63 s median, about 1.2 s was the rebuild inside the
+container and about 0.45 s was sync and polling. First start (from launching `flisk up` to the first `200` through Traefik, including
+image builds) was 74 s for the watcher and 40 s for Air in those runs. Compile time moves a lot with machine load: an earlier run of the
+watcher at a load average of about 12 had edits of 2 to 15 s, with the app unreachable for at most 1.4 s of each, because the old
+build kept answering while the slow compile ran. Treat these as one machine's numbers, not a promise. The 1 to 2 second target in #369
+was met on the median in the run above, not by every edit (the slowest was 2.5 s) and not in the busier run. The table is the scaffolded service only; Gin, Fiber, Echo and chi
+are under [Gin and other Go frameworks](#gin-and-other-go-frameworks).
+
+Run it yourself: `tests/e2e/journeys/dev-loop/go-dev-loop.sh [edits]` (Docker, Tilt, Python 3 and a built CLI). It fails if the app itself is down for longer than
+a swap should take (refused connections or 502s; a Traefik `503` from its health check is printed as a warning, not counted), if the compiler error is missing from the Tilt log, if the service does not keep serving after a broken edit, or if a
+`go.mod` change does not rebuild the image.
+
+## Rust
+
+`flisk resource api --type backend --language rust --stack shop` scaffolds `Cargo.toml` and `src/main.rs` (axum 0.8 + tokio,
+`GET /health`, reads `PORT`, binds `0.0.0.0`) with a unit test. `Cargo.toml` names the binary `app` so the image can copy it
+whatever the resource is called. The engine generates the image like Go's: a `rust:1-slim-bookworm` build stage, a `test` stage
+running `cargo test`, and a small `debian:bookworm-slim` `production` stage with a health check. The build uses BuildKit cache
+mounts for the cargo registry and the `target` directory, so a rebuild after a source change recompiles only the crate. Like Go
+it has no live update: Tilt rebuilds the image when a watched file changes.
+
+## Node.js
+
+`flisk resource api --type backend --language node --stack shop` scaffolds `package.json`, `src/index.js` (standard-library `node:http`, `GET /health`, reads `PORT`, listens on `0.0.0.0`), and `tests/health.test.js` (`node:test`). The engine generates a `node:22-slim` multi-stage Dockerfile (`base`, `test`, `production`). Tilt live-update syncs `src/` changes into the running container where `node --watch` reloads the process without rebuilding the image; `package.json` edits trigger a container rebuild.
+
+## Where the code lives
+
+| File | Responsibility |
+| --- | --- |
+| `cli/src/backend-languages/<id>.ts` | Language id, label, dev command, and the starter files (dependency manifest, source, test). No Dockerfile: the engine generates the image. |
+| `cli/src/backend-languages/registry.ts` | Registers the provider. `DEFAULT_BACKEND_LANGUAGE` stays `bun`. |
+| `cli/src/backend-languages/bun.ts` | The historical default. Package scripts, tsconfig, Dockerfile, and test stay in the shared scaffold in `resource.ts`. |
+| `runtime/engine/topologies/platform/docker/dockerfile/language_dockerfile.star` | The image Tilt actually builds, written to `.autogenerated/Dockerfile.app.autogenerated`. Add the language here. Also holds Go's opt-in `development` target and its watcher script. |
+| `runtime/engine/topologies/tilt/resources/orchestrator/apply_compose_resource_registration.star` | Live-update rules. Python and Node rely on their own process reload and have no Bun install step. Go gets sync rules only with `dev.liveReload`, with `go.mod`, `go.sum` and `.autogenerated/` falling back to an image rebuild. |
+| `runtime/engine/topologies/tilt/resources/orchestrator/generators/manifest_resource.star` | Skips the Bun-only generators (Vite, tsconfig, Prisma, bunfig) for provider-owned languages. |
+
+## Shared versus provider-owned
+
+Shared by every provider: `appName`, `appType`, `stack`, `port` (4000–4999), `healthCheckPath`, `dependsOn`, the Traefik hostname, health-gated boot order, stack slices (`flisk up <stack>`), and database provisioning.
+
+Owned by the provider: the dependency manifest (`pyproject.toml`), the source entry, the smoke test, the base image, and the reload command. Do not emit a second Compose file, put Bun in a Python image, or add the language's dependencies to the Flisk CLI package.
+
+The container must answer `GET /health`, read `PORT` from the environment, and ship `curl` because the generated Compose health check uses it.
+
+## Add a provider
+
+1. Copy `cli/src/backend-languages/python.ts` to `<id>.ts` and replace the files and dev command.
+2. Register it in `registry.ts`. Keep the default `bun`; interactive creation never prompts for a language.
+3. Do **not** edit `runtime/engine/schemas/service-schema.json`. `language` there is an open string with an id pattern, and the CLI registry (step 2) is what rejects an unknown id. See [the service schema](configuration.md#the-service-schema-and-how-it-is-published).
+4. Add a Dockerfile template to `language_dockerfile.star`. It needs a `production` stage (Tilt builds `--target production`); a `test` stage lets CI run the language's tests in the image.
+5. Add tests in `cli/src/commands/__tests__/resource-backend-languages.test.ts`: file set, persisted `language`, case-insensitive ids, unknown-id and non-backend rejection, and unchanged Bun output.
+6. Add a runnable example under `examples/` and keep it in sync with the generated output with a drift test.
+7. Update `cli/README.md` and this guide. Run `bun run build`, `bun run typecheck`, `bun run lint`, and `npm test` in `cli/`.
+
+`flisk resource api --type backend --language python --stack shop` creates a resource. Ids match case-insensitively (`--language Python`). An unknown id fails before any file is written. A legacy `service.json` without `language` stays valid and is not rewritten. `flisk config regenerate` rebuilds project-level config; it does not recreate resource source.
+
+For a language without a provider (Java, Ruby, a legacy service), use `--type bring-your-own` with your own Dockerfile or image.
+
+## Backend provider pull request checklist
+
+- [ ] One language per pull request; Bun stays the default.
+- [ ] Registry, Dockerfile template, and Tilt live-update behavior updated together. No schema change is needed or expected.
+- [ ] Generated-output tests plus an unchanged-Bun-output test.
+- [ ] A runnable example and a drift test.
+- [ ] The language's dependencies are not added to the CLI package.
+- [ ] README and this guide updated.

@@ -1,0 +1,12 @@
+{
+  "engine": "FALSIFIER",
+  "property": "removal-leaves-no-references",
+  "seed": 176538082,
+  "commit": "aa4751d",
+  "minimized": { "seed": 176538082, "count": 3, "remove": "e02-koa" },
+  "expected": "no reference to e02-koa anywhere after removal + regenerate",
+  "actual": "status still mentions it; up --dry-run still mentions it",
+  "reproduction": "node tests/falsifier/run.mjs --property removal-leaves-no-references --seed 176538082 --scenarios 1",
+  "status": "fixed",
+  "fixed_by": "between aa4751d and 9c5432f8d28; replayed on both, fails on the first and passes on the second"
+}

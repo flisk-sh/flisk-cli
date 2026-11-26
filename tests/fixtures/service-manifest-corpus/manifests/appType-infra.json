@@ -1,0 +1,7 @@
+{
+  "appName": "proxy-infra",
+  "appType": "infra",
+  "stack": "platform",
+  "port": 4100,
+  "schemaVersion": 1
+}

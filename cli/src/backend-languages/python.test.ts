@@ -1,0 +1,99 @@
+import { describe, expect, it } from "vitest";
+import { PYTHON_DEV_COMMAND, pythonBackendProvider } from "./python.js";
+
+function generatedFile(name: string, filename: string): string {
+  const file = (pythonBackendProvider.createFiles?.(name) ?? []).find(
+    (entry) => entry.filename === filename,
+  );
+  if (!file) throw new Error(`missing generated file ${filename}`);
+  return file.content;
+}
+
+describe("Python backend language module", () => {
+  it("exposes the provider id, label and dev command", () => {
+    expect(pythonBackendProvider.id).toBe("python");
+    expect(pythonBackendProvider.label).toBe("Python 3.12 + FastAPI");
+    expect(pythonBackendProvider.devCommand).toBe(PYTHON_DEV_COMMAND);
+  });
+
+  it("pins the dev command contract: uvicorn, app dir, host, port and reload", () => {
+    expect(PYTHON_DEV_COMMAND).toBe(
+      "uvicorn main:app --app-dir src --host 0.0.0.0 --port $" +
+        "{PORT:-4000} --reload --reload-dir src",
+    );
+  });
+
+  it("generates the expected configuration files", () => {
+    const files = pythonBackendProvider.createFiles?.("test-app") ?? [];
+    expect(files.map((file) => file.filename)).toEqual([
+      "pyproject.toml",
+      "src/main.py",
+      "tests/test_health.py",
+    ]);
+  });
+
+  it("includes the Python version and FastAPI dependencies in pyproject.toml", () => {
+    const projectConfig = generatedFile("test-app", "pyproject.toml");
+    expect(projectConfig).toContain('requires-python = ">=3.12"');
+    expect(projectConfig).toContain("fastapi");
+    expect(projectConfig).toContain("uvicorn");
+  });
+
+  it("uses the supplied project name in every generated file", () => {
+    expect(generatedFile("test-app", "pyproject.toml")).toContain('name = "test-app"');
+    expect(generatedFile("test-app", "src/main.py")).toContain('FastAPI(title="test-app")');
+    expect(generatedFile("test-app", "src/main.py")).toContain('"service": "test-app"');
+    expect(generatedFile("test-app", "tests/test_health.py")).toContain('"service": "test-app"');
+  });
+
+  it("generates the health and root endpoints with their response contract", () => {
+    const mainFile = generatedFile("test-app", "src/main.py");
+    expect(mainFile).toContain('@app.get("/health")');
+    expect(mainFile).toContain('@app.get("/")');
+    expect(mainFile).toContain('"status": "ok"');
+  });
+
+  it("generates health and root tests that assert the endpoint responses", () => {
+    const testFile = generatedFile("test-app", "tests/test_health.py");
+    expect(testFile).toContain("def test_health()");
+    expect(testFile).toContain('client.get("/health")');
+    expect(testFile).toContain("def test_root()");
+  });
+
+  it("makes /health check the database when DATABASE_URL is set (#683)", () => {
+    const mainFile = generatedFile("test-app", "src/main.py");
+    expect(mainFile).toContain("def check_database() -> str | None:");
+    expect(mainFile).toContain('os.environ.get("DATABASE_URL", "")');
+    // A wrong password must fail /health, so a driver connection runs SELECT 1 when one is installed.
+    expect(mainFile).toContain("from psycopg import connect");
+    expect(mainFile).toContain('execute("SELECT 1")');
+    // Prisma's ?schema= in the Flisk DATABASE_URL is dropped before libpq sees it.
+    expect(mainFile).toContain('if key != "schema"');
+    expect(mainFile).toContain("response.status_code = 503");
+    // No new dependency: the scaffold still installs only FastAPI and uvicorn.
+    expect(generatedFile("test-app", "pyproject.toml")).not.toContain("psycopg");
+    expect(generatedFile("test-app", "tests/test_health.py")).toContain(
+      "def test_health_reports_an_unreachable_database(monkeypatch)",
+    );
+  });
+
+  it("falls back to port 3000 for invalid generated-server PORT values", () => {
+    const mainFile = generatedFile("test-app", "src/main.py");
+    expect(mainFile).toContain("def read_port() -> int:");
+    expect(mainFile).toContain("except ValueError:");
+    expect(mainFile).toContain("1 <= port <= 65535");
+    expect(mainFile).toContain("return 3000");
+    expect(mainFile).toContain("port=read_port()");
+    expect(mainFile).not.toContain('port=int(os.environ.get("PORT", "3000"))');
+  });
+
+  it("ignores the standard Python cache, virtualenv and package build outputs", () => {
+    expect(pythonBackendProvider.gitignore).toEqual([
+      "__pycache__/",
+      ".venv/",
+      ".pytest_cache/",
+      "*.egg-info/",
+      ".ruff_cache/",
+    ]);
+  });
+});

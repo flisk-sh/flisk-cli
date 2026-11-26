@@ -1,0 +1,263 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import type { CheckResult, DoctorAction, HostPortPlan } from "../types/index.js";
+import type { HostInfo } from "./agent-host.js";
+import type { ColimaDiskReport } from "./colima-disk.js";
+import { CONTAINER_RUNTIME_CHECK } from "./constants.js";
+import type { DockerBuildCacheReport, DockerUsageReport } from "./docker-build-cache.js";
+import { type RankedFix, rankDoctorFixes } from "./doctor-fix-first.js";
+import type { DoctorCheckFn, DoctorCheckProgress } from "./doctor-runner.js";
+import { SCHEMA_VERSION } from "./machine-output.js";
+
+export interface DoctorError {
+  code: "USAGE" | "INTERNAL" | "ENV_UNREADABLE";
+  message: string;
+}
+
+export interface DoctorSummary {
+  passed: number;
+  skipped: number;
+  failed: number;
+}
+
+export interface DoctorReport {
+  schemaVersion: typeof SCHEMA_VERSION;
+  data: {
+    ready: boolean;
+    inProject: boolean;
+    checks: CheckResult[];
+    /** Counts of passed, skipped, and failed checks; present when --problems-only is requested. */
+    summary?: DoctorSummary;
+    /** Non-blocking warning messages, in check order; also present as isWarning entries in checks. */
+    warnings?: string[];
+    /** service.json files discovery skipped (invalid JSON or fields), as `status --json` reports them. */
+    skipped?: { file: string; reason: string }[];
+    capabilities?: string[];
+    commit?: string;
+    commitSha?: string;
+    /** Present only when a failing check has a runnable command: most blocking first. */
+    fixFirst?: RankedFix[];
+    /** Present only with `--fix`: every repair planned, applied, skipped or failed. */
+    actions?: DoctorAction[];
+    /** Number of repair actions that are repairable (planned or applied). */
+    repairableCount?: number;
+    /** Number of failed checks that need manual action. */
+    needsActionCount?: number;
+    repairable?: number;
+    needsAction?: number;
+    host?: HostInfo & { containerRuntimeReachable: boolean | null };
+    buildCache?: DockerBuildCacheReport;
+    /** Image bytes, reclaimable bytes and total bytes from `docker system df`; present when Docker answers. */
+    dockerUsage?: DockerUsageReport;
+    /** Colima disk file on the Mac against what Docker reports; present only on a running Colima VM. */
+    colimaDisk?: ColimaDiskReport;
+    ports?: {
+      http: { requested: number; chosen: number | null; explicit: boolean; reason: string };
+      https: { requested: number; chosen: number | null; explicit: boolean; reason: string };
+      postgres?: { requested: number; chosen: number | null; explicit: boolean; reason: string };
+    };
+    observed?: unknown;
+  };
+  errors: DoctorError[];
+}
+
+type DoctorCheck = () => CheckResult | Promise<CheckResult>;
+
+export async function timeDoctorCheck(check: DoctorCheck): Promise<CheckResult> {
+  const start = performance.now();
+  const result = await check();
+  return { ...result, durationMs: Math.round(performance.now() - start) };
+}
+
+/** Wait for concurrent probes to finish even if one throws, so they can release resources. */
+export async function collectDoctorChecks(
+  machineChecks: DoctorCheck[],
+  projectChecks: DoctorCheck[],
+  progress: DoctorCheckProgress = {},
+): Promise<{ checks: CheckResult[]; errors: DoctorError[] }> {
+  const checks: CheckResult[] = [];
+  const errors: DoctorError[] = [];
+  const append = (result: PromiseSettledResult<CheckResult>): void => {
+    if (result.status === "fulfilled") checks.push(result.value);
+    else
+      errors.push({
+        code: "INTERNAL",
+        message: result.reason instanceof Error ? result.reason.message : String(result.reason),
+      });
+  };
+  // Progress fires as each check settles, not after allSettled: a check that never finishes must
+  // stay visibly pending instead of stalling the whole report silently.
+  const runOne = (check: DoctorCheckFn) => {
+    progress.onCheckStart?.(check);
+    return timeDoctorCheck(check).then(
+      (result) => {
+        progress.onCheckFinish?.(check, result);
+        return result;
+      },
+      (reason: unknown) => {
+        progress.onCheckFinish?.(check);
+        throw reason;
+      },
+    );
+  };
+  for (const result of await Promise.allSettled(machineChecks.map(runOne))) {
+    append(result);
+  }
+  // Project checks do not depend on one another, so start them together. allSettled keeps every
+  // probe running if a sibling throws, and reports settled values in input order so callers see
+  // the same check order as the sequential implementation.
+  for (const result of await Promise.allSettled(projectChecks.map(runOne))) {
+    append(result);
+  }
+  return { checks, errors };
+}
+
+function containerRuntimeReachable(checks: CheckResult[]): boolean | null {
+  const runtime = checks.find((check) => check.name === CONTAINER_RUNTIME_CHECK);
+  return runtime ? runtime.didPass : null;
+}
+
+/**
+ * Usage errors are raised before any probe runs, so there is no report to describe. `data: null` keeps a consumer
+ * from reading placeholder values (`inProject: false`, `checks: []`) as measurements, the same shape `logs` uses.
+ */
+export interface DoctorUsageReport {
+  schemaVersion: typeof SCHEMA_VERSION;
+  data: null;
+  errors: DoctorError[];
+}
+
+export function createDoctorUsageReport(errors: DoctorError[]): DoctorUsageReport {
+  return { schemaVersion: SCHEMA_VERSION, data: null, errors };
+}
+
+/** Produce the same readiness decision for human and machine consumers. */
+export function createDoctorReport(
+  checks: CheckResult[],
+  inProject: boolean,
+  errors: DoctorError[] = [],
+  portPlan?: HostPortPlan | null,
+  host?: HostInfo,
+  capabilities?: string[],
+  buildCache?: DockerBuildCacheReport,
+  commit?: string,
+  options?: { problemsOnly?: boolean },
+): DoctorReport {
+  const fixFirst = rankDoctorFixes(checks);
+  const warnings = checks.filter((check) => check.isWarning).map((check) => check.message);
+  const observedOwner = checks.find((check) => check.observed !== undefined)?.observed;
+  const dockerBuildCacheCheck = checks.find((check) => check.name === "Docker Build Cache") as
+    | (CheckResult & { buildCache?: DockerBuildCacheReport; dockerUsage?: DockerUsageReport })
+    | undefined;
+  const detectedBuildCache = buildCache ?? dockerBuildCacheCheck?.buildCache;
+  const dockerUsage = dockerBuildCacheCheck?.dockerUsage;
+  const colimaDisk = (
+    checks.find((check) => check.name === "Colima Disk") as
+      | (CheckResult & { colimaDisk?: ColimaDiskReport })
+      | undefined
+  )?.colimaDisk;
+
+  let summary: DoctorSummary | undefined;
+  if (options?.problemsOnly) {
+    let passed = 0;
+    let skipped = 0;
+    let failed = 0;
+    for (const check of checks) {
+      if (check.isSkipped) {
+        skipped++;
+      } else if (check.didPass) {
+        passed++;
+      } else {
+        failed++;
+      }
+    }
+    summary = { passed, skipped, failed };
+  }
+
+  const reportedChecks = options?.problemsOnly
+    ? checks.filter((check) => !check.didPass && !check.isSkipped)
+    : checks;
+
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    data: {
+      ready:
+        errors.length === 0 &&
+        checks.every((check) => check.didPass || check.isSkipped || check.isWarning),
+      inProject,
+      checks: reportedChecks.map((check) => ({ durationMs: 0, ...check })),
+      ...(summary ? { summary } : {}),
+      ...(warnings.length > 0 ? { warnings } : {}),
+      ...(capabilities ? { capabilities } : {}),
+      ...(observedOwner ? { observed: observedOwner } : {}),
+      ...(fixFirst.length > 0 ? { fixFirst } : {}),
+      ...(detectedBuildCache ? { buildCache: detectedBuildCache } : {}),
+      ...(dockerUsage ? { dockerUsage } : {}),
+      ...(colimaDisk ? { colimaDisk } : {}),
+      ...(commit !== undefined ? { commit, commitSha: commit } : {}),
+      ...(host
+        ? {
+            host: {
+              ...host,
+              containerRuntimeReachable: containerRuntimeReachable(checks),
+              canUp: host.canUp && containerRuntimeReachable(checks) !== false,
+            },
+          }
+        : {}),
+      ...(portPlan !== undefined
+        ? {
+            ports: {
+              http: {
+                requested: portPlan?.requested?.ingressHttp ?? 80,
+                chosen: portPlan?.ingressHttp ?? null,
+                explicit: portPlan?.explicit?.ingressHttp ?? Boolean(process.env.FLISK_HTTP_PORT),
+                reason: portPlan?.reason?.ingressHttp ?? "port planning failed",
+              },
+              https: {
+                requested: portPlan?.requested?.ingressHttps ?? 443,
+                chosen: portPlan?.ingressHttps ?? null,
+                explicit: portPlan?.explicit?.ingressHttps ?? Boolean(process.env.FLISK_HTTPS_PORT),
+                reason: portPlan?.reason?.ingressHttps ?? "port planning failed",
+              },
+              ...(capabilities && !capabilities.includes("database")
+                ? {}
+                : {
+                    postgres: {
+                      requested: portPlan?.requested?.postgres ?? 5432,
+                      chosen: portPlan?.postgres ?? null,
+                      explicit:
+                        portPlan?.explicit?.postgres ?? Boolean(process.env.FLISK_POSTGRES_PORT),
+                      reason: portPlan?.reason?.postgres ?? "port planning failed",
+                    },
+                  }),
+            },
+          }
+        : {}),
+    },
+    errors,
+  };
+}
+
+/** 0: ready (warnings permitted), 1: blocking findings, 2: usage/internal failure. */
+export function getDoctorExitCode(report: DoctorReport): 0 | 1 | 2 {
+  if (report.errors.length > 0) return 2;
+  return report.data.ready ? 0 : 1;
+}
+
+/**
+ * Splits a `--fix` run into repairs and manual work. A failed check that a planned (dry-run) repair
+ * covers counts as repairable only; a failure that remains after an applied repair stays manual work; `needsActionCount` keeps the failures nobody will repair automatically.
+ */
+export function summarizeDoctorFix(
+  results: CheckResult[],
+  actions: DoctorAction[],
+): { repairableCount: number; needsActionCount: number } {
+  const repairs = actions.filter((a) => a.status === "applied" || a.status === "planned");
+  // Only a dry-run (`planned`) action covers a failure: an `applied` repair already ran before the
+  // checks, so a check that still fails afterwards is manual work.
+  const covered = new Set(repairs.filter((a) => a.status === "planned").map((a) => a.check));
+  const needsActionCount = results.filter(
+    (c) => !c.didPass && !c.isSkipped && !c.isWarning && !covered.has(c.name),
+  ).length;
+  return { repairableCount: repairs.length, needsActionCount };
+}

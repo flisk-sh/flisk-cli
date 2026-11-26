@@ -1,0 +1,198 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import { execFileSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { describe, expect, it } from "vitest";
+import {
+  cleanEnv,
+  createTempDir,
+  createTempProject,
+  installFakeContainerTools,
+  parseEnvelope,
+  runFlisk,
+} from "../index.js";
+
+describe("runFlisk", () => {
+  it("returns status, stdout and stderr of a finished run", () => {
+    const result = runFlisk(["--version"], { cwd: createTempDir() });
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
+    expect(result.stderr).toBe("");
+  });
+
+  it("returns a non-zero exit code instead of throwing", () => {
+    const result = runFlisk(["stacks", "--json"], { cwd: createTempDir() });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Could not find project root");
+  });
+
+  it("throws with the command and directory when the spawn fails", () => {
+    const missing = path.join(createTempDir(), "does-not-exist");
+    expect(() => runFlisk(["stacks"], { cwd: missing })).toThrow(
+      /Could not run `flisk stacks`.*ENOENT/s,
+    );
+  });
+
+  it("throws when the child is killed by the timeout", () => {
+    expect(() => runFlisk(["--version"], { cwd: createTempDir(), timeout: 1 })).toThrow(
+      /Could not run|did not exit normally/,
+    );
+  });
+
+  it("sets NO_COLOR and lets a test remove or override variables", () => {
+    const base = { cwd: createTempDir() };
+    const project = createTempProject();
+    const plain = runFlisk(["projects", "--json"], { cwd: project });
+    expect(plain.stdout).not.toContain("\u001b[");
+    expect(runFlisk(["--version"], { ...base, env: { NO_COLOR: undefined } }).status).toBe(0);
+  });
+});
+
+describe("cleanEnv", () => {
+  it("drops legacy TDK_* variables from the host and keeps the rest", () => {
+    const saved = {
+      TDK_EXTENSION_PATH: process.env.TDK_EXTENSION_PATH,
+      TDK_EXTENSION_SOURCE: process.env.TDK_EXTENSION_SOURCE,
+      FLISK_HTTP_PORT: process.env.FLISK_HTTP_PORT,
+    };
+    process.env.TDK_EXTENSION_PATH = "y";
+    process.env.TDK_EXTENSION_SOURCE = "/path/to/source";
+    process.env.FLISK_HTTP_PORT = "8080";
+    try {
+      const env = cleanEnv();
+      expect(env.PATH).toBe(process.env.PATH);
+      expect(env.TDK_EXTENSION_PATH).toBeUndefined();
+      expect(env.TDK_EXTENSION_SOURCE).toBeUndefined();
+      expect(env.FLISK_HTTP_PORT).toBe("8080");
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it("applies the extra values, and undefined removes one", () => {
+    const env = cleanEnv({ NO_COLOR: "1", PATH: undefined, FLISK_MODE: "on" });
+    expect(env.NO_COLOR).toBe("1");
+    expect(env.PATH).toBeUndefined();
+    expect(env.FLISK_MODE).toBe("on");
+  });
+});
+
+describe("runFlisk host environment", () => {
+  it("does not pass host TDK_* variables to the CLI", () => {
+    const saved = {
+      TDK_EXTENSION_PATH: process.env.TDK_EXTENSION_PATH,
+      TDK_EXTENSION_SOURCE: process.env.TDK_EXTENSION_SOURCE,
+    };
+    process.env.TDK_EXTENSION_PATH = "/from/host";
+    process.env.TDK_EXTENSION_SOURCE = "/from/host/source";
+    try {
+      const result = runFlisk(["projects", "--json"], { cwd: createTempProject() });
+      expect(result.stderr).not.toContain("TDK_EXTENSION_PATH");
+      expect(result.stderr).not.toContain("TDK_EXTENSION_SOURCE");
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+});
+
+describe("createTempProject", () => {
+  it("writes project.json, stacks, resources and generated files from the spec", () => {
+    const root = createTempProject({
+      stacks: { api: { gateway: { appType: "backend", port: 3100 } } },
+      resources: { "worker/queue": { appType: "worker" }, broken: "{invalid\n" },
+      generated: ["spec.master"],
+      files: { "notes/readme.txt": "hi" },
+    });
+
+    expect(JSON.parse(fs.readFileSync(path.join(root, ".flisk", "project.json"), "utf-8"))).toEqual(
+      {},
+    );
+    expect(
+      JSON.parse(fs.readFileSync(path.join(root, "services/api/gateway/service.json"), "utf-8")),
+    ).toEqual({ appName: "gateway", stack: "api", appType: "backend", port: 3100 });
+    expect(
+      JSON.parse(fs.readFileSync(path.join(root, "services/worker/queue/service.json"), "utf-8")),
+    ).toEqual({ appName: "queue", appType: "worker" });
+    expect(fs.readFileSync(path.join(root, "services/broken/service.json"), "utf-8")).toBe(
+      "{invalid\n",
+    );
+    expect(fs.readFileSync(path.join(root, ".flisk/.flisk-out/spec.master"), "utf-8")).toBe("");
+    expect(fs.readFileSync(path.join(root, "notes/readme.txt"), "utf-8")).toBe("hi");
+  });
+
+  it("omits the .flisk folder when projectJson is null, so flisk finds no project", () => {
+    const root = createTempProject({ projectJson: null });
+    expect(fs.existsSync(path.join(root, ".flisk"))).toBe(false);
+    const result = runFlisk(["stacks", "--json"], { cwd: root });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Could not find project root");
+  });
+
+  const created: string[] = [];
+  it("creates a project that flisk can read", () => {
+    const root = createTempProject({ stacks: { api: { gateway: { appType: "backend" } } } });
+    created.push(root);
+    const envelope = parseEnvelope(runFlisk(["stacks", "--json"], { cwd: root }).stdout);
+    expect(envelope.data.stacks).toMatchObject([{ name: "api", resourceCount: 1 }]);
+  });
+
+  it("removes the project once the test has finished", () => {
+    expect(created).toHaveLength(1);
+    expect(fs.existsSync(created[0] as string)).toBe(false);
+  });
+});
+
+describe("parseEnvelope", () => {
+  const ok = JSON.stringify({ schemaVersion: 1, data: { x: 1 }, errors: [] });
+
+  it("returns the parsed envelope", () => {
+    expect(parseEnvelope(`${ok}\n`)).toEqual({ schemaVersion: 1, data: { x: 1 }, errors: [] });
+  });
+
+  it("rejects stdout that is not JSON", () => {
+    expect(() => parseEnvelope("Could not find project root\n")).toThrow(/not JSON/);
+  });
+
+  it("rejects more than one line", () => {
+    expect(() => parseEnvelope(`${ok}\n${ok}\n`)).toThrow(/single JSON line/);
+    expect(() => parseEnvelope("")).toThrow();
+  });
+
+  it("rejects JSON without the envelope keys", () => {
+    expect(() => parseEnvelope(JSON.stringify({ schemaVersion: 1, data: null }))).toThrow();
+    expect(() =>
+      parseEnvelope(JSON.stringify({ schemaVersion: 1, data: 1, errors: [], x: 1 })),
+    ).toThrow();
+    expect(() => parseEnvelope("null")).toThrow();
+  });
+});
+
+describe("installFakeContainerTools", () => {
+  it("stubs docker and tilt on PATH, answering version and liveness probes without daemon", () => {
+    const originalPath = process.env.PATH;
+    const restore = installFakeContainerTools();
+    try {
+      expect(process.env.PATH).not.toBe(originalPath);
+      const dockerVer = execFileSync("docker", ["--version"], { encoding: "utf8" });
+      expect(dockerVer).toContain("Docker version 27.0.0");
+      const composeVer = execFileSync("docker", ["compose", "version", "--short"], {
+        encoding: "utf8",
+      });
+      expect(composeVer.trim()).toBe("2.29.0");
+      const dockerInfo = execFileSync("docker", ["info"], { encoding: "utf8" });
+      expect(dockerInfo.trim()).toBe("stub");
+      const tiltVer = execFileSync("tilt", ["version"], { encoding: "utf8" });
+      expect(tiltVer).toContain("v0.37.8");
+    } finally {
+      restore();
+    }
+    expect(process.env.PATH).toBe(originalPath);
+  });
+});

@@ -1,0 +1,103 @@
+# Platforms axis group gate (#1302, epic #1279). The windows leg runs tests/e2e/platforms/windows (W1-W6) on the native
+# Windows runner: typecheck, build and CLI help, platform unit tests, the native Windows refusal contract, the one-command
+# demo contract, and a fresh clone whose npm lifecycle scripts must work without POSIX tools. It runs on pull requests and
+# the merge queue, uses no secrets (suite.json needsSecrets is empty) and replaces the retired windows-smoke workflow as a
+# required check. The job name e2e-platforms is the required-check context.
+name: 🔀 PR | E2E | Platforms gate
+
+on:
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-platforms-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  docs:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 2
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      docs_only: ${{ steps.detect.outputs.docs_only }}
+      examples_only: ${{ steps.detect.outputs.examples_only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - id: detect
+        uses: ./.github/actions/docs-only # zizmor: ignore[self-repository] composite action resolves from this commit
+
+  # A queue entry runs this gate only when it changes a file the suite declares in tests/e2e/platforms/windows/suite.json `paths`; the diff is the queued
+  # commit against the queue base, so it lists exactly what this pull request changed. Anything unreadable runs the gate.
+  queue-paths:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 2
+    if: github.event_name == 'merge_group'
+    permissions:
+      contents: read
+    outputs:
+      relevant: ${{ steps.paths.outputs.relevant }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - id: paths
+        env:
+          BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: scripts/e2e/queue-suite-paths.sh tests/e2e/platforms/windows/suite.json
+
+  e2e-platforms:
+    name: e2e-platforms
+    runs-on: windows-latest
+    timeout-minutes: 20
+    needs: [docs, queue-paths]
+    # Skip on docs-only and bring-your-own-example-only pull requests, and on a queue entry that changes no file the suite reads;
+    # a skipped job still satisfies required checks.
+    if: ${{ !cancelled() && needs.docs.result != 'failure' && needs.docs.outputs.docs_only != 'true' && needs.docs.outputs.examples_only != 'true' && needs.queue-paths.outputs.relevant != 'false' }}
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.23.5
+
+      - name: Install dependencies
+        # --legacy-peer-deps: vitest 5.1.0 (2026-11-02) makes npm 10.9.9 fail on its optional peers with
+        # "Cannot read properties of null (reading 'edgesOut')". The repo has no package-lock.json, so every run resolves afresh.
+        run: npm install --ignore-scripts --legacy-peer-deps
+
+      # The windows leg (tests/e2e/platforms/windows: suite.json, run.sh, native-refusal.ps1, demo-refusal.ps1, demo-native.ps1, W6 clone install), run in order.
+      - name: Typecheck, build and run CLI help
+        shell: bash
+        run: tests/e2e/platforms/windows/run.sh W1
+
+      - name: Run Windows platform unit tests
+        shell: bash
+        run: tests/e2e/platforms/windows/run.sh W2
+
+      - name: Verify native Windows CLI contract
+        shell: bash
+        run: tests/e2e/platforms/windows/run.sh W3
+
+      - name: Verify native Windows demo contract
+        shell: bash
+        run: tests/e2e/platforms/windows/run.sh W4
+
+      - name: Run the demo without Docker on native Windows
+        shell: bash
+        run: tests/e2e/platforms/windows/run.sh W5
+
+      - name: Install a fresh clone with lifecycle scripts enabled
+        shell: bash
+        run: tests/e2e/platforms/windows/run.sh W6

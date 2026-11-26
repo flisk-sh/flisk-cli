@@ -1,0 +1,124 @@
+name: 🤖 BOT | Community | Issue claims
+
+# "I'll take this" on an issue assigns the commenter and adds the `claimed` label, so
+# open issues show who is on them. A daily sweep nudges claims with no PR after 14 days
+# and releases them after 21. It only touches comments and assignees; it never checks
+# out code, and comment text is matched in JS, never passed to a shell.
+
+on:
+  issue_comment: # zizmor: ignore[dangerous-triggers] never checks out code; the comment body is only matched as text in JS, never run or passed to a shell
+    types: [created]
+  schedule:
+    # GitHub starts daily scheduled runs about 7-10 h after their cron time (#3911), so this
+    # cron is set 8 h early and the run really starts around 06:17 UTC.
+    - cron: "17 22 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  claim:
+    name: Assign the commenter
+    if: >-
+      github.event_name == 'issue_comment' &&
+      !github.event.issue.pull_request &&
+      github.event.issue.state == 'open' &&
+      github.event.comment.user.type == 'User'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 2
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          retries: 3 # transient GitHub 5xx (scripts/scores/github-script-retries.mjs)
+          script: |
+            const { owner, repo } = context.repo;
+            const issue = context.payload.issue;
+            const user = context.payload.comment.user.login;
+            const text = context.payload.comment.body || '';
+            // A claim is the opening line of the comment, so a long comment that starts with
+            // "I'd like to take on this issue." and then lays out a plan still counts, while a
+            // discussion that only mentions "take" later on does not. Greetings, @mentions and
+            // markdown emphasis in front of it are skipped.
+            const head = text.replace(/[*_`>#]/g, '').trim()
+              .replace(/^(?:(?:hi|hello|hey|hii|dear)\b[,!.]?\s*)?(?:(?:@[\w-]+|and|&|flisk|maintainers|team|there|all)[,!.]?\s*)*/i, '')
+              .split(/\n|(?<=[.!?])\s/)[0].slice(0, 200);
+            const VERB = '(?:take|work on|try|do|fix|pick up|tackle|have a go at|handle|contribute to|own|take ownership of|attempt)';
+            const CLAIM = new RegExp('^(?:/assign\\b|' +
+              `(?:i['’]?ll|i will|i can|let me|can i|may i|could i|i['’]?d (?:like|love) to|i would (?:like|love) to|i want to|i['’]?m (?:happy|keen|interested) to)\\s+${VERB}|` +
+              "(?:i would|i['’]?d) (?:like|love) this(?: one)?|" +
+              "(?:(?:can|could|would) (?:you|u) (?:please )?)?assign (?:it |this )?(?:to )?me|" +
+              "(?:take|taking|claim|claiming|please assign|working on|i['’]?m (?:on it|taking|working on))\\b)", 'i');
+            if (!CLAIM.test(head)) return;
+            if (issue.labels.some((l) => l.name === 'tracking')) return;
+
+            const taken = issue.assignees.map((a) => a.login);
+            if (taken.includes(user)) return;
+            if (taken.length) {
+              await github.rest.issues.createComment({ owner, repo, issue_number: issue.number,
+                body: `Thanks @${user}. This one is already taken by @${taken[0]}. If it goes quiet we release it after 3 weeks. In the meantime, have a look at other [open good first issues](https://github.com/${owner}/${repo}/issues?q=is%3Aissue+is%3Aopen+no%3Aassignee+label%3A%22good+first+issue%22).` });
+              return;
+            }
+            await github.rest.issues.addAssignees({ owner, repo, issue_number: issue.number, assignees: [user] });
+            try {
+              await github.rest.issues.addLabels({ owner, repo, issue_number: issue.number, labels: ['claimed'] });
+            } catch (e) {
+              // Label missing: create it once, then retry.
+              await github.rest.issues.createLabel({ owner, repo, name: 'claimed', color: 'fbca04', description: 'Someone is working on this' }).catch(() => {});
+              await github.rest.issues.addLabels({ owner, repo, issue_number: issue.number, labels: ['claimed'] }).catch(() => {});
+            }
+            await github.rest.issues.createComment({ owner, repo, issue_number: issue.number,
+              body: `It is yours, @${user}! 🙌 Open a PR that says \`Fixes #${issue.number}\` when you are ready, and a draft PR is fine if you want early feedback. Please sign off your commits (\`git commit -s\`). If your plans change, just say so and we will free it up for someone else. No problem at all.` });
+
+  sweep:
+    name: Nudge and release quiet claims
+    if: github.event_name != 'issue_comment'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      issues: write
+      pull-requests: read
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          retries: 3 # transient GitHub 5xx (scripts/scores/github-script-retries.mjs)
+          script: |
+            const { owner, repo } = context.repo;
+            const DAY = 86400000;
+            const NUDGE = '<!-- flisk:claim-nudge -->';
+            const MAINTAINERS = ['kburym', 'odykyi'];
+            const claimed = await github.paginate(github.rest.issues.listForRepo,
+              { owner, repo, state: 'open', labels: 'claimed', per_page: 100 });
+            for (const issue of claimed) {
+              if (issue.pull_request || !issue.assignees.length) continue;
+              const who = issue.assignees[0].login;
+              if (MAINTAINERS.includes(who)) continue;
+
+              // An open PR that mentions this issue counts as progress.
+              const prs = (await github.rest.search.issuesAndPullRequests({
+                q: `repo:${owner}/${repo} is:pr is:open author:${who} ${issue.number} in:title,body`, per_page: 1 })).data.total_count;
+              if (prs > 0) continue;
+
+              const events = await github.paginate(github.rest.issues.listEvents,
+                { owner, repo, issue_number: issue.number, per_page: 100 });
+              const assigned = events.filter((e) => e.event === 'assigned' && e.assignee?.login === who).pop();
+              const comments = await github.paginate(github.rest.issues.listComments,
+                { owner, repo, issue_number: issue.number, per_page: 100 });
+              const lastByWho = comments.filter((c) => c.user.login === who).pop();
+              const since = Math.max(
+                assigned ? Date.parse(assigned.created_at) : 0,
+                lastByWho ? Date.parse(lastByWho.created_at) : 0);
+              const idle = (Date.now() - since) / DAY;
+              const nudged = comments.some((c) => c.body && c.body.includes(NUDGE));
+
+              if (idle >= 21 && nudged) {
+                await github.rest.issues.removeAssignees({ owner, repo, issue_number: issue.number, assignees: [who] });
+                await github.rest.issues.removeLabel({ owner, repo, issue_number: issue.number, name: 'claimed' }).catch(() => {});
+                await github.rest.issues.createComment({ owner, repo, issue_number: issue.number,
+                  body: `Freeing this one up, @${who}, since we have not seen a PR in 3 weeks. That is completely fine, life happens. You are welcome to claim it again any time, and anyone else can pick it up now.` });
+              } else if (idle >= 14 && !nudged) {
+                await github.rest.issues.createComment({ owner, repo, issue_number: issue.number,
+                  body: `${NUDGE}\nHi @${who}, how is this going? A draft PR is welcome at any stage, and if you are stuck, say where and we will help. If we hear nothing, we will release the issue in about a week so someone else can take it.` });
+              }
+            }

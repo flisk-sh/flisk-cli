@@ -1,0 +1,1105 @@
+{
+	"$comment": "Every CI job, its tier and whether branch protection requires it. Checked by scripts/check-ci-inventory.mjs. Tracker: #1279; this file: #1281.",
+	"jobs": [
+		{
+			"workflow": "ai-conflict-buttons.yml",
+			"job": "comment",
+			"tier": "bot",
+			"required": false,
+			"reason": "Conflict buttons on PR events; event types tracked in #1286",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "ai-conflict-buttons.yml",
+			"job": "backfill",
+			"tier": "bot",
+			"required": false,
+			"reason": "Manual backfill of conflict buttons",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "ai-review-buttons.yml",
+			"job": "append",
+			"tier": "bot",
+			"required": false,
+			"reason": "Review buttons on PR events; event types tracked in #1286",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "ai-review-buttons.yml",
+			"job": "backfill",
+			"tier": "bot",
+			"required": false,
+			"reason": "Manual backfill of review buttons",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "ai-spec-buttons.yml",
+			"job": "append",
+			"tier": "bot",
+			"required": false,
+			"reason": "Spec buttons on issue events; event types tracked in #1286",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "benchmarks.yml",
+			"job": "measure",
+			"tier": "report",
+			"required": false,
+			"reason": "Warm and cold start benchmark; nightly, release and manual; suite tests/e2e/scale/benchmarks (#1285, #1301)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "benchmarks.yml",
+			"job": "publish",
+			"tier": "report",
+			"required": false,
+			"reason": "Publishes the benchmark report",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "byo-template-e2e.yml",
+			"job": "e2e",
+			"tier": "e2e",
+			"required": false,
+			"reason": "Reusable workflow called by flisk-sh/flisk-template-* repositories: one template through flisk up and Traefik (#1965)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "cancel-dead-queue-runs.yml",
+			"job": "cancel",
+			"tier": "bot",
+			"required": false,
+			"reason": "Cancels runs of merge queue batches whose branch GitHub deleted; they hold runners and block the live batches",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "stalled-merge-queue.yml",
+			"job": "unstall",
+			"tier": "bot",
+			"required": false,
+			"reason": "Re-queues or dequeues the head entry of a merge queue that stalled with entries but no batch building them (#5105); calls the shared flisk-sh/.github workflow",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "merge-queue-watchdog.yml",
+			"job": "watchdog",
+			"tier": "bot",
+			"required": false,
+			"reason": "Ejects a merge queue head whose batches failed twice or that held the head over 60 minutes, and comments the failing run on the pull request (#5044)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "rerun-startup-failed-runs.yml",
+			"job": "rerun",
+			"tier": "bot",
+			"required": false,
+			"reason": "Re-runs a run that ended in startup_failure once, so a pull request left with no checks recovers on its own (#3944)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "ci.yml",
+			"job": "changes",
+			"tier": "gate",
+			"required": false,
+			"reason": "Single change-detection job for the run; sets docs_only for the other jobs (#1283)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "ci.yml",
+			"job": "quick-checks",
+			"tier": "gate",
+			"required": false,
+			"reason": "Spell check, docs checks (docs-only PRs included), the DCO sign-off check and the secret scan on pull requests, in one job (#3892)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "ci.yml",
+			"job": "lint",
+			"tier": "gate",
+			"required": false,
+			"reason": "Biome lint, typecheck, fuzz tests and the offline published service schema check on every PR, in one job (#3892)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "ci.yml",
+			"job": "test-macos",
+			"tier": "test",
+			"required": false,
+			"reason": "The TypeScript unit suite on a clean macOS runner, so a test that only passes on Linux is caught when added (#2898)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "ci.yml",
+			"job": "test",
+			"tier": "test",
+			"required": false,
+			"reason": "TypeScript tests on every PR",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "ci.yml",
+			"job": "repo-scripts",
+			"tier": "test",
+			"required": false,
+			"reason": "make test-shell: shell syntax, static repo checks and Node script tests, in parallel with the unit tests (#3836)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "ci.yml",
+			"job": "pr-summary",
+			"tier": "bot",
+			"required": false,
+			"reason": "Creates or edits the one PR comment with unit counts, E2E results, coverage and links; pull requests only (#1385)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "ci.yml",
+			"job": "package",
+			"tier": "test",
+			"required": false,
+			"reason": "Builds and packs the CLI once per run (package-smoke installs the tarball, #1283) and smoke-tests the pinned published npm package",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "ci.yml",
+			"job": "package-smoke",
+			"tier": "test",
+			"required": false,
+			"reason": "Packs and installs the CLI on every PR",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "ci.yml",
+			"job": "npm-registry-audit",
+			"tier": "test",
+			"required": false,
+			"reason": "Audits the pinned published tarball's contents; not gated, since no PR can change a published version",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "ci.yml",
+			"job": "dependency-review",
+			"tier": "security",
+			"required": false,
+			"reason": "Dependency review on lockfile changes; runs when vars.DEPENDENCY_REVIEW is true (#1284)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "ci.yml",
+			"job": "workflow-audit",
+			"tier": "gate",
+			"required": false,
+			"reason": "Workflow audit on workflow changes",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "e2e-premium-endpoint.yml",
+			"job": "live",
+			"tier": "e2e",
+			"required": false,
+			"reason": "Nightly live check that the default premium endpoint reaches the distribution worker; granted-key case needs the FLISK_E2E_LICENSE_KEY secret",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "competitor-gap-issues.yml",
+			"job": "sync",
+			"tier": "bot",
+			"required": false,
+			"reason": "Dry run by default: prints the competitor feature gaps that clear the ICE quick-win bar and, only when applied, opens at most 5 issues and closes the fixed ones",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "gel.yml",
+			"job": "gel",
+			"tier": "gate",
+			"required": false,
+			"reason": "GEL guards (flisk-sh/gel, pinned by SHA): secret scan, pinned actions, workflow permissions, dead links, done-without-green; report mode, on every PR, main push and weekly so Cilytics keeps a record",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "security-alert-issues.yml",
+			"job": "sync",
+			"tier": "bot",
+			"required": false,
+			"reason": "Opens one issue per open Dependabot or code-scanning alert so contributors can pick the fix up; closes it when the alert is fixed",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "security.yml",
+			"job": "changes",
+			"tier": "gate",
+			"required": false,
+			"reason": "Scanner change detection on PRs; sets code, deps and infra for the scanners (#1284)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "security.yml",
+			"job": "dependency-scans",
+			"tier": "security",
+			"required": false,
+			"reason": "Trivy container/IaC scan and OSV-Scanner lockfile scan in one job (#5111); path-gated on PRs (#1284)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "security.yml",
+			"job": "semgrep",
+			"tier": "security",
+			"required": false,
+			"reason": "SAST; path-gated on PRs (#1284)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "ci.yml",
+			"job": "pr-summary-review",
+			"tier": "gate",
+			"required": true,
+			"reason": "Rejects PRs without a plain-language change summary and completed verification notes",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "ci.yml",
+			"job": "summary",
+			"tier": "gate",
+			"required": true,
+			"reason": "Aggregate gate: fails when a selected job failed or a required e2e gate is missing or failed; required (#1302)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "code-health.yml",
+			"job": "health",
+			"tier": "report",
+			"required": false,
+			"reason": "Code health report on PRs; push trigger tracked in #1285",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "typescript-compiler-benchmark.yml",
+			"job": "benchmark",
+			"tier": "report",
+			"required": false,
+			"reason": "Experimental, non-blocking tsc vs tsgo vs ts-rust benchmark; evidence only, no compiler change",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "zap.yml",
+			"job": "zap-full-scan",
+			"tier": "security",
+			"required": false,
+			"reason": "Nightly OWASP ZAP full scan of the no-Docker demo, reusing demo journey cases N1-N3; fails on findings not in docs/security/zap-rules.tsv",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "codeql.yml",
+			"job": "analyze",
+			"tier": "security",
+			"required": false,
+			"reason": "Code scanning in one job: javascript-typescript and actions on every PR (the main ruleset waits for both categories), plus the unofficial Starlark analyzer (flisk-sh/codeql-starlark; report-only SARIF) when a PR touches Starlark; weekly",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "discord-founding-role.yml",
+			"job": "grant",
+			"tier": "bot",
+			"required": false,
+			"reason": "Grants the Discord Founding Contributor role for merged PR links posted in #start-here, and syncs tier and belt roles hourly",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "contributor-merged.yml",
+			"job": "thank",
+			"tier": "bot",
+			"required": false,
+			"reason": "Thank-you note on merged PRs; types tracked in #1286",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "contributor-welcome.yml",
+			"job": "welcome",
+			"tier": "bot",
+			"required": false,
+			"reason": "Welcome note on new PRs and issues; concurrency tracked in #1286",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "contributor-welcome.yml",
+			"job": "not-fixed",
+			"tier": "bot",
+			"required": false,
+			"reason": "Note on issues that are not fixed",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "dependabot-automerge.yml",
+			"job": "automerge",
+			"tier": "bot",
+			"required": false,
+			"reason": "Enables squash auto-merge on Dependabot PRs once required checks pass",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "e2e-scale.yml",
+			"job": "docs",
+			"tier": "gate",
+			"required": false,
+			"reason": "Detects docs-only PRs for the scale gate (#1302)",
+			"owner": "maintainers",
+			"exempt": {
+				"check-name": "#1283"
+			}
+		},
+		{
+			"workflow": "e2e-scale.yml",
+			"job": "queue-paths",
+			"tier": "gate",
+			"required": false,
+			"reason": "Skips the scale gate on a merge queue entry that changes no file the suite declares in tests/e2e/scale/erp/suite.json paths",
+			"owner": "maintainers",
+			"exempt": {
+				"check-name": "#1283"
+			}
+		},
+		{
+			"workflow": "e2e-scale.yml",
+			"job": "e2e-scale",
+			"tier": "e2e",
+			"required": false,
+			"reason": "ERP scale gate on the merge queue (5-service smoke scope); required since the #1302 cutover; suite tests/e2e/scale/erp",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "e2e-examples.yml",
+			"job": "docs",
+			"tier": "gate",
+			"required": false,
+			"reason": "Detects docs-only PRs for the examples gate (#1302)",
+			"owner": "maintainers",
+			"exempt": {
+				"check-name": "#1283"
+			}
+		},
+		{
+			"workflow": "e2e-examples.yml",
+			"job": "e2e-examples",
+			"tier": "e2e",
+			"required": false,
+			"reason": "Examples group gate, default leg; runs tests/e2e/examples/default; required since the #1302 cutover",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "hall-of-fame.yml",
+			"job": "update",
+			"tier": "bot",
+			"required": false,
+			"reason": "Contributor table on PR events; types tracked in #1286",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "issue-claims.yml",
+			"job": "claim",
+			"tier": "bot",
+			"required": false,
+			"reason": "Assigns claimed issues",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "issue-claims.yml",
+			"job": "sweep",
+			"tier": "bot",
+			"required": false,
+			"reason": "Releases quiet claims on a schedule",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "journey-map.yml",
+			"job": "map",
+			"tier": "bot",
+			"required": false,
+			"reason": "Refreshes the journey map",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "e2e-demo-kiri.yml",
+			"job": "demo-kiri",
+			"tier": "e2e",
+			"required": false,
+			"reason": "Manual run of the one-command demo (D1-D4) on the Kiri engine",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "nightly-adopters.yml",
+			"job": "adopter",
+			"tier": "e2e",
+			"required": false,
+			"reason": "Nightly integration testing against pinned real-world adopter repositories and projects that declined a Flisk PR (#3100)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "nightly-adopters.yml",
+			"job": "report",
+			"tier": "bot",
+			"required": false,
+			"reason": "Opens one issue per failing nightly adopter, comments on repeat failures and closes it once the adopter passes",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "north-star.yml",
+			"job": "measure",
+			"tier": "report",
+			"required": false,
+			"reason": "Weekly north-star measurement with GEL (warm start, Flisk vs Docker Compose); calls the GEL reusable workflow (#5041)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "node-pins.yml",
+			"job": "node-pins",
+			"tier": "report",
+			"required": false,
+			"reason": "Fails when a pinned node-version is behind the newest release of its Node line (scheduled)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "npm-downloads-graph.yml",
+			"job": "graph",
+			"tier": "report",
+			"required": false,
+			"reason": "Downloads graph (scheduled)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "oss-score-gate.yml",
+			"job": "gate",
+			"tier": "gate",
+			"required": false,
+			"reason": "OSS score gate on every PR; concurrency tracked in #1286",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "pr-area-labels.yml",
+			"job": "label",
+			"tier": "bot",
+			"required": false,
+			"reason": "Area labels from changed paths",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "publish-golden-images.yml",
+			"job": "publish",
+			"tier": "release",
+			"required": false,
+			"reason": "Manual push of the golden base images to a registry (#2827, #2828)",
+			"owner": "maintainers",
+			"exempt": {
+				"check-name": "#1279"
+			}
+		},
+		{
+			"workflow": "publish-cli-image.yml",
+			"job": "image",
+			"tier": "release",
+			"required": false,
+			"reason": "Builds, signs and pushes the flisk CLI image from a published release; called by release-binaries.yml publish-image or run by hand",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "publish-service-schema.yml",
+			"job": "publish",
+			"tier": "release",
+			"required": false,
+			"reason": "Publishes the service schema and fails when PAGES_SYNC_TOKEN is missing (#4202)",
+			"owner": "maintainers",
+			"exempt": {
+				"check-name": "#1279"
+			}
+		},
+		{
+			"workflow": "published-schema-drift.yml",
+			"job": "drift",
+			"tier": "report",
+			"required": false,
+			"reason": "Nightly check that the published schema still has the source schema's property names (#4202)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "publish-flisk-import.yml",
+			"job": "token",
+			"tier": "gate",
+			"required": false,
+			"reason": "Checks NPM_TOKEN and skips publishing with a warning when it is missing (#1288)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "publish-flisk-import.yml",
+			"job": "build",
+			"tier": "release",
+			"required": false,
+			"reason": "Builds flisk-import (manual)",
+			"owner": "maintainers",
+			"exempt": {
+				"check-name": "#1279"
+			}
+		},
+		{
+			"workflow": "publish-flisk-import.yml",
+			"job": "publish",
+			"tier": "release",
+			"required": false,
+			"reason": "Publishes flisk-import (manual)",
+			"owner": "maintainers",
+			"exempt": {
+				"check-name": "#1279"
+			}
+		},
+		{
+			"workflow": "publish-existing-npm-to-github-packages.yml",
+			"job": "publish",
+			"tier": "release",
+			"required": false,
+			"reason": "Backfills and verifies an existing public npm version in GitHub Packages (manual)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "discord-release-post.yml",
+			"job": "post",
+			"tier": "release",
+			"required": false,
+			"reason": "Posts one released version in the Discord releases channel, run by hand",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "release-binaries.yml",
+			"job": "changes",
+			"tier": "release",
+			"required": false,
+			"reason": "Decides whether release binaries build on a PR",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "release-binaries.yml",
+			"job": "build",
+			"tier": "release",
+			"required": false,
+			"reason": "Builds release binaries",
+			"owner": "maintainers",
+			"exempt": {
+				"check-name": "#1279"
+			}
+		},
+		{
+			"workflow": "release-binaries.yml",
+			"job": "cli-image",
+			"tier": "e2e",
+			"required": false,
+			"reason": "Builds the CLI image from the release candidate and runs tests/e2e/platforms/container-image on it",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "release-binaries.yml",
+			"job": "publish-image",
+			"tier": "release",
+			"required": false,
+			"reason": "Calls publish-cli-image.yml to push the CLI image after the release is published",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "release-binaries.yml",
+			"job": "publish-github-packages",
+			"tier": "release",
+			"required": false,
+			"reason": "Publishes the already-built release tarball to GitHub Packages",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "publish-mcp-registry.yml",
+			"job": "publish-mcp-registry",
+			"tier": "release",
+			"required": false,
+			"reason": "Lists the published npm version in the MCP Registry after the release run completes (#3938); rerun by hand with -f version=<version>",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "release-binaries.yml",
+			"job": "publish-mcp-registry",
+			"tier": "release",
+			"required": false,
+			"reason": "Calls publish-mcp-registry.yml via workflow_call to list the released npm version in the MCP Registry; runs in parallel with publish-image after publish (#3980)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "release-binaries.yml",
+			"job": "windows-binary",
+			"tier": "e2e",
+			"required": false,
+			"reason": "Checks the Windows release candidate through tests/e2e/platforms/windows-binary (#1300)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "release-binaries.yml",
+			"job": "publish",
+			"tier": "release",
+			"required": false,
+			"reason": "Publishes the npm package and binaries after release",
+			"owner": "maintainers",
+			"exempt": {
+				"check-name": "#1279"
+			}
+		},
+		{
+			"workflow": "release-binaries.yml",
+			"job": "tag-bumped-release",
+			"tier": "release",
+			"required": false,
+			"reason": "Tags the merged version bump and publishes the GitHub release draft (#1657)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "python-tests.yml",
+			"job": "engine-python-tests",
+			"tier": "test",
+			"required": false,
+			"reason": "Runs the engine's Python test suite, which no other workflow covers",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "release-binaries.yml",
+			"job": "post-toolradar",
+			"tier": "release",
+			"required": false,
+			"reason": "Posts the public release on Toolradar, off the release's critical path",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "release-binaries.yml",
+			"job": "post-publish-smoke",
+			"tier": "release",
+			"required": false,
+			"reason": "Installs the just-published npm version globally and checks flisk --version and the released commit's bundle marker (#3090)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "sign-release.yml",
+			"job": "sign",
+			"tier": "release",
+			"required": false,
+			"reason": "Signs the checksums of an already-published version that release-binaries.yml left unsigned (Scorecard Signed-Releases)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "release-candidate.yml",
+			"job": "version",
+			"tier": "release",
+			"required": false,
+			"reason": "Reads the candidate version from the ref for the per-version concurrency groups (#3093)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "release-candidate.yml",
+			"job": "plan",
+			"tier": "release",
+			"required": false,
+			"reason": "Builds the resource-type matrix for the release trigger (#1387)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "release-candidate.yml",
+			"job": "package",
+			"tier": "release",
+			"required": false,
+			"reason": "Packs this commit's CLI, checks the tarball in a clean container, uploads it (#1387)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "release-candidate.yml",
+			"job": "quickstart",
+			"tier": "release",
+			"required": false,
+			"reason": "README quickstart (Q1-Q4) against the candidate tarball (#1387)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "release-candidate.yml",
+			"job": "resource-types",
+			"tier": "release",
+			"required": false,
+			"reason": "Release-trigger resource-type suites against the candidate tarball (#1387)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "release-candidate.yml",
+			"job": "release",
+			"tier": "release",
+			"required": false,
+			"reason": "Dispatches the release workflow from a release/* branch once the plan passes (#2945)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "release-candidate.yml",
+			"job": "gate",
+			"tier": "release",
+			"required": false,
+			"reason": "Fails unless every candidate job succeeded; release-binaries.yml publish reads this run (#1387)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "release-one-click.yml",
+			"job": "start",
+			"tier": "release",
+			"required": false,
+			"reason": "Manual one-click release: creates the next release/* branch on a green main commit and dispatches release-candidate.yml (#3226)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "scorecard.yml",
+			"job": "scorecard",
+			"tier": "report",
+			"required": false,
+			"reason": "OpenSSF Scorecard; weekly, push trigger tracked in #1285",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "sync-flisk-skills.yml",
+			"job": "sync",
+			"tier": "bot",
+			"required": false,
+			"reason": "Syncs shared skills (manual or dispatch)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "refresh-image-digests.yml",
+			"job": "refresh",
+			"tier": "bot",
+			"required": false,
+			"reason": "Weekly re-resolve of the pinned base image digests; opens a pull request when one moved",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "sync-llms-demos.yml",
+			"job": "sync-demos",
+			"tier": "bot",
+			"required": false,
+			"reason": "Weekly copy of the demo instructions into the llms files; opens a pull request when they changed",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "update-all-pr-branches.yml",
+			"job": "update-all",
+			"tier": "bot",
+			"required": false,
+			"reason": "Manual one-click update of every open PR branch with main (#5412)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "update-pr-branches.yml",
+			"job": "update",
+			"tier": "bot",
+			"required": false,
+			"reason": "Updates open PRs after merges; replaced by the merge queue (#1287)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "e2e-platforms.yml",
+			"job": "docs",
+			"tier": "gate",
+			"required": false,
+			"reason": "Detects docs-only PRs for the platforms gate (#1302)",
+			"owner": "maintainers",
+			"exempt": {
+				"check-name": "#1283"
+			}
+		},
+		{
+			"workflow": "e2e-platforms.yml",
+			"job": "queue-paths",
+			"tier": "gate",
+			"required": false,
+			"reason": "Skips the platforms gate on a merge queue entry that changes no file the suite declares in tests/e2e/platforms/windows/suite.json paths",
+			"owner": "maintainers",
+			"exempt": {
+				"check-name": "#1283"
+			}
+		},
+		{
+			"workflow": "e2e-platforms.yml",
+			"job": "e2e-platforms",
+			"tier": "e2e",
+			"required": false,
+			"reason": "Platforms group gate, windows leg; runs tests/e2e/platforms/windows; required since the #1302 cutover",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "package-lifecycle-smoke.yml",
+			"job": "docs",
+			"tier": "gate",
+			"required": false,
+			"reason": "Detects docs-only PRs for package-lifecycle-smoke",
+			"owner": "maintainers",
+			"exempt": {
+				"check-name": "#1283"
+			}
+		},
+		{
+			"workflow": "package-lifecycle-smoke.yml",
+			"job": "lifecycle-smoke",
+			"tier": "e2e",
+			"required": false,
+			"reason": "Packed tarball install, version, upgrade and uninstall in a clean node:22 container (#1384)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "required-checks-drift.yml",
+			"job": "drift",
+			"tier": "report",
+			"required": false,
+			"reason": "Compares the live rulesets with their snapshots daily; opens one issue on drift",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "report-post-merge-failures.yml",
+			"job": "report",
+			"tier": "report",
+			"required": false,
+			"reason": "Comments on a merged pull request and opens one issue when a check fails for its head commit after the merge (#2897)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "red-job-tracker.yml",
+			"job": "track",
+			"tier": "report",
+			"required": false,
+			"reason": "Opens or closes one issue per scheduled or main job that fails three runs in a row (#1288)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "e2e-resource-types.yml",
+			"job": "plan",
+			"tier": "gate",
+			"reason": "Builds the resource-type matrix from suite.json for the event (#1290)",
+			"required": false,
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "e2e-resource-types.yml",
+			"job": "resource-types",
+			"tier": "e2e",
+			"reason": "One leg per selected resource-type suite (agent on live stack); replaces agent-e2e.yml (#1290)",
+			"required": false,
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "e2e-resource-types.yml",
+			"job": "stack-timings",
+			"tier": "report",
+			"required": false,
+			"reason": "Merges every leg's scaffold and start times into stack-timings.json (stacklytics)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "e2e-resource-types.yml",
+			"job": "publish-stack-timings",
+			"tier": "report",
+			"required": false,
+			"reason": "Publishes the merged stack timings to benchmarks-data (nightly, after a release, or on request)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "e2e-resource-types.yml",
+			"job": "gate",
+			"tier": "gate",
+			"reason": "Fails when the plan or any selected suite fails (#1290)",
+			"required": false,
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "ci-report.yml",
+			"job": "report",
+			"tier": "report",
+			"required": false,
+			"reason": "Weekly CI cost and health report; posts to the job summary and the Weekly CI report issue (#1289)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "e2e-journeys.yml",
+			"job": "plan",
+			"tier": "gate",
+			"required": false,
+			"reason": "Chooses the journey suites for the event from tests/e2e/journeys/*/suite.json (#1298)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "e2e-journeys.yml",
+			"job": "journeys",
+			"tier": "e2e",
+			"required": false,
+			"reason": "One matrix leg per journey suite; each leg reports its old check name until branch protection changes (#1298)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "e2e-journeys.yml",
+			"job": "gate",
+			"tier": "gate",
+			"required": false,
+			"reason": "Passes when every selected journey passed or none was selected; required since the #1302 cutover (#1298)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "e2e-journeys.yml",
+			"job": "license",
+			"tier": "gate",
+			"required": false,
+			"reason": "Checks FLISK_LICENSE_KEY for the cold-start journey; never runs on pull requests (#1298)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "e2e-real-apps.yml",
+			"job": "example",
+			"tier": "e2e",
+			"required": false,
+			"reason": "Nightly real example apps on real routes, carried over from examples-e2e.yml at the #1302 cutover; suite tests/e2e/examples/real-apps",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "e2e-scale-full.yml",
+			"job": "erp",
+			"tier": "e2e",
+			"required": false,
+			"reason": "Full 100-service fixture boot, nightly and manual, carried over from erp-scale-e2e.yml at the #1302 cutover; suite tests/e2e/scale/erp",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "e2e-scale-enigma36.yml",
+			"job": "enigma36",
+			"tier": "e2e",
+			"required": false,
+			"reason": "Enigma 36: 36 resources drawn by seed from every type, framework and language over six stacks; nightly and manual; suite tests/e2e/scale/enigma36",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "bug-hunt.yml",
+			"job": "falsifier",
+			"tier": "test",
+			"required": false,
+			"reason": "FALSIFIER (tests/falsifier) with a fresh seed every night, then the bug-hunt ledger; nightly and manual; issues are filed only on a dispatch with file_issues",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "e2e-platforms-hardware.yml",
+			"job": "hosted",
+			"tier": "e2e",
+			"required": false,
+			"reason": "Reference run of the Windows hardware suite on windows-latest (#1765); suite tests/e2e/platforms/windows-hardware",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "e2e-platforms-hardware.yml",
+			"job": "hardware",
+			"tier": "e2e",
+			"required": false,
+			"reason": "Acceptance run of the Windows hardware suite on a self-hosted Windows 11 AMD64 machine, dispatched by hand (#1765)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "e2e-windows-live-stack.yml",
+			"job": "live-stack",
+			"tier": "e2e",
+			"required": false,
+			"reason": "Gate G6: the demo stack on a self-hosted Windows machine with Docker Desktop, dispatched by hand, never on a pull request; suite tests/e2e/platforms/windows-live (#3253)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "e2e-windows-wsl2-docker.yml",
+			"job": "live-stack",
+			"tier": "e2e",
+			"required": false,
+			"reason": "Experiment for gate G6 (#3246): native Windows Flisk and Tilt against a WSL2 Docker engine on windows-latest, dispatched by hand",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "e2e-platforms-wsl2.yml",
+			"job": "wsl2",
+			"tier": "e2e",
+			"required": false,
+			"reason": "The WSL2 suite on a Windows runner, dispatched by hand; suite tests/e2e/platforms/wsl2 (#107, #1765)",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "service-json-chaos.yml",
+			"job": "chaos",
+			"tier": "test",
+			"required": false,
+			"reason": "service.json chaos tests (tests/chaos): graph, gates and Docker tiers on PRs that touch the code behind them, plus a nightly longer search",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "oracle.yml",
+			"job": "oracle",
+			"tier": "test",
+			"required": false,
+			"reason": "ORACLE differential testing (tests/oracle): seeded projects scaffolded with the real CLI; fails when status, doctor, config verify, .env and exported Compose contradict each other; nightly and manual",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "oracle.yml",
+			"job": "candidates",
+			"tier": "bot",
+			"required": false,
+			"reason": "After a failing ORACLE sweep: replays, dedupes and validates the vault fixtures it wrote, then opens one draft PR adding the new ones as open (scripts/oracle-regression-candidates.mjs); never pushes to main or merges",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "scoreboard.yml",
+			"job": "report",
+			"tier": "report",
+			"required": false,
+			"reason": "Weekly scoreboard of the files and GitHub-data scorers in scripts/scores/",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "scoreboard.yml",
+			"job": "lighthouse",
+			"tier": "report",
+			"required": false,
+			"reason": "Weekly Lighthouse audit of flisk.sh, scored by scripts/scores/lighthouse.mjs",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "scoreboard.yml",
+			"job": "mutation",
+			"tier": "report",
+			"required": false,
+			"reason": "Weekly Stryker mutation run on the generators, scored by scripts/scores/mutation-score.mjs",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "shop-bench.yml",
+			"job": "measure",
+			"tier": "report",
+			"required": false,
+			"reason": "Scripted 10-part shop benchmark per tool (bench/competitors); informational, weekly and on runtime/up changes",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "shop-bench.yml",
+			"job": "comment",
+			"tier": "report",
+			"required": false,
+			"reason": "Posts or updates the shop benchmark pull request comment",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "wolf-review.yml",
+			"job": "review",
+			"tier": "bot",
+			"required": false,
+			"reason": "Wolf (inference.flisk.si) comments a suggested service.json on PRs that change one; never blocks a merge",
+			"owner": "maintainers"
+		},
+		{
+			"workflow": "agent-recovery-benchmark.yml",
+			"job": "recovery",
+			"tier": "test",
+			"required": false,
+			"reason": "Scripted agent recovery experiment (fault G) on real PostgreSQL, plus the result-file gate",
+			"owner": "maintainers"
+		}
+	]
+}

@@ -1,0 +1,74 @@
+# Doctor readiness contract
+
+`flisk doctor` and `flisk doctor --json` use the same readiness decision:
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | Ready; non-blocking warnings and skipped checks are permitted. |
+| 1 | One or more blocking findings, including native Windows boot refusal. |
+| 2 | Invalid command arguments or an unexpected check failure. |
+
+`--strict` makes the WSL `/mnt/c` placement check blocking. Native Windows retains the existing WSL2 Ubuntu guidance until real Docker Desktop boot acceptance passes. This change does not establish native Windows boot support.
+
+JSON stdout contains exactly one document: `schemaVersion: 1`, `data: {ready, inProject, checks, capabilities, commit, commitSha, host, warnings, ports}`, and `errors`. Each check has `name`, `didPass`, `message`, `durationMs`, optional `fix`, `isWarning`, and `isSkipped`. The optional `warnings` array repeats the messages of the `isWarning` checks. `commit` and `commitSha` carry the same value: the commit the CLI was built from, `unknown` when the build has no build info. `host` reports where doctor runs (`kind`, `canUp`, `containerRuntimeReachable`; see [agent-hosts.md](../agent-hosts.md)). `fixFirst` (`{rank, checkId, check, command}` entries ordered most blocking first), `buildCache`, `colimaDisk`, and `observed` appear only when a check produced them. When `--problems-only` is passed, `data.checks` filters out checks where `didPass: true` and includes `data.summary` with counts `{ passed, skipped, failed }`. When port planning succeeds, `data.ports` contains `http`, `https`, and `postgres` entries with `requested`, `chosen`, `explicit`, and `reason` fields; when planning fails, `chosen` is `null` and the check explains the failure. Doctor does not persist a port selection. In a project, `data.skipped` lists each `service.json` discovery skipped (invalid JSON or missing required fields) as `{file, reason}`, matching `status --json`; those files also fail the `Valid service.json files` check, so `ready` is `false`. Structured errors contain a `USAGE` or `INTERNAL` code and a message; blocking environment findings belong in checks rather than errors. Diagnostic text goes to stderr. Missing/unknown options exit 2; `--help` exits 0 with normal help text.
+
+`--ping-timeout` accepts a positive safe integer in milliseconds; fractional values, unit suffixes, and zero are rejected before any probes run. Concurrent machine probes always settle before the command exits, including when one check throws.
+
+Migration: invalid timeout previously exited 1, and unexpected errors had no stable doctor contract. CI should now distinguish 1 (fix the environment) from 2 (fix invocation or investigate a check failure). Existing successful and blocking environment exits remain 0 and 1. The new JSON flag is additive; text output remains available.
+
+JSON schema changes are additive within schema version 1. Removing/renaming fields or changing their meaning requires an explicit versioned transition and migration documentation. Consumers should ignore unknown fields and reject unsupported schema versions.
+
+## `--problems-only`
+
+`flisk doctor --problems-only` (and MCP `doctor` with `problemsOnly: true`) provides a concise diagnostics view:
+
+- In `--json` mode: drops checks that pass (`didPass: true`) or are skipped (`isSkipped: true`, even when `didPass` is `false`) from `data.checks`, keeping only failing checks, and adds `data.summary` with `{ passed: number, skipped: number, failed: number }`. Readiness `data.ready` retains the full environment decision.
+- In text mode: suppresses passing and skipped check lines from stdout.
+
+## `--fix`
+
+`flisk doctor --fix` repairs before it checks, so the checks and the exit code describe the state after the repair. It never runs `sudo`.
+
+| Flag | Meaning |
+| --- | --- |
+| `--fix` | Plan and apply repairs. Asks before each one when stdin is a terminal; without a terminal and without `--yes`, a repair is skipped, not applied. |
+| `--dry-run` | List the repairs without changing anything. Requires `--fix`. |
+| `-y`, `--yes` | Apply every repair without asking. Requires `--fix`. |
+
+`--dry-run` or `--yes` without `--fix` exits 2.
+
+Repairs available today:
+
+- `scope: "project"`: one of this project's own networks (the exact names `flisk up` creates, from the project name in `flisk.json`).
+- `scope: "project"`, `kill -TERM <pid>`: this project's `tilt up` that has run at least 2 minutes and listens on no port that answers as a Tilt UI. Never another project's Tilt. Project networks are removed in the same run once it is stopped.
+- `scope: "machine"`, `docker network rm`: only with `--scope=machine`; an unused network of another Flisk project, identified by a `<project>_traefik-public` or `<project>_traefik-private` network, naming the project in `reason`. Networks of non-Flisk compose projects are never planned. `--scope` other than `project` or `machine`, or without `--fix`, exits 2.
+- `scope: "host"`: only while free disk space is below 15 GiB (`FLISK_DISK_WARN_GIB`; the home directory and, with Docker running, the Docker VM disk, whichever is smaller). `docker builder prune -f` when the build cache has reclaimable data, and `docker image prune -f` when untagged images exist; `reason` shows the free space and the size or count. On a Colima VM that is running it then plans `colima ssh -- sudo fstrim -av` (`id` `trim:colima`): pruning frees space only inside the VM, and its disk image keeps its size on the Mac until it is trimmed, so without this step the free space on the Mac does not change. Never `docker volume prune` and never `image prune -a`; each is asked about first.
+- `scope: "probe"`: a `flisk_doctor_probe_<pid>` network left by an interrupted doctor run, unless that `pid` is still running.
+
+Without `--scope=machine`, networks of other projects are never planned. Networks with containers attached are never planned. Project networks are also skipped while a Tilt runs for the project, because a starting stack creates its networks before any container joins them. Outside a project only probes are repaired.
+
+With `--fix`, `data.actions` is added (additive within schema version 1): an array of `{id, check, scope, command, status, reason}` with `status` one of `planned` (dry run), `applied`, `skipped` or `failed`. `data.repairableCount` counts the repairs planned or applied and `data.needsActionCount` the failed checks that still need manual action; `data.repairable` and `data.needsAction` repeat the same two numbers. A `failed` action makes the report not ready and the exit code 1. Not yet implemented from the original proposal (flisk-sh/flisk#1214): repairs for host port collisions, a `--fix` for known crash-loop causes, and creating fewer networks by default.
+
+## Duplicate installs
+
+A `Flisk installs` check warns (non-blocking) when more than one distinct `flisk` binary is on `PATH`, naming each path and version.
+
+## Package runner
+
+A `Package Runner` check reports which package runner `flisk import` and `flisk export` would use: it passes when `npx` is on `PATH`, and passes naming `bunx` when only `bunx` is found, since the commands run packages through it. When neither is on `PATH` it is a non-blocking warning (the rest of the CLI still works), which `--strict` escalates to a failure.
+
+## Generated files
+
+A `Generated Files` check lists the files in each resource's `.autogenerated/` directory, one line per resource (library resources are skipped). It reads the filesystem only, so it needs no Docker, Compose or Tilt. A resource with no generated files yet is a non-blocking warning, because `.autogenerated/` is written by `flisk up` and `flisk doctor` is also run before the first `flisk up`. To check the project-level generated files instead, use `flisk config verify`.
+
+## Tilt resources
+
+The `Tilt Resources` check uses the same port-ownership lookup as `flisk status`, and how that lookup answers decides what it inspects. When the lookup confirms that another project's Tilt owns the port, the check is skipped (non-blocking), its message names that project and the port, and no resource names from that Tilt appear in the report. Ownership can also be unknown — for example when `lsof` is unavailable — and then the check keeps inspecting resources: it queries the selected port and, if nothing answers there, skips as "Tilt is not running". `TILT_PORT` guidance is only given for a foreign-owned port. When this project's Tilt answers, failures and stale disabled resources still fail the check as before.
+
+## Fresh worktrees
+
+A `Local service dependencies` check is blocking for local-process services whose gitignored `node_modules` (Node/Bun) or `.venv` (Python) is missing. It prints one line per service with the exact install command from that language's provider; a dependency directory at the project root counts as installed. A `Worktree .env` check is a non-blocking warning when `git worktree list --porcelain` finds a `.env` in another worktree: it prints the copy command but never copies the file. Both findings are in `data.checks` (with structured details in `checks[].observed`) for `--json` and the MCP `doctor` tool.
+
+## Crash-looping containers
+
+A `Crash-looping containers` check (blocking) lists containers of this project, matched by compose project name (`<project>_...` or `<project>-...`), that are `restarting`, or have restarted at least 5 times and either were started in the last 10 minutes or, if stopped, exited non-zero in the last 10 minutes. An old restart count on a container that has been up for a while is not reported. Each finding shows the last 3 log lines (with `.env` secret values redacted) and, when the logs name a known cause (missing database, missing module, port in use, unreachable dependency, missing environment variable, exit 137), a hint in `fix`. It reports only; there is no automatic repair yet. It is skipped when Docker is unavailable or the project has no containers.

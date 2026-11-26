@@ -1,0 +1,30 @@
+# Copyright (c) 2026 Flisk Landscape contributors
+# SPDX-License-Identifier: MIT
+# =============================================================================
+# 📦 VERDACCIO (NPM Registry) - loader (free-tier stub)
+# =============================================================================
+# Path: engine/topologies/platform/registries/verdaccio_loader.star
+# =============================================================================
+# Marker read by runtime/discovery/config.star. The licensed overlay replaces
+# this file and does not define it; that presence/absence is how scope routing
+# knows a Verdaccio container is actually available (#3956).
+VERDACCIO_LOADER_FREE_TIER_STUB = True
+
+# The real loader (stands up the Verdaccio private npm registry container and
+# wires it into the project's Docker network) is part of a paid Flisk license.
+# When a valid license grants the "verdaccio" resource,
+# cli/src/generator/template-engine.ts (vendorFliskExtension) overwrites this
+# file with the licensed version fetched via extension-fetch.ts before Tilt
+# loads it. Same function signature either way, so nothing else in the
+# loader pipeline changes.
+# =============================================================================
+
+
+def load_verdaccio(should_enable, _root_prefix="", _env_file=None):
+    """Free-tier stub - see module header. Always skipped.
+
+    The license note is printed only when the project turned Verdaccio on (optional_infra.verdaccio): on a free run of a
+    project that never asked for it, "requires a Premium license" read as something wrong with the project.
+    """
+    if should_enable("verdaccio"):
+        print("ℹ️  Verdaccio skipped — requires a Flisk Premium license (run `flisk upgrade`)")

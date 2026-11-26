@@ -1,0 +1,251 @@
+#!/usr/bin/env bash
+# Copyright (c) 2026 Flisk Landscape contributors
+# SPDX-License-Identifier: MIT
+# The README quickstart on a clean machine (moved from the retired quickstart-e2e workflow, #1298). Each case is one step of the old workflow, with the
+# same logic: Q1 scaffolds, Q2 runs flisk up and waits for every /health, Q3 records the time to a healthy stack, Q4 checks that each
+# frontend serves its built app. The project stays at $RUNNER_TEMP/shop (or $TMPDIR/shop locally) so the workflow's diagnostics and
+# artifact paths do not change.
+#
+#   tests/e2e/journeys/quickstart/run.sh all          every case in order, then cleanup
+#   tests/e2e/journeys/quickstart/run.sh Q1 Q2        single cases
+set -euo pipefail
+
+SUITE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../lib/lib.sh
+source "$SUITE_DIR/../../lib/lib.sh"
+e2e_init quickstart shop
+# shellcheck source=generated-files.sh
+source "$SUITE_DIR/generated-files.sh"
+# The quickstart directory is fixed so the workflow's diagnostics and artifacts find it (see the header).
+DIR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/shop"
+# Read by e2e_diagnostics in tests/e2e/lib/lib.sh (container logs to collect).
+# shellcheck disable=SC2034
+RESOURCES=(orders-api storefront vue-app)
+
+Q1() { # scaffold the quickstart project: a backend, a React frontend and a Vue frontend
+  log "Q1 scaffold the quickstart project"
+  mkdir -p "$DIR" && cd "$DIR"
+  # Start of the "time to healthy stack" clock: from `flisk project --yes` to every /health URL answering (see Q3).
+  date +%s > "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/quickstart-t0"
+  flisk project --yes
+  flisk doctor
+  flisk resource orders-api --type backend --stack shop --yes
+  # Frontends go through the framework providers and their Starlark Vite templates. Published versions from before --framework existed
+  # skip them, so the nightly check of `latest` keeps testing what it can.
+  if flisk resource --help | grep -q -- '--framework'; then
+    # No --path: this exercises the default folder (which flisk picks so that project.json discovery finds it) and the public/ folder the
+    # frontend Docker build copies.
+  flisk resource storefront --type frontend --stack shop --base-path /storefront --yes
+  flisk resource vue-app --type frontend --framework vue --stack shop --base-path /vue-app --yes
+  FRONTENDS="storefront:root vue-app:app"
+    export FRONTENDS
+    echo "FRONTENDS=storefront:root vue-app:app" >> "${GITHUB_ENV:-/dev/null}"
+  else
+    echo "::notice::this flisk version has no --framework; testing the backend only"
+  fi
+  # Log what discovery will see, so a missing service is obvious here rather than 20 minutes later as a 404.
+  echo "::group::scaffolded project"
+  echo "discovery paths: $(jq -c '.discovery.paths' .flisk/project.json)"
+  find . -name service.json -not -path './node_modules/*' -not -path './.flisk/*' \
+    | sort | while read -r f; do echo "$f: $(jq -c '{name,type,framework,stack}' "$f")"; done
+  echo "::endgroup::"
+  flisk doctor
+}
+
+Q2() { # flisk up, then wait for every /health URL to answer through Traefik
+  log "Q2 flisk up and wait for every /health"
+  cd "$DIR"
+  flisk up shop > up.log 2>&1 &
+  # One URL per service: the backend, plus each frontend scaffolded in Q1. Each entry is <route segment>:<Tilt resource name>.
+  local services="orders:orders-api"
+  local fe
+  for fe in ${FRONTENDS:-}; do services="$services ${fe%%:*}:${fe%%:*}"; done
+  local urls="" pair svc url
+  for pair in $services; do
+    svc="${pair%%:*}"
+    url=""
+    for _ in $(seq 1 60); do
+      url="$(grep -oE "https?://[^ ]*/${svc}[^ ]*/health" up.log | head -1 || true)"
+      [ -n "$url" ] && break
+      sleep 2
+    done
+    [ -n "$url" ] || { cat up.log; die "flisk up never printed the $svc URL"; }
+    urls="$urls $url"
+  done
+  echo "Waiting for:$urls"
+  local failed_checks=0 missing_checks=0 n pending code bad known missing res
+  for n in $(seq 1 120); do
+    pending=""
+    for url in $urls; do
+      code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$url" || true)"
+      case "$code" in
+        2??) ;;
+        *) pending="$pending $url=$code" ;;
+      esac
+    done
+    if [ -z "$pending" ]; then
+      echo "All healthy after $((n * 10))s:$urls"
+      check_generated_files
+      return 0
+    fi
+    echo "poll $n ($((n * 10))s): waiting on$pending"
+    # Once a minute, show what is actually happening so a slow first boot can be told apart from a container that never turns healthy.
+    if [ $((n % 6)) -eq 0 ]; then
+      echo "::group::progress at $((n * 10))s"
+      docker ps -a --format 'table {{.Names}}\t{{.Status}}' | head -20 || true
+      echo "-- images built so far:"
+      docker images --format '{{.Repository}}:{{.Tag}}  {{.CreatedSince}}' | head -12 || true
+      echo "-- tilt resources (name, update, runtime, what it is waiting on):"
+      tilt get uiresources -o json 2>/dev/null | jq -r '.items[] | "\(.metadata.name)  update=\(.status.updateStatus // "-")  runtime=\(.status.runtimeStatus // "-")  waiting=\(.status.waiting // {} | tostring)  err=\((.status.buildHistory // [] | map(.error // empty) | first) // "-")"' || echo "(tilt not reachable)"
+      echo "-- flisk up log (last 8 lines):"
+      tail -8 up.log || true
+      echo "::endgroup::"
+      # Tilt does not retry a failed image build, so a service whose update status is "error" will never turn healthy. Two checks in a row
+      # (about a minute apart) before giving up, so a transient error can clear.
+      bad="$(tilt get uiresources -o json 2>/dev/null | jq -r '[.items[] | select(.status.updateStatus == "error") | .metadata.name] | join(",")' || true)"
+      if [ -n "$bad" ]; then
+        failed_checks=$((failed_checks + 1))
+        echo "::warning::Tilt reports failed resource(s): $bad (check $failed_checks of 2)"
+        if [ "$failed_checks" -ge 2 ]; then
+          die "Giving up early: $bad failed to build and Tilt will not retry it"
+        fi
+      else
+        failed_checks=0
+      fi
+      # A route can only turn healthy if Tilt has a resource for it. If a service was never discovered it never will, so say so and stop.
+      known="$(tilt get uiresources -o json 2>/dev/null | jq -r '.items[].metadata.name' || true)"
+      missing=""
+      for pair in $services; do
+        res="${pair##*:}"
+        echo "$known" | grep -qx "$res" || missing="$missing $res"
+      done
+      if [ -n "$missing" ]; then
+        missing_checks=$((missing_checks + 1))
+        echo "::warning::Tilt has no resource for:$missing (check $missing_checks of 2)"
+        if [ "$missing_checks" -ge 2 ]; then
+          echo "-- resources Tilt does know about:"; echo "$known"
+          echo "-- discovery paths and service.json files:"
+          jq -c '.discovery.paths' .flisk/project.json
+          find . -name service.json -not -path './node_modules/*' -not -path './.flisk/*' | sort
+          die "Giving up early: Tilt never created a resource for:$missing"
+        fi
+      else
+        missing_checks=0
+      fi
+    fi
+    sleep 10
+  done
+  tail -200 up.log
+  die "not healthy within 20 minutes:$pending"
+}
+
+Q3() { # the time to a healthy stack, from flisk project --yes, recorded as a job summary line and a JSON file
+  log "Q3 record the time to a healthy stack"
+  local t0 t1 seconds
+  t0="$(cat "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/quickstart-t0")"
+  t1="$(date +%s)"
+  seconds=$((t1 - t0))
+  printf '{"metric":"time_to_healthy_stack","seconds":%d,"flisk_version":"%s","runner":"%s","start_epoch":%d,"healthy_epoch":%d,"start_cache":"cold"}\n' \
+    "$seconds" "${FLISK_VERSION:-local}" "${RUNNER_OS:-$(uname -s)}" "$t0" "$t1" > "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/time-to-healthy.json"
+  cat "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/time-to-healthy.json"
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    {
+      echo "### Time to healthy stack"
+      echo ""
+      echo "- flisk version: \`${FLISK_VERSION:-local}\`"
+      echo "- \`flisk project --yes\` to every /health answering: **${seconds}s** ($((seconds / 60))m $((seconds % 60))s)"
+      echo "- Cold start: no images or build cache on the runner"
+    } >> "$GITHUB_STEP_SUMMARY"
+  fi
+}
+
+Q4() { # nginx answers /health on its own, so also load each frontend's page and the script it references: the framework's Vite build output is what is being served, under the right base path
+  log "Q4 frontends serve their built app"
+  [ -n "${FRONTENDS:-}" ] || { echo "no frontends in this run"; return 0; }
+  cd "$DIR"
+  local fe name mount health page origin html script
+  for fe in $FRONTENDS; do
+    name="${fe%%:*}"
+    mount="${fe##*:}"
+    health="$(grep -oE "https?://[^ ]*/${name}/health" up.log | head -1)"
+    page="${health%/health}/"
+    origin="$(echo "$page" | grep -oE '^https?://[^/]+')"
+    html="$(curl -fsS --max-time 10 "$page")"
+    echo "$html" | grep -q "id=\"$mount\"" \
+      || { echo "$html"; die "$name: page has no #$mount mount point"; }
+    script="$(echo "$html" | grep -oE '<script[^>]+src="[^"]+"' | grep -oE 'src="[^"]+"' | head -1 | cut -d'"' -f2)"
+    case "$script" in
+      "/$name/"*) ;;
+      *) echo "$html"; die "$name: entry script '$script' is not under /$name/" ;;
+    esac
+    curl -fsS --max-time 10 -o /dev/null "$origin$script" \
+      || die "$name: $origin$script did not load"
+    echo "$name: $page serves #$mount and $script"
+  done
+}
+
+Q5() { # run the documented quickstart path end to end: flisk project example, cd flisk-example, flisk doctor, flisk up
+  log "Q5 documented quickstart path (flisk project example)"
+  local EXDIR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/flisk-example"
+  rm -rf "$EXDIR"
+
+  # Stop the Q1-Q4 stack so the two stacks do not fight over the ingress port.
+  (cd "$DIR" && flisk down >/dev/null 2>&1 || true)
+
+  # Run the whole case in a subshell with a trap, mirroring tests/e2e/examples/default/run.sh.
+  (
+    local flisk_pid=""
+    trap '[ -z "$flisk_pid" ] || kill "$flisk_pid" 2>/dev/null || true' EXIT
+    flisk project example --path "$EXDIR"
+    cd "$EXDIR"
+
+    # Verify that flisk project example left .flisk/project.json.
+    [ -f .flisk/project.json ] || die "flisk project example left no .flisk/project.json"
+
+    # Verify flisk doctor finds the project root in the new folder. Doctor may still report the generated files a
+    # first `flisk up` writes (master configs, .env) as missing, so its exit code is not the check; the root is.
+    local doctor_out
+    doctor_out="$(flisk doctor 2>&1 || true)"
+    echo "$doctor_out" | tail -20
+    if echo "$doctor_out" | grep -q "Could not find project root"; then
+      die "flisk doctor could not find the project root in the example folder"
+    fi
+
+    # Run flisk up.
+    flisk up shop > up.log 2>&1 &
+    flisk_pid=$!
+
+    # Collect the URLs the run prints: poll up to 120s for /health URLs.
+    local urls="" n url
+    for n in $(seq 1 60); do
+      urls="$(grep -oE 'https?://[^ ]*/health' up.log | sort -u || true)"
+      [ -n "$urls" ] && break
+      sleep 2
+    done
+    [ -n "$urls" ] || { tail -200 up.log; die "flisk up never printed a /health URL"; }
+    echo "Waiting for:$urls"
+
+    # Poll every URL, accepting 2?? responses.
+    local pending code n
+    for n in $(seq 1 120); do
+      pending=""
+      for url in $urls; do
+        code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$url" || true)"
+        case "$code" in
+          2??) ;;
+          *) pending="$pending $url=$code" ;;
+        esac
+      done
+      if [ -z "$pending" ]; then
+        echo "example healthy: $urls"
+        return 0
+      fi
+      echo "poll $n ($((n * 10))s): waiting on$pending"
+      sleep 10
+    done
+    tail -200 up.log
+    die "the example stack was not healthy within 20 minutes"
+  )
+}
+
+e2e_main "$@"

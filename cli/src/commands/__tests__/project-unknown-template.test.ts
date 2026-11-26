@@ -1,0 +1,69 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { captureConsole, ExitSignal, throwOnExit } from "../../test-support/cli-exit.js";
+import { exitUnknownTemplate } from "../project.js";
+
+/** Refuses `name` and returns everything the command printed. */
+function refuse(name: string): string {
+  const lines = captureConsole();
+  throwOnExit();
+
+  expect(() => exitUnknownTemplate(name)).toThrow(ExitSignal);
+  return lines.join("\n");
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("exitUnknownTemplate", () => {
+  it("suggests the closest starter for a near miss", () => {
+    const output = refuse("sas");
+
+    expect(output).toContain('Did you mean "saas"?');
+    expect(output).toContain("Available templates:");
+  });
+
+  it("prints no suggestion for a name with no close match", () => {
+    const output = refuse("zzzz");
+
+    expect(output).not.toContain("Did you mean");
+    expect(output).toContain("Available templates:");
+  });
+
+  it.each(["validate", "check", "verify"])(
+    "suggests `flisk project --check` for action word '%s'",
+    (word) => {
+      const output = refuse(word);
+
+      expect(output).toContain('Did you mean "flisk project --check"?');
+      expect(output).toContain(`Unknown template: "${word}"`);
+      expect(output).toContain("Available templates:");
+    },
+  );
+
+  it.each([
+    ["info", "flisk info"],
+    ["list", "flisk resources"],
+    ["status", "flisk status"],
+  ])("explains where to run project action %s", (word, command) => {
+    const output = refuse(word);
+    const hint = `Did you mean "${command}"?`;
+    expect(output).toContain(hint);
+    expect(output.indexOf(hint)).toBeLessThan(output.indexOf("Available templates:"));
+  });
+
+  it.each(["constructor", "__proto__", "toString", "hasOwnProperty"])(
+    "does not treat prototype key '%s' as an action word",
+    (word) => {
+      const output = refuse(word);
+
+      expect(output).not.toContain("flisk project --check");
+      expect(output).not.toContain("[object Object]");
+      expect(output).not.toContain("native code");
+      expect(output).toContain(`Unknown template: "${word}"`);
+    },
+  );
+});

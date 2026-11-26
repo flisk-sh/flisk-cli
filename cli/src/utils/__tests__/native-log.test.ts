@@ -1,0 +1,218 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { createTempDir } from "../../test-support/index.js";
+import {
+  appendNativeLogLine,
+  appendNativeRunExit,
+  appendNativeRunStart,
+  latestNativeRunId,
+  maxNativeLogSeq,
+  NATIVE_LOG_KEEP_RUNS,
+  NATIVE_LOG_MAX_BYTES,
+  readLogTail,
+  readNativeRunLog,
+} from "../native-log.js";
+import { nativeLogPath, readNativeLogLines } from "../native-runtime.js";
+
+const stamp = (index: number) => new Date(Date.UTC(2026, 0, 1, 0, 0, 0, index)).toISOString();
+
+/** A log of `count` timestamped lines, `line <i>`, the format the supervisor writes. */
+function writeLog(path: string, count: number, eol = "\n", trailing = true): void {
+  const lines = Array.from({ length: count }, (_, i) => `${stamp(i)} line ${i}`);
+  writeFileSync(path, lines.join(eol) + (trailing ? eol : ""));
+}
+
+describe("readLogTail (#3720)", () => {
+  it("returns the last N lines of a multi-megabyte log, oldest first", () => {
+    const path = join(createTempDir("flisk-log-"), "api.log");
+    writeLog(path, 200_000); // about 7 MB, many 64 KB blocks
+    expect(statSync(path).size).toBeGreaterThan(5_000_000);
+
+    expect(readLogTail(path, 3)).toEqual([
+      `${stamp(199_997)} line 199997`,
+      `${stamp(199_998)} line 199998`,
+      `${stamp(199_999)} line 199999`,
+    ]);
+  });
+
+  it("returns every line when the file has fewer than N", () => {
+    const path = join(createTempDir("flisk-log-"), "api.log");
+    writeLog(path, 4);
+    expect(readLogTail(path, 10)).toHaveLength(4);
+  });
+
+  it("reads a last line with no trailing newline, and strips CRLF", () => {
+    const dir = createTempDir("flisk-log-");
+    const bare = join(dir, "bare.log");
+    writeLog(bare, 5, "\n", false);
+    expect(readLogTail(bare, 2)).toEqual([`${stamp(3)} line 3`, `${stamp(4)} line 4`]);
+
+    const crlf = join(dir, "crlf.log");
+    writeLog(crlf, 5, "\r\n");
+    expect(readLogTail(crlf, 2)).toEqual([`${stamp(3)} line 3`, `${stamp(4)} line 4`]);
+  });
+
+  it("keeps a multi-byte character that straddles a block boundary intact", () => {
+    const path = join(createTempDir("flisk-log-"), "utf8.log");
+    const text = "é".repeat(70_000); // 140 KB of two-byte characters on one line
+    writeFileSync(path, `${stamp(0)} ${text}\n${stamp(1)} after\n`);
+    expect(readLogTail(path, 2)).toEqual([`${stamp(0)} ${text}`, `${stamp(1)} after`]);
+  });
+
+  it("stops at the first line older than the cutoff", () => {
+    const path = join(createTempDir("flisk-log-"), "api.log");
+    writeLog(path, 100);
+    const lines = readLogTail(path, 1000, Date.parse(stamp(95)));
+    expect(lines).toHaveLength(5);
+    expect(lines[0]).toBe(`${stamp(95)} line 95`);
+  });
+
+  it("returns nothing for an empty file", () => {
+    const path = join(createTempDir("flisk-log-"), "empty.log");
+    writeFileSync(path, "");
+    expect(readLogTail(path, 5)).toEqual([]);
+  });
+});
+
+describe("readNativeLogLines (#3720)", () => {
+  it("returns the last N lines of a large log and never reads the rotated file", () => {
+    const root = createTempDir("flisk-native-");
+    const logPath = nativeLogPath(root, "api");
+    mkdirSync(join(root, ".flisk", "native", "logs"), { recursive: true });
+    writeLog(logPath, 100_000);
+    writeFileSync(`${logPath}.1`, `${stamp(500_000)} from the rotated file\n`);
+
+    const lines = readNativeLogLines(root, ["api"], { tail: 2 });
+
+    expect(lines.map((line) => line.text)).toEqual(["line 99998", "line 99999"]);
+  });
+
+  it("reads the sequence number the supervisor wrote into each line", () => {
+    const root = createTempDir("flisk-native-");
+    const logPath = nativeLogPath(root, "api");
+    mkdirSync(join(root, ".flisk", "native", "logs"), { recursive: true });
+    writeFileSync(
+      logPath,
+      `${stamp(0)} #11 first\n${stamp(1)} #12 second\n${stamp(2)} old format\n`,
+    );
+
+    const lines = readNativeLogLines(root, ["api"], { tail: 10 });
+
+    expect(lines.map((line) => line.seq)).toEqual([11, 12, undefined]);
+    expect(lines.map((line) => line.text)).toEqual(["first", "second", "old format"]);
+  });
+});
+
+describe("maxNativeLogSeq", () => {
+  it("finds the highest number in current and rotated logs, including after a restart", () => {
+    const dir = createTempDir("flisk-log-");
+    const current = join(dir, "api.log");
+    const rotated = join(dir, "web.log.1");
+    writeFileSync(current, `${stamp(0)} #3 hello\n${stamp(1)} #8 world\n${stamp(2)} #2 x\n`);
+    writeFileSync(rotated, `${stamp(3)} #12 older\n`);
+
+    expect(maxNativeLogSeq([current, rotated])).toBe(12);
+  });
+
+  it("does not mistake a number in the message for a sequence number", () => {
+    const path = join(createTempDir("flisk-log-"), "api.log");
+    writeFileSync(path, `${stamp(0)} look at #999 in the message\n`);
+    expect(maxNativeLogSeq([path])).toBe(0);
+  });
+
+  it("returns zero for missing logs", () => {
+    expect(maxNativeLogSeq([join(createTempDir("flisk-log-"), "missing.log")])).toBe(0);
+  });
+});
+
+describe("appendNativeLogLine (#3720)", () => {
+  it("defaults the cap to 10 MB per service", () => {
+    expect(NATIVE_LOG_MAX_BYTES).toBe(10 * 1024 * 1024);
+  });
+
+  it("rotates to <service>.log.1 once the log reaches the cap, keeping one old file", () => {
+    const path = join(createTempDir("flisk-log-"), "api.log");
+    const sizes = new Map<string, number>();
+    for (let i = 0; i < 10; i += 1) appendNativeLogLine(path, `line ${i}\n`, sizes, 30);
+
+    // Each line is 7 bytes, so every 5 lines (35 bytes) pass the 30-byte cap and rotate. The second rotation replaces
+    // the first .1, so only the newest old file is kept.
+    expect(readFileSync(`${path}.1`, "utf-8")).toBe("line 5\nline 6\nline 7\nline 8\nline 9\n");
+    expect(existsSync(`${path}.2`)).toBe(false);
+    // The current log starts again with the next line.
+    expect(existsSync(path)).toBe(false);
+    appendNativeLogLine(path, "next\n", sizes, 30);
+    expect(readFileSync(path, "utf-8")).toBe("next\n");
+  });
+
+  it("does not rotate below the cap", () => {
+    const path = join(createTempDir("flisk-log-"), "api.log");
+    const sizes = new Map<string, number>();
+    for (let i = 0; i < 3; i += 1) appendNativeLogLine(path, `line ${i}\n`, sizes, 1000);
+    expect(readFileSync(path, "utf-8")).toBe("line 0\nline 1\nline 2\n");
+    expect(existsSync(`${path}.1`)).toBe(false);
+  });
+
+  it("rotates a log a previous run left above the cap before the first new line", () => {
+    const path = join(createTempDir("flisk-log-"), "api.log");
+    writeFileSync(path, "x".repeat(100));
+    appendNativeLogLine(path, "fresh\n", new Map(), 50);
+    expect(readFileSync(path, "utf-8")).toBe("fresh\n");
+    expect(readFileSync(`${path}.1`, "utf-8")).toBe("x".repeat(100));
+  });
+});
+
+describe("native run markers (#4693)", () => {
+  it("writes a start and exit marker for a spawn and hides both from log entries", () => {
+    const path = join(createTempDir("flisk-run-"), "api.log");
+    const sizes = new Map<string, number>();
+    appendNativeRunStart(path, "7", 4321, sizes);
+    appendNativeLogLine(path, `${stamp(1)} listening\n`, sizes);
+    appendNativeRunExit(path, "7", 1, sizes);
+
+    const raw = readFileSync(path, "utf-8");
+    expect(raw).toContain(" [flisk] run 7 started (pid 4321)\n");
+    expect(raw).toContain(" [flisk] run 7 exited (code 1)\n");
+    expect(latestNativeRunId(path)).toBe("7");
+    expect(readNativeRunLog(path).map((entry) => ({ text: entry.text, run: entry.run }))).toEqual([
+      { text: "listening", run: "7" },
+    ]);
+  });
+
+  it("keeps the current run's start marker with its lines when rotation happens mid-run", () => {
+    const path = join(createTempDir("flisk-run-"), "api.log");
+    const sizes = new Map<string, number>();
+    const cap = 120;
+    appendNativeRunStart(path, "1", 10, sizes, cap);
+    for (let i = 0; i < 8; i += 1) {
+      appendNativeLogLine(path, `${stamp(i)} line ${i}\n`, sizes, cap);
+    }
+
+    expect(existsSync(`${path}.1`)).toBe(true);
+    // Several rotations may have happened; each fresh file still opens with the current run's marker.
+    expect(readFileSync(path, "utf-8")).toContain("[flisk] run 1 started (pid 10)");
+    const entries = readNativeRunLog(path);
+    expect(entries.map((entry) => entry.text)).toEqual(["line 6", "line 7"]);
+    expect(entries.every((entry) => entry.run === "1")).toBe(true);
+  });
+
+  it(`keeps the start markers of the last ${NATIVE_LOG_KEEP_RUNS} runs across rotations`, () => {
+    const path = join(createTempDir("flisk-run-"), "api.log");
+    const sizes = new Map<string, number>();
+    for (let run = 1; run <= 7; run += 1) {
+      appendNativeRunStart(path, String(run), run, sizes, 100);
+      appendNativeLogLine(path, `${stamp(run)} output ${run}\n`, sizes, 100);
+      appendNativeRunExit(path, String(run), 0, sizes, 100);
+    }
+
+    const current = readFileSync(path, "utf-8");
+    for (const run of [3, 4, 5, 6, 7]) {
+      expect(current).toContain(`[flisk] run ${run} started (pid ${run})`);
+    }
+    expect(current).not.toContain("[flisk] run 1 started");
+    expect(latestNativeRunId(path)).toBe("7");
+  });
+});

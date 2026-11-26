@@ -1,0 +1,154 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import { existsSync, readFileSync } from "node:fs";
+import { join, relative, resolve, sep } from "node:path";
+import { PROJECT_JSON } from "./constants.js";
+
+// Mirrors discovery/json_manifest_scanner.star: every `discovery.paths` entry is a shell
+// glob of directories, and `find -maxdepth 3` looks for service.json under each match. So a
+// resource is only seen by Tilt if some directory matching a pattern is the resource
+// directory itself or at most this many levels above it.
+const MAX_LEVELS_BELOW_MATCH = 2;
+
+const DEFAULT_DISCOVERY_PATHS = ["services/*/*"];
+
+function segments(path: string): string[] {
+  return path.split(sep).filter(Boolean);
+}
+
+// Wildcard match without building a RegExp: `*` matches any run of characters, `?` one character,
+// everything else is literal. Greedy with a single backtrack point, so it stays linear-ish on
+// hostile patterns such as "a*a*a*b".
+function segmentMatches(pattern: string, name: string): boolean {
+  let p = 0;
+  let n = 0;
+  let starP = -1;
+  let starN = 0;
+  while (n < name.length) {
+    if (
+      p < pattern.length &&
+      pattern[p] !== "*" &&
+      (pattern[p] === "?" || pattern[p] === name[n])
+    ) {
+      p++;
+      n++;
+    } else if (p < pattern.length && pattern[p] === "*") {
+      starP = p++;
+      starN = n;
+    } else if (starP !== -1) {
+      p = starP + 1;
+      n = ++starN;
+    } else {
+      return false;
+    }
+  }
+  while (p < pattern.length && pattern[p] === "*") p++;
+  return p === pattern.length;
+}
+
+function globMatchesDir(patternSegments: string[], dirSegments: string[]): boolean {
+  return (
+    patternSegments.length === dirSegments.length &&
+    patternSegments.every((segment, index) => segmentMatches(segment, dirSegments[index]))
+  );
+}
+
+/**
+ * `discovery.paths` from .flisk/project.json, or the generic default when unset/unreadable.
+ * `quiet` drops the warning about an invalid configuration, for callers that run on every command.
+ */
+export function readDiscoveryPaths(projectRoot: string, { quiet = false } = {}): string[] {
+  const configPath = join(projectRoot, ".flisk", PROJECT_JSON);
+  if (!existsSync(configPath)) return DEFAULT_DISCOVERY_PATHS;
+
+  let reason = "discovery.paths must be an array of strings";
+  try {
+    const paths = JSON.parse(readFileSync(configPath, "utf-8"))?.discovery?.paths;
+    if (paths === undefined) return DEFAULT_DISCOVERY_PATHS;
+    if (Array.isArray(paths) && paths.every((p) => typeof p === "string")) return paths;
+  } catch (error) {
+    reason = String(error);
+  }
+  if (!quiet) {
+    console.warn(
+      `Ignoring discovery configuration in ${configPath}: ${reason}; using default paths: ${DEFAULT_DISCOVERY_PATHS.join(", ")}`,
+    );
+  }
+  return DEFAULT_DISCOVERY_PATHS;
+}
+
+/**
+ * Whether a `discovery.paths` pattern names the directory at `dirSegments` (relative to the
+ * project root, last segment included) with a literal segment, on the pattern itself or on the
+ * way to it. The service walk uses this to enter a folder it would otherwise skip (such as
+ * `vendor`) when the project points discovery at it, e.g. `vendor/*`. A wildcard segment does
+ * not count, so a pattern such as `services/*` does not open every skipped folder at that level.
+ */
+export function namesDirectoryLiterally(
+  projectRoot: string,
+  dirSegments: string[],
+  patterns: string[],
+): boolean {
+  const last = dirSegments.length - 1;
+  if (last < 0) return false;
+  return patterns.some((pattern) => {
+    const patternSegments = segments(relative(projectRoot, resolve(projectRoot, pattern)));
+    return (
+      patternSegments.length > last &&
+      patternSegments[last] === dirSegments[last] &&
+      dirSegments
+        .slice(0, last)
+        .every((segment, index) => segmentMatches(patternSegments[index], segment))
+    );
+  });
+}
+
+/** Whether Tilt's discovery would find a service.json in `resourceDir` given `patterns`. */
+export function isPathDiscovered(
+  projectRoot: string,
+  resourceDir: string,
+  patterns: string[],
+): boolean {
+  const resourceSegments = segments(relative(projectRoot, resolve(projectRoot, resourceDir)));
+
+  return patterns.some((pattern) => {
+    const patternSegments = segments(relative(projectRoot, resolve(projectRoot, pattern)));
+    for (let levels = 0; levels <= MAX_LEVELS_BELOW_MATCH; levels++) {
+      const depth = resourceSegments.length - levels;
+      if (depth > 0 && globMatchesDir(patternSegments, resourceSegments.slice(0, depth))) {
+        return true;
+      }
+    }
+    return false;
+  });
+}
+
+export interface ChosenResourcePath {
+  path: string;
+  /** Set when the type's conventional folder is not discovered and another was picked. */
+  adjustedFrom?: string;
+}
+
+/**
+ * Picks the folder for a new resource without an explicit --path. The conventional folder
+ * per type (apps/, workers/, packages/) is kept when discovery covers it; otherwise the
+ * resource goes under services/<stack>/, which the default discovery paths cover, because a
+ * resource outside every discovery path is scaffolded but never started by `flisk up`.
+ */
+export function chooseResourcePath(
+  projectRoot: string,
+  conventionalPath: string,
+  stack: string,
+  name: string,
+): ChosenResourcePath {
+  const patterns = readDiscoveryPaths(projectRoot);
+  if (isPathDiscovered(projectRoot, conventionalPath, patterns)) {
+    return { path: conventionalPath };
+  }
+
+  const fallback = `services/${stack}/${name}`;
+  if (isPathDiscovered(projectRoot, fallback, patterns)) {
+    return { path: fallback, adjustedFrom: conventionalPath };
+  }
+  return { path: conventionalPath };
+}

@@ -1,0 +1,134 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import { describe, expect, it } from "vitest";
+import {
+  checkDiskSpace,
+  DISK_FAIL_GIB,
+  DISK_SPACE_CHECK,
+  DISK_WARN_GIB,
+  DOCKER_DESKTOP_STUCK_FIX,
+  dockerDesktopStuck,
+} from "../doctor-host.js";
+
+const GIB = 1024 ** 3;
+const statfsWith = (freeGib: number) => () => ({
+  bavail: Math.round((freeGib * GIB) / 4096),
+  bsize: 4096,
+});
+
+describe("checkDiskSpace", () => {
+  it("fails below 5 GiB with cleanup commands", () => {
+    const result = checkDiskSpace(statfsWith(1.9));
+    expect(result).toMatchObject({ name: DISK_SPACE_CHECK, didPass: false });
+    expect(result.isWarning).toBeUndefined();
+    expect(result.message).toMatch(/1\.9 GiB free/);
+    // The safe build-cache cleanup comes first; the image-deleting prune is only the labelled last resort.
+    const fix = result.fix ?? "";
+    expect(fix.indexOf("docker builder prune -f")).toBeGreaterThan(-1);
+    expect(fix.indexOf("docker builder prune -f")).toBeLessThan(
+      fix.indexOf("docker system prune -af"),
+    );
+    expect(fix).toMatch(/last resort/);
+  });
+
+  it("handles boundary at exactly 5 GiB as a warning rather than a failure", () => {
+    const result = checkDiskSpace(statfsWith(5.0));
+    expect(result).toMatchObject({
+      name: DISK_SPACE_CHECK,
+      didPass: false,
+      isWarning: true,
+      message: expect.stringMatching(/^5\.0 GiB free on this machine: image builds may fail/),
+    });
+  });
+
+  it("warns between 5 and 15 GiB", () => {
+    const result = checkDiskSpace(statfsWith(10));
+    expect(result).toMatchObject({ didPass: false, isWarning: true });
+  });
+
+  it("handles boundary at exactly 15 GiB as passing", () => {
+    const result = checkDiskSpace(statfsWith(15.0));
+    expect(result).toMatchObject({
+      name: DISK_SPACE_CHECK,
+      didPass: true,
+      message: "15.0 GiB free on this machine",
+    });
+    expect(result.isWarning).toBeUndefined();
+  });
+
+  it("fails at 0 GiB free space", () => {
+    const result = checkDiskSpace(statfsWith(0));
+    expect(result).toMatchObject({
+      name: DISK_SPACE_CHECK,
+      didPass: false,
+      message: expect.stringMatching(
+        /^0\.0 GiB free on this machine: building images needs at least 5 GiB/,
+      ),
+    });
+  });
+
+  it("passes with plenty of space", () => {
+    expect(checkDiskSpace(statfsWith(40))).toMatchObject({
+      didPass: true,
+      message: "40.0 GiB free on this machine",
+    });
+  });
+
+  it("queries the specified path", () => {
+    let queriedPath = "";
+    const customStatfs = (targetPath: string) => {
+      queriedPath = targetPath;
+      return { bavail: 10000000, bsize: 4096 };
+    };
+    checkDiskSpace(customStatfs, "/custom/mount/path");
+    expect(queriedPath).toBe("/custom/mount/path");
+  });
+
+  it("runs with default statfs and homedir arguments without throwing", () => {
+    const result = checkDiskSpace();
+    expect(result.name).toBe(DISK_SPACE_CHECK);
+    expect(typeof result.didPass).toBe("boolean");
+    expect(typeof result.message).toBe("string");
+  });
+
+  it("accepts bigint stats and skips when the disk cannot be read", () => {
+    expect(
+      checkDiskSpace(() => ({ bavail: BigInt(50 * 262144), bsize: BigInt(4096) })).didPass,
+    ).toBe(true);
+    const skipped = checkDiskSpace(() => {
+      throw new Error("EACCES");
+    });
+    expect(skipped).toMatchObject({ didPass: true, isSkipped: true });
+  });
+});
+
+describe("dockerDesktopStuck", () => {
+  it("reports a stuck engine when Docker Desktop is open on macOS", () => {
+    const result = dockerDesktopStuck(true, "darwin");
+    expect(result).toMatchObject({
+      didPass: false,
+      message: "Docker Desktop is open, but its engine is not responding",
+      fix: DOCKER_DESKTOP_STUCK_FIX,
+    });
+  });
+
+  it("returns null when Docker Desktop is not running or on other platforms", () => {
+    expect(dockerDesktopStuck(false, "darwin")).toBeNull();
+    expect(dockerDesktopStuck(true, "linux")).toBeNull();
+    expect(dockerDesktopStuck(true, "win32")).toBeNull();
+    expect(dockerDesktopStuck(false, "win32")).toBeNull();
+  });
+
+  it("defaults to process.platform when platform argument is omitted", () => {
+    const result = dockerDesktopStuck(false);
+    expect(result).toBeNull();
+  });
+});
+
+describe("disk space thresholds", () => {
+  it("pins failure and warning thresholds and enforces ordering", () => {
+    expect(DISK_FAIL_GIB).toBe(5);
+    expect(DISK_WARN_GIB).toBe(15);
+    expect(DISK_FAIL_GIB).toBeLessThan(DISK_WARN_GIB);
+  });
+});

@@ -1,0 +1,102 @@
+name: 🏷️ RELEASE | Package | Publish service schema
+
+# runtime/engine/schemas/{service,project}-schema.json are the source of truth. The copies at
+# https://flisk.sh/schema.service.json and https://flisk.sh/project-schema.json are deploy
+# artifacts for editors, refreshed here after a change lands on main.
+on:
+  push:
+    branches: [main]
+    paths:
+      - runtime/engine/schemas/service-schema.json
+      - runtime/engine/schemas/project-schema.json
+  workflow_dispatch:
+
+# Two quick pushes must not race on `git push origin HEAD:main` in the website repo.
+concurrency:
+  group: publish-service-schema
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    env:
+      # Fine-grained token with contents:write on flisk-sh/website.
+      PAGES_SYNC_TOKEN: ${{ secrets.PAGES_SYNC_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Copy the schema into the Pages repo
+        run: |
+          # This workflow only runs on main or manual dispatch, never on an untrusted PR or fork.
+          if [ -z "$PAGES_SYNC_TOKEN" ]; then
+            echo "::error::PAGES_SYNC_TOKEN is not set; the published schema was not updated. Add a fine-grained token with contents:write on flisk-sh/website as the repository secret, then re-run this workflow."
+            exit 1
+          fi
+          git clone --depth 1 "https://x-access-token:${PAGES_SYNC_TOKEN}@github.com/flisk-sh/website.git" pages
+          cp runtime/engine/schemas/service-schema.json pages/schema.service.json
+          cp runtime/engine/schemas/project-schema.json pages/project-schema.json
+          cd pages
+          if git diff --quiet; then
+            echo "Published schema is already up to date"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "Sync the published schemas with flisk-sh/flisk (${GITHUB_SHA::7})"
+          git push origin HEAD:main
+      - name: Report whether the published schema matches main
+        # The copy step now fails the job when PAGES_SYNC_TOKEN is missing. This step still reports the live state on every run,
+        # including a failed copy, so the run summary shows exactly which properties are still missing from the published copy.
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os, time, urllib.request
+
+          url = "https://flisk.sh/schema.service.json"
+          main = json.load(open("runtime/engine/schemas/service-schema.json"))
+          has_token = bool(os.environ.get("PAGES_SYNC_TOKEN"))
+          # Pages needs a minute or two to redeploy after a push; without a token nothing was pushed, so do not wait.
+          deadline = time.time() + (240 if has_token else 0)
+          live, error = None, ""
+          while True:
+              try:
+                  with urllib.request.urlopen(url, timeout=20) as response:
+                      live = json.load(response)
+              except Exception as exc:  # network or JSON problem: report it, do not fail
+                  live, error = None, str(exc)
+              if live == main or time.time() >= deadline:
+                  break
+              time.sleep(20)
+
+          project_url = "https://flisk.sh/project-schema.json"
+          project_main = json.load(open("runtime/engine/schemas/project-schema.json"))
+          try:
+              with urllib.request.urlopen(project_url, timeout=20) as response:
+                  project_live = json.load(response)
+          except Exception:
+              project_live = None
+
+          if live == main and project_live == project_main:
+              message = "The published schemas at " + url + " and " + project_url + " match main."
+              level = "notice"
+          elif live is None:
+              message = "Could not read " + url + " (" + error + ")."
+              level = "warning"
+          elif not has_token:
+              message = ("The published schema at " + url + " is BEHIND main and was not updated: the repository secret "
+                         "PAGES_SYNC_TOKEN is not set. Add a fine-grained token with contents:write on "
+                         "flisk-sh/website as that secret, then re-run this workflow.")
+              level = "error"
+          else:
+              message = "The published schema at " + url + " still differs from main after the copy step (Pages may still be redeploying)."
+              level = "warning"
+
+          print("::" + level + "::" + message)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write("### Published service schema\n\n" + message + "\n")
+          PY

@@ -1,0 +1,355 @@
+# Live-stack resource-type suites (#1290, tracker #1279). The plan job reads each suite's suite.json and builds a matrix of the
+# suites that run for the event; each matrix leg boots one suite's stack and runs all of its cases. Replaces agent-e2e.yml.
+# On a pull request and nightly a leg tests the packed CLI of the checkout (main, nightly), so a regression on main shows up
+# before a release ships it. After a release it tests the published npm package. The gate job always runs and fails when the plan or any selected leg failed.
+name: 🔀 PR | E2E | Resource types
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "CLI version to test (latest or exact version; local checkout is used for pull requests)"
+        type: string
+        default: ""
+      runner:
+        description: "Runner label for every job (default ubuntu-latest); try ubuntu-26.04 before ubuntu-latest moves to it (#1277)"
+        type: string
+        default: "ubuntu-latest"
+      publish:
+        description: "Publish the stack timings (stacklytics, flisk.sh/benchmarks) from this run, as nightly and release runs do"
+        type: boolean
+        default: false
+  # Pull requests run only the legs their changed files touch (the plan job below, tests/e2e/lib/pr-legs.mjs): a change to
+  # one frontend framework runs that framework's leg, a change to shared code runs one canary leg per kind of suite, a change to
+  # how the matrix is built runs every leg. A PR that touches none of them
+  # runs no legs, and the gate passes. The merge queue runs the full pull request set; nightly and release run every axis.
+  merge_group:
+  schedule:
+    # GitHub starts daily scheduled runs about 7-10 h after their cron time (#3911), so this
+    # cron is set 8 h early and the run really starts around 06:30 UTC.
+    - cron: "30 22 * * *"
+  # Prove each release right after it is published. Read-only token, no secrets, main branch only; it checks out main itself
+  # rather than the triggering run's ref, so nothing untrusted is executed.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
+    workflows: ["🏷️ RELEASE | Package | Binaries and npm package"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A pull request's newer push supersedes its older run. Every other event queues per trigger and branch, so a manual dispatch
+# on one branch never cancels a release, nightly or another branch's run (they used to share one group and cancel each other).
+# Release and nightly runs queue and are never cancelled mid-boot.
+concurrency:
+  group: e2e-resource-types${{ github.event_name == 'pull_request' && format('-pr-{0}', github.event.pull_request.number) || format('-{0}-{1}', github.event_name, github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  plan:
+    name: Plan the resource-type suites
+    # A workflow_run from a fork's copy of the release workflow never plans anything: only this repository's own runs count.
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ${{ github.event.inputs.runner || 'ubuntu-latest' }}
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      # queue-reuse-base.sh reads the pull request and this workflow's runs on its head.
+      actions: read
+      pull-requests: read
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix || steps.merged.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        id: checkout
+        # A pull request that merges while this run waits for a runner loses refs/pull/N/merge, so this checkout fails. The
+        # next step decides: a merged pull request plans no legs (the run ends green instead of filing "Merged with red checks"
+        # for a change that never ran, #4592, #4597, #4650); any other checkout failure still fails the plan.
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
+        with:
+          persist-credentials: false
+          ref: ${{ github.event_name == 'workflow_run' && 'main' || github.ref }}
+          fetch-depth: 2
+      - name: Plan no legs for a pull request that merged while this run was queued
+        id: merged
+        if: steps.checkout.outcome == 'failure'
+        env:
+          PR: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          state="$(gh pr view "$PR" --json state --jq .state)"
+          if [ "$state" != "MERGED" ]; then
+            echo "::error::The checkout of refs/pull/$PR/merge failed and the pull request is $state"
+            exit 1
+          fi
+          echo "Pull request #$PR merged while this run was queued; its merge ref is gone, so no legs run."
+          echo 'matrix={"include":[]}' >> "$GITHUB_OUTPUT"
+      - name: Build the matrix for this event
+        id: matrix
+        if: steps.merged.outcome == 'skipped'
+        env:
+          EVENT: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW: e2e-resource-types.yml
+        run: |
+          case "$EVENT" in
+            pull_request | merge_group) trigger="pr" ;;
+            schedule) trigger="nightly" ;;
+            workflow_run) trigger="release" ;;
+            *) trigger="manual" ;;
+          esac
+          # Pull requests run the backend languages with the most use plus Rust (#1489), Go (#1491) and Node.js (#1490),
+          # all proven green on a live stack; nightly, release and manual runs run every language the registry declares. The
+          # backend suite's languages run in the "languages" group, one leg per language; the ORM suites run in the "orm" group (#1493).
+          # Framework legs (one bun leg per non-default HTTP framework) run with the full set, not on pull requests.
+          if [ "$trigger" = "pr" ]; then
+            languages="bun,python,rust,go,node"
+            frameworks=""
+          else
+            languages="$(node tests/e2e/lib/registry-axes.mjs | jq -r '.language | join(",")')"
+            frameworks="$(node tests/e2e/lib/registry-axes.mjs | jq -r '.httpFramework | join(",")')"
+          fi
+          frontends="$(node tests/e2e/lib/registry-axes.mjs | jq -r '.frontendFramework | join(",")')"
+          matrix="$(node tests/e2e/lib/suite-matrix.mjs resource-types,orm "$trigger" "$languages" "$frameworks" "$frontends")"
+          # A pull request runs only the legs its changed files touch (the rules are in tests/e2e/lib/pr-legs.mjs): one frontend
+          # framework, backend language, agent runtime, bring-your-own template or engine area (byo_*.star, vite, prisma) runs
+          # only its own legs; other shared code (resource.ts, the rest of the engine, tests/e2e/lib, common.sh) runs the canary,
+          # one leg per kind of suite; this workflow, pr-legs.mjs and suite-matrix.mjs run every leg; a change none of the suites
+          # read runs none, and the gate passes. The merge queue keeps the full pull request set, unless this workflow already
+          # passed on the queued pull request's head: then it runs only the legs that main's newer commits touch.
+          reuse=""
+          if [ "$EVENT" = "merge_group" ]; then
+            reuse="$(scripts/e2e/queue-reuse-base.sh)"
+            if [ -n "$reuse" ]; then
+              echo "Reusing the pull request's passing run on $reuse; selecting legs for main's changes since then."
+              before="$RUNNER_TEMP/byo-templates-before.json"
+              git show "$reuse:examples/byo/templates.json" >"$before" 2>/dev/null || : >"$before"
+              matrix="$(git diff --name-only "$reuse" HEAD | node tests/e2e/lib/pr-legs.mjs "$matrix" --templates-before "$before" --base "$reuse")"
+            elif git rev-parse --verify --quiet "HEAD^1" >/dev/null; then
+              # No reusable pull request run: still filter by path. The queued commit sits on top of the queue's base, so its
+              # first parent is that base and the depth-2 checkout is enough to list exactly what this pull request changed.
+              # A change none of the suites read runs no legs instead of the full matrix.
+              echo "No reusable run; selecting legs from the changes this queue entry makes over its parent."
+              before="$RUNNER_TEMP/byo-templates-before.json"
+              git show "HEAD^1:examples/byo/templates.json" >"$before" 2>/dev/null || : >"$before"
+              matrix="$(git diff --name-only HEAD^1 HEAD | node tests/e2e/lib/pr-legs.mjs "$matrix" --templates-before "$before" --base HEAD^1)"
+            fi
+          fi
+          if [ "$EVENT" = "pull_request" ]; then
+            # Diff against the checked-out merge commit's first parent (the base the merge ref was built on), not the event
+            # payload's base.sha: that is frozen when the event fires, so once main moves on the diff would also list main's own
+            # new commits and select every leg for a change that touches none of them.
+            before="$RUNNER_TEMP/byo-templates-before.json"
+            git show "HEAD^1:examples/byo/templates.json" >"$before" 2>/dev/null || : >"$before"
+            # --base lets run.sh and suite.json be read as content (a comment or a description selects nothing, one case selects
+            # its own legs); --explain writes the file -> rule -> legs table to the job summary.
+            matrix="$(git diff --name-only HEAD^1 HEAD | node tests/e2e/lib/pr-legs.mjs "$matrix" --templates-before "$before" --base HEAD^1 --explain "$GITHUB_STEP_SUMMARY")"
+          fi
+          echo "trigger=$trigger"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "$matrix"
+
+  resource-types:
+    name: ${{ matrix.group || 'resource-types' }} / ${{ matrix.label || 'skipped (no matching suite)' }}
+    needs: plan
+    if: needs.plan.outputs.matrix != '{"include":[]}'
+    runs-on: ${{ github.event.inputs.runner || 'ubuntu-latest' }}
+    timeout-minutes: ${{ matrix.timeoutMinutes }}
+    strategy:
+      fail-fast: false
+      # No max-parallel: the org's hosted-runner job limit is the real cap (org Settings → Actions → Runners →
+      # "All jobs usage"; GitHub Free is 20 concurrent jobs shared by every workflow in the org, documented in
+      # docs/RELEASING.md). A cap of 4 self-throttled the merge-group set below that and stretched its span to
+      # ~3x the longest leg even when runner slots were free (#3968).
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.23.5
+
+      - name: Choose the version to test
+        id: version
+        env:
+          VERSION_INPUT: ${{ github.event.inputs.version }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_run" ]; then
+            version="$(node -p "require('./package.json').version")"
+          elif [ "$GITHUB_EVENT_NAME" = "pull_request" ] || [ "$GITHUB_EVENT_NAME" = "merge_group" ] || [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
+            version="local"
+          elif [ -n "$VERSION_INPUT" ]; then
+            version="$VERSION_INPUT"
+          else
+            version="latest"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Testing @flisk-sh/flisk@$version"
+
+      - uses: ./.github/actions/setup-bun # zizmor: ignore[self-repository] composite action resolves from this commit
+      - uses: ./.github/actions/setup-tilt # zizmor: ignore[self-repository] composite action resolves from this commit
+      - uses: ./.github/actions/free-postgres-port # zizmor: ignore[self-repository] composite action resolves from this commit
+
+      - name: Install Flisk
+        uses: ./.github/actions/install-flisk # zizmor: ignore[self-repository] composite action resolves from this commit
+        with:
+          version: ${{ steps.version.outputs.version }}
+
+      - name: Tool versions and commit
+        env:
+          FLISK_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          echo "commit: $(git rev-parse HEAD)"
+          echo "tested package: @flisk-sh/flisk@$FLISK_VERSION"
+          echo "node: $(node --version)"
+          echo "docker: $(docker --version)"
+          echo "tilt: $(tilt version)"
+          echo "flisk: $(flisk --version)"
+
+      # The suite runs every case in order; each case is grouped in the log so a red case is easy to find.
+      - name: Run the suite
+        env:
+          DIR: ${{ matrix.dir }}
+          LANGUAGE: ${{ matrix.language }}
+          FRAMEWORK: ${{ matrix.framework }}
+          BYO_VARIANT: ${{ matrix.variant }}
+          # Names this leg in its timings (tests/e2e/lib/lib.sh `timing`), the stacklytics data.
+          E2E_LEG: ${{ matrix.label }}
+          E2E_GROUP: ${{ matrix.group }}
+        run: tests/e2e/"$DIR"/run.sh all
+
+      # Scaffold, start and warm-start times of this leg: one JSON line each, merged by the stack-timings job below.
+      - name: Upload stack timings
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: stack-timings-${{ matrix.label }}
+          path: ${{ runner.temp }}/flisk-e2e/${{ matrix.suite }}/timings.jsonl
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # Failure evidence (#1382): on a failed run, keep the Docker and Tilt logs, service status and generated files for 7 days.
+      - name: Collect failure evidence
+        if: failure() || cancelled()
+        uses: ./.github/actions/collect-e2e-evidence # zizmor: ignore[self-repository] composite action resolves from this commit
+        with:
+          name: ${{ matrix.label }}
+
+      - name: Collect diagnostics
+        if: failure()
+        env:
+          DIR: ${{ matrix.dir }}
+        run: tests/e2e/"$DIR"/run.sh diagnostics
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: e2e-resource-types-${{ matrix.label }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/flisk-e2e/${{ matrix.suite }}/artifacts
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Tear down
+        if: always()
+        env:
+          DIR: ${{ matrix.dir }}
+        run: tests/e2e/"$DIR"/run.sh cleanup
+
+  # Stacklytics (flisk.sh/benchmarks): how fast every framework scaffolds and starts under Flisk. Each leg above wrote its timings; this
+  # job merges them with the catalog in tests/e2e/axes.json into stack-timings.json and a table in the job summary (so a pull request
+  # shows the numbers of the legs it ran). Nothing is published from here.
+  stack-timings:
+    name: Stack timings
+    needs: [plan, resource-types]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.resource-types.result != 'skipped' }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event_name == 'workflow_run' && 'main' || github.ref }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.23.5
+      - name: Download every leg's timings
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: stack-timings-*
+          path: timings
+      - name: Merge into stack-timings.json
+        env:
+          MATRIX: ${{ needs.plan.outputs.matrix }}
+          REPOSITORY: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUNNER_LABEL: ${{ github.event.inputs.runner || 'ubuntu-latest' }}
+        run: |
+          printf '%s' "$MATRIX" >matrix.json
+          # The last published file carries the history the new night is added to; a first run has none.
+          curl --proto '=https' --tlsv1.2 -fsSL "https://raw.githubusercontent.com/$REPOSITORY/benchmarks-data/stack-timings/latest.json" -o previous.json || rm -f previous.json
+          node scripts/benchmark/collect-stack-timings.mjs --timings timings --out stack-timings.json --matrix matrix.json \
+            --previous previous.json --commit "$(git rev-parse HEAD)" --trigger "$EVENT" --runner "$RUNNER_LABEL" --run-url "$RUN_URL" \
+            --summary "$GITHUB_STEP_SUMMARY"
+      - name: Keep the merged file
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: stacklytics-data
+          path: stack-timings.json
+          retention-days: 14
+
+  # Publishes the merged file to the benchmarks-data branch, where flisk.sh/benchmarks reads it. Only nightly, after a release, or when
+  # a manual run asks for it; the only job here that can write.
+  publish-stack-timings:
+    name: Publish stack timings
+    needs: [stack-timings]
+    if: ${{ !cancelled() && needs.stack-timings.result == 'success' && (github.event_name == 'schedule' || github.event_name == 'workflow_run' || github.event.inputs.publish == 'true') }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ github.event_name == 'workflow_run' && 'main' || github.ref }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: stacklytics-data
+      - name: Publish to benchmarks-data
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/benchmark/publish-stack-timings.sh stack-timings.json
+
+  # Always runs, so the gate reports a result even when no suite is selected. A selected suite that failed or was cancelled
+  # fails the gate; a suite that was not selected does not.
+  gate:
+    name: e2e-resource-types
+    needs: [plan, resource-types]
+    if: always()
+    runs-on: ubuntu-26.04
+    timeout-minutes: 2
+    permissions:
+      pull-requests: read
+    steps:
+      - name: Report the result
+        env:
+          PLAN: ${{ needs.plan.result }}
+          LEGS: ${{ needs.resource-types.result }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          echo "plan: $PLAN; resource-type legs: $LEGS"
+          # A pull request that merged while this run was in flight loses refs/pull/N/merge, so the plan checkout fails
+          # through no fault of the change. The merge already happened; do not leave a red mark on it.
+          if [ "$PLAN" = "failure" ] && [ "$EVENT" = "pull_request" ] && [ "$(gh pr view "$PR" --json state --jq .state)" = "MERGED" ]; then
+            echo "Pull request #$PR merged while this run was in flight; its merge ref is gone, so the plan could not check it out."
+            exit 0
+          fi
+          if [ "$PLAN" != "success" ] && [ "$PLAN" != "skipped" ]; then echo "::error::The plan job did not succeed"; exit 1; fi
+          if [ "$LEGS" = "failure" ] || [ "$LEGS" = "cancelled" ]; then echo "::error::A selected suite failed"; exit 1; fi

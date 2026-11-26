@@ -1,0 +1,302 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import { describe, expect, it } from "vitest";
+import {
+  compileLogGrep,
+  DEFAULT_LOG_TAIL,
+  filterLogContent,
+  filterLogLinesSince,
+  isTiltConnectionFailure,
+  isValidLogContext,
+  isValidPort,
+  isValidSince,
+  isValidTail,
+  MAX_LOG_TAIL,
+  parseTiltLogLines,
+  parseTiltWebviewLogLines,
+} from "../tilt-logs.js";
+
+describe("log content filtering", () => {
+  const record = (resource: string, text: string) => ({
+    resource,
+    text,
+    time: "t",
+    source: "runtime",
+  });
+
+  it("uses smart case without matching the service name", () => {
+    const input = [record("ERROR", "quiet"), record("a", "error"), record("a", "ERROR")];
+    expect(filterLogContent(input, compileLogGrep("error"), 0).map((r) => r.text)).toEqual([
+      "error",
+      "ERROR",
+    ]);
+    expect(filterLogContent(input, compileLogGrep("ERROR"), 0).map((r) => r.text)).toEqual([
+      "ERROR",
+    ]);
+    expect(filterLogContent(input, compileLogGrep("missing"), 3)).toEqual([]);
+  });
+
+  it("matches meta-characters literally instead of compiling them", () => {
+    const input = [
+      record("a", "value [ok] done"),
+      record("a", "no brackets"),
+      record("a", "literal (a+)+$ here"),
+      record("a", "unfinished \\"),
+    ];
+    expect(filterLogContent(input, compileLogGrep("[ok]"), 0).map((r) => r.text)).toEqual([
+      "value [ok] done",
+    ]);
+    expect(filterLogContent(input, compileLogGrep("(a+)+$"), 0).map((r) => r.text)).toEqual([
+      "literal (a+)+$ here",
+    ]);
+    expect(filterLogContent(input, compileLogGrep("unfinished \\"), 0).map((r) => r.text)).toEqual([
+      "unfinished \\",
+    ]);
+    expect(() => compileLogGrep("[")).not.toThrow();
+  });
+
+  it("merges overlapping windows per service while preserving interleaved order", () => {
+    const input = [
+      record("a", "before"),
+      record("b", "excluded"),
+      record("a", "ERROR one"),
+      record("b", "also excluded"),
+      record("a", "between"),
+      record("a", "ERROR two"),
+      record("a", "after"),
+    ];
+    expect(filterLogContent(input, compileLogGrep("error"), 1)).toEqual(
+      input
+        .filter((r) => r.resource === "a")
+        .map((r) => ({ ...r, match: r.text.startsWith("ERROR") })),
+    );
+    expect(input.every((r) => !("match" in r))).toBe(true);
+  });
+
+  it("expands multiline Tilt messages and clips large context to the window", () => {
+    const input = [record("a", "before\r\nERROR\r\nafter\r\n"), record("b", "unrelated")];
+    expect(filterLogContent(input, compileLogGrep("ERROR"), Number.MAX_SAFE_INTEGER)).toEqual(
+      ["before", "ERROR", "after"].map((text) => ({ ...input[0], text, match: text === "ERROR" })),
+    );
+    expect(filterLogContent([], compileLogGrep(""), 0)).toEqual([]);
+    expect(filterLogContent([record("a", "")], compileLogGrep(""), 0)[0]?.match).toBe(true);
+  });
+
+  it("accepts only whole non-negative safe context counts", () => {
+    for (const value of ["0", "1", "10000", String(Number.MAX_SAFE_INTEGER)])
+      expect(isValidLogContext(value)).toBe(true);
+    for (const value of ["-1", "1.5", "Infinity", "", "1e3", String(Number.MAX_SAFE_INTEGER + 1)])
+      expect(isValidLogContext(value)).toBe(false);
+  });
+});
+
+const line = (message: string, extra: Record<string, unknown> = {}) =>
+  JSON.stringify({
+    time: "t",
+    resource: "api",
+    level: "info",
+    source: "runtime",
+    message,
+    ...extra,
+  });
+
+describe("parseTiltLogLines", () => {
+  it("normalizes Tilt JSON Lines", () => {
+    expect(parseTiltLogLines(line("hello"), 10)).toEqual([
+      { time: "t", resource: "api", level: "info", source: "runtime", text: "hello" },
+    ]);
+  });
+  it("keeps only the last `limit` lines", () => {
+    const out = ["a", "b", "c"].map((m) => line(m)).join("\n");
+    expect(parseTiltLogLines(out, 2).map((l) => l.text)).toEqual(["b", "c"]);
+  });
+  it("skips blank and non-JSON lines and tolerates missing fields", () => {
+    const out = `notice\n\n${JSON.stringify({ message: "x" })}\n`;
+    expect(parseTiltLogLines(out, 5)).toEqual([
+      { time: null, resource: null, level: null, source: null, text: "x" },
+    ]);
+  });
+  it("handles non-string message and fields appropriately", () => {
+    const out = JSON.stringify({
+      time: 12345,
+      resource: "",
+      level: null,
+      source: false,
+      message: 999,
+    });
+    expect(parseTiltLogLines(out, 5)).toEqual([
+      { time: null, resource: null, level: null, source: null, text: "" },
+    ]);
+  });
+  it("returns empty array for empty or whitespace-only input", () => {
+    expect(parseTiltLogLines("", 10)).toEqual([]);
+    expect(parseTiltLogLines("   \n\n\t  \n  ", 10)).toEqual([]);
+  });
+  it("returns all lines when limit exceeds line count and respects smaller limit", () => {
+    const out = [line("1"), line("2")].join("\n");
+    expect(parseTiltLogLines(out, 10)).toHaveLength(2);
+    expect(parseTiltLogLines(out, 1)).toEqual([
+      { time: "t", resource: "api", level: "info", source: "runtime", text: "2" },
+    ]);
+  });
+});
+
+describe("parseTiltWebviewLogLines (#4197)", () => {
+  const dump = JSON.stringify({
+    logList: {
+      spans: {
+        "build:api:1": { manifestName: "api" },
+        "runtime:api": { manifestName: "api" },
+        "runtime:web": { manifestName: "web" },
+      },
+      segments: [
+        {
+          spanId: "build:api:1",
+          time: "2026-11-20T11:58:00.123456Z",
+          text: "STEP 1/9 : FROM node\n",
+          level: "INFO",
+        },
+        {
+          spanId: "runtime:api",
+          time: "2026-11-20T11:59:55.654321Z",
+          text: "request completed\n",
+          level: "WARN",
+        },
+        { spanId: "runtime:web", text: "undated line\n", level: "INFO" },
+      ],
+    },
+  });
+
+  it("keeps the timestamps Tilt recorded with each segment", () => {
+    expect(parseTiltWebviewLogLines(dump, 10)).toEqual([
+      {
+        time: "2026-11-20T11:58:00.123Z",
+        resource: "api",
+        level: "info",
+        source: "build",
+        text: "STEP 1/9 : FROM node",
+      },
+      {
+        time: "2026-11-20T11:59:55.654Z",
+        resource: "api",
+        level: "warn",
+        source: "runtime",
+        text: "request completed",
+      },
+      {
+        time: null,
+        resource: "web",
+        level: "info",
+        source: "runtime",
+        text: "undated line",
+      },
+    ]);
+  });
+
+  it("returns null for output that is not a webview dump", () => {
+    expect(parseTiltWebviewLogLines("not json", 10)).toBeNull();
+    expect(parseTiltWebviewLogLines("{}", 10)).toBeNull();
+    expect(parseTiltWebviewLogLines('{"logList":{}}', 10)).toEqual([]);
+  });
+});
+
+describe("filterLogLinesSince (#4197)", () => {
+  it("drops a stored line older than the window and keeps a new one", () => {
+    const now = Date.parse("2026-11-20T12:00:00Z");
+    const lines = [
+      { time: "2026-11-20T11:58:00.000Z", text: "old" },
+      { time: "2026-11-20T11:59:55.000Z", text: "new" },
+      { time: null, text: "undated" },
+    ];
+    expect(filterLogLinesSince(lines, 30_000, now)).toEqual([lines[1]]);
+  });
+});
+
+describe("option validation", () => {
+  it("accepts Go-style durations only", () => {
+    for (const ok of [
+      "30s",
+      "5m",
+      "1h",
+      "1h30m",
+      "250ms",
+      "100us",
+      "500µs",
+      "1000ns",
+      "1.5s",
+      "0.5m",
+      "2.5h",
+    ]) {
+      expect(isValidSince(ok)).toBe(true);
+    }
+    for (const bad of [
+      "",
+      "5",
+      "m",
+      "5 minutes",
+      "-1s",
+      "10 s",
+      "1.2.3s",
+      "foo",
+      "1h -30m",
+      "1d",
+      "5m10",
+    ]) {
+      expect(isValidSince(bad)).toBe(false);
+    }
+  });
+  it("rejects durations beyond Go's int64 range", () => {
+    expect(isValidSince("999999999999999999999h")).toBe(false);
+    expect(isValidSince("2562047h")).toBe(true);
+    expect(isValidSince("2562048h")).toBe(false);
+  });
+  it("accepts ports 1-65535 only", () => {
+    for (const ok of ["1", "10350", "65535"]) expect(isValidPort(ok)).toBe(true);
+    for (const bad of ["0", "01", "65536", "99999", "100000", "abc", ""])
+      expect(isValidPort(bad)).toBe(false);
+  });
+  it("accepts positive integer tails only", () => {
+    expect(isValidTail("200")).toBe(true);
+    for (const bad of ["0", "-1", "1.5", "10x", "", "10001", "9007199254740991"]) {
+      expect(isValidTail(bad)).toBe(false);
+    }
+    expect(isValidTail("10000")).toBe(true);
+  });
+});
+
+describe("isTiltConnectionFailure", () => {
+  it("separates a missing server from rejected arguments", () => {
+    expect(
+      isTiltConnectionFailure(
+        "Error: fetching websocket token: dial tcp [::1]:10398: connect: connection refused",
+      ),
+    ).toBe(true);
+    expect(isTiltConnectionFailure('Error: invalid argument "5x" for "--since" flag')).toBe(false);
+  });
+
+  it("identifies various Tilt connection failure signals", () => {
+    expect(isTiltConnectionFailure("dial tcp 127.0.0.1:10350: connect: connection refused")).toBe(
+      true,
+    );
+    expect(isTiltConnectionFailure("connecting to Tilt server failed")).toBe(true);
+    expect(isTiltConnectionFailure("dial tcp: lookup tilt.internal: no such host")).toBe(true);
+    expect(isTiltConnectionFailure("failed reading websocket_token")).toBe(true);
+    expect(isTiltConnectionFailure("CONNECTION REFUSED")).toBe(true);
+  });
+
+  it("returns false for unrelated Tilt stderr output", () => {
+    expect(isTiltConnectionFailure("tilt: unrecognized command 'foo'")).toBe(false);
+    expect(isTiltConnectionFailure("permission denied: unable to open /var/log/tilt.log")).toBe(
+      false,
+    );
+    expect(isTiltConnectionFailure("context deadline exceeded")).toBe(false);
+  });
+});
+
+describe("log tail limits", () => {
+  it("pins default and maximum tail values and enforces ordering", () => {
+    expect(DEFAULT_LOG_TAIL).toBe(200);
+    expect(MAX_LOG_TAIL).toBe(10_000);
+    expect(DEFAULT_LOG_TAIL).toBeLessThanOrEqual(MAX_LOG_TAIL);
+  });
+});

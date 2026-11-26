@@ -1,0 +1,35 @@
+# Re-runs workflow runs GitHub rejected before scheduling ("startup_failure", zero jobs), so a pull request left with
+# no checks recovers on its own instead of waiting for a maintainer or an empty commit (#3944). Each run is retried
+# once only, while it is still young, so a run GitHub keeps rejecting is not looped on. Runs on the default branch
+# only; no pull request code.
+name: 🤖 BOT | CI | Rerun startup-failed runs
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: rerun-startup-failed-runs
+  cancel-in-progress: false
+
+jobs:
+  rerun:
+    name: Rerun startup-failed runs
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write # re-run startup-failed runs
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Rerun startup-failed runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: node scripts/rerun-startup-failed-runs.mjs --repo "$REPO"

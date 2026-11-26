@@ -1,0 +1,953 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeResource } from "../../test-support/index.js";
+import {
+  projectConfig,
+  projectJsonPath as sharedProjectJsonPath,
+  readProjectConfig as sharedReadProjectConfig,
+  writeProjectConfig as sharedWriteProjectConfig,
+} from "../../test-support/project-config.js";
+import type { DiscoveredResource, ProjectConfig } from "../../types/index.js";
+import { MASTER_CONFIG_FILES } from "../../utils/constants.js";
+import { FliskError } from "../../utils/errors.js";
+import {
+  enableDiscoveredStacks,
+  formatProjectPaths,
+  projectCommand,
+  writeDefaultProjectConfig,
+} from "../project.js";
+
+const mocks = vi.hoisted(() => ({
+  assertMachineReadyOrExit: vi.fn(async () => {}),
+  detectRuntimePrerequisites: vi.fn(() => ({ hasDockerCli: true, hasTiltCli: true })),
+  formatRuntimeNextSteps: vi.fn(() => [] as string[]),
+  findProjectRoot: vi.fn(),
+  generateMasterConfigs: vi.fn(async () => {}),
+  ensureEnvFile: vi.fn(() => false),
+  completeEnvFile: vi.fn(() => [] as string[]),
+  validateEnvFile: vi.fn(() => ({ missing: [] as string[], invalid: [], warnings: [] })),
+  ensureGitignore: vi.fn(() => [] as string[]),
+  promptConfirm: vi.fn(async () => true),
+  promptText: vi.fn(async () => ""),
+  promptMultiSelect: vi.fn(async () => [] as string[]),
+  showCancelled: vi.fn(),
+  showCommandHeader: vi.fn(),
+  showDetail: vi.fn(),
+  showStep: vi.fn(),
+  showSuccess: vi.fn(),
+  showErrorAndExit: vi.fn((_msg: string) => {
+    throw new ProcessExit(1);
+  }),
+  installAgentSkills: vi.fn(() => ["flisk-build"]),
+  claudeGuardHookNeedsWiring: vi.fn(() => false),
+  cleanStaleVolumesForScaffold: vi.fn(() => ({
+    projectName: "flisk-example",
+    candidates: [] as string[],
+    removed: [] as string[],
+    skippedReason: "none" as const,
+    sharedFolders: [] as string[],
+    runningFolders: [] as string[],
+  })),
+}));
+
+vi.mock("../../utils/cold-preflight.js", () => ({
+  assertMachineReadyOrExit: mocks.assertMachineReadyOrExit,
+  detectRuntimePrerequisites: mocks.detectRuntimePrerequisites,
+  formatRuntimeNextSteps: mocks.formatRuntimeNextSteps,
+}));
+vi.mock("../../utils/paths.js", () => ({ findProjectRoot: mocks.findProjectRoot }));
+vi.mock("../../generator/template-engine.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../generator/template-engine.js")>()),
+  generateMasterConfigs: mocks.generateMasterConfigs,
+}));
+vi.mock("../../utils/env-validator.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/env-validator.js")>()),
+  ensureEnvFile: mocks.ensureEnvFile,
+  completeEnvFile: mocks.completeEnvFile,
+  validateEnvFile: mocks.validateEnvFile,
+}));
+vi.mock("../../utils/file-helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/file-helpers.js")>()),
+  ensureGitignore: mocks.ensureGitignore,
+}));
+vi.mock("../../utils/prompt.js", () => ({
+  promptConfirm: mocks.promptConfirm,
+  promptText: mocks.promptText,
+  promptMultiSelect: mocks.promptMultiSelect,
+}));
+vi.mock("../../utils/formatting.js", () => ({
+  showCancelled: mocks.showCancelled,
+  showCommandHeader: mocks.showCommandHeader,
+  showDetail: mocks.showDetail,
+  showStep: mocks.showStep,
+  showSuccess: mocks.showSuccess,
+}));
+vi.mock("../../utils/errors.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/errors.js")>()),
+  runCommand: async (fn: () => Promise<unknown>) => fn(),
+  showErrorAndExit: mocks.showErrorAndExit,
+}));
+vi.mock("../../utils/agent-skills.js", () => ({
+  installAgentSkills: mocks.installAgentSkills,
+  claudeGuardHookNeedsWiring: mocks.claudeGuardHookNeedsWiring,
+  PROJECT_CLAUDE_SETTINGS: JSON.stringify({ hooks: { PreToolUse: [] } }),
+}));
+vi.mock("../../utils/scaffold-volume-cleanup.js", () => ({
+  cleanStaleVolumesForScaffold: mocks.cleanStaleVolumesForScaffold,
+}));
+
+class ProcessExit extends Error {
+  constructor(readonly code: number) {
+    super(`process.exit(${code})`);
+  }
+}
+
+const runProject = async (options: Record<string, unknown>, template?: string) => {
+  projectCommand.setOptionValue("yes", Boolean(options.yes));
+  projectCommand.setOptionValue("force", Boolean(options.force));
+  projectCommand.setOptionValue("check", Boolean(options.check));
+  projectCommand.setOptionValue("configFile", options.configFile);
+  projectCommand.setOptionValue("path", options.path);
+  projectCommand.setOptionValue("name", options.name);
+  projectCommand.setOptionValue("quiet", Boolean(options.quiet));
+  projectCommand.setOptionValue("json", Boolean(options.json));
+  if (options.agentSkills !== undefined) {
+    projectCommand.setOptionValue("agentSkills", options.agentSkills);
+  } else {
+    projectCommand.setOptionValue("agentSkills", true);
+  }
+
+  const handler = (projectCommand as unknown as { _actionHandler: (args: unknown[]) => unknown })
+    ._actionHandler;
+  return handler.call(projectCommand, [template]);
+};
+
+let root = "";
+let exitSpy: ReturnType<typeof vi.spyOn>;
+let logSpy: ReturnType<typeof vi.spyOn>;
+
+beforeEach(() => {
+  root = mkdtempSync(join(tmpdir(), "flisk-project-command-"));
+  mocks.findProjectRoot.mockReturnValue(root);
+  mocks.assertMachineReadyOrExit.mockResolvedValue(undefined);
+  mocks.generateMasterConfigs.mockResolvedValue(undefined);
+  mocks.ensureEnvFile.mockReturnValue(false);
+  mocks.completeEnvFile.mockReturnValue([]);
+  mocks.validateEnvFile.mockReturnValue({ missing: [], invalid: [], warnings: [] });
+  mocks.ensureGitignore.mockReturnValue([]);
+  mocks.promptConfirm.mockResolvedValue(true);
+  mocks.installAgentSkills.mockReturnValue(["flisk-build"]);
+  mocks.cleanStaleVolumesForScaffold.mockClear();
+  mocks.cleanStaleVolumesForScaffold.mockReturnValue({
+    projectName: "flisk-example",
+    candidates: [],
+    removed: [],
+    skippedReason: "none",
+    sharedFolders: [],
+    runningFolders: [],
+  });
+  mocks.showErrorAndExit.mockImplementation((_msg: string) => {
+    throw new ProcessExit(1);
+  });
+  exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+    throw new ProcessExit(code ?? 0);
+  }) as never);
+  logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+});
+
+afterEach(() => {
+  exitSpy.mockRestore();
+  logSpy.mockRestore();
+  vi.clearAllMocks();
+  rmSync(root, { recursive: true, force: true });
+});
+
+const projectJsonPath = () => sharedProjectJsonPath(root);
+const writeProjectConfig = (config: ProjectConfig): string =>
+  sharedWriteProjectConfig(root, config);
+const readProjectConfig = (): ProjectConfig => sharedReadProjectConfig(root);
+
+function stackResource(stack: string, name = `${stack}-api`): DiscoveredResource {
+  return { ...makeResource(name, "backend"), stack };
+}
+
+describe("enableDiscoveredStacks", () => {
+  it("does nothing when the project config is missing", () => {
+    expect(enableDiscoveredStacks(root, [stackResource("payments")])).toEqual([]);
+  });
+
+  it("adds newly discovered stacks to pre_alpha and persists them", () => {
+    writeProjectConfig(projectConfig(["platform"]));
+
+    const enabled = enableDiscoveredStacks(root, [
+      stackResource("payments"),
+      stackResource("orders"),
+    ]);
+
+    expect(enabled).toEqual(["orders", "payments"]);
+    expect(readProjectConfig().phases.pre_alpha.enabledStacks).toEqual([
+      "platform",
+      "orders",
+      "payments",
+    ]);
+  });
+
+  it("does not re-enable stacks assigned to another phase", () => {
+    writeProjectConfig(projectConfig([], { alpha: ["payments"] }));
+
+    const enabled = enableDiscoveredStacks(root, [
+      stackResource("payments"),
+      stackResource("catalog"),
+    ]);
+
+    expect(enabled).toEqual(["catalog"]);
+    expect(readProjectConfig().phases.alpha.enabledStacks).toEqual(["payments"]);
+    expect(readProjectConfig().phases.pre_alpha.enabledStacks).toEqual(["catalog"]);
+  });
+
+  it("leaves the file unchanged when every stack is already assigned", () => {
+    const original = writeProjectConfig(
+      projectConfig(["platform"], { out_of_scope: ["payments"] }),
+    );
+
+    const enabled = enableDiscoveredStacks(root, [
+      stackResource("platform"),
+      stackResource("payments"),
+    ]);
+
+    expect(enabled).toEqual([]);
+    expect(readFileSync(projectJsonPath(), "utf-8")).toBe(original);
+  });
+
+  it("collapses a stack discovered through several resources", () => {
+    writeProjectConfig(projectConfig([]));
+
+    const enabled = enableDiscoveredStacks(root, [
+      stackResource("payments", "payments-api"),
+      stackResource("payments", "payments-worker"),
+    ]);
+
+    expect(enabled).toEqual(["payments"]);
+    expect(readProjectConfig().phases.pre_alpha.enabledStacks).toEqual(["payments"]);
+  });
+});
+
+function writeMasterConfigs() {
+  const outDir = join(root, ".flisk", ".flisk-out");
+  mkdirSync(outDir, { recursive: true });
+  for (const file of MASTER_CONFIG_FILES) {
+    writeFileSync(join(outDir, file), "");
+  }
+}
+
+describe("project command action", () => {
+  it("derives a Docker- and npm-compatible name for a folder with spaces and dots", () => {
+    const weirdRoot = join(root, "My App.v2");
+    mkdirSync(join(weirdRoot, ".flisk"), { recursive: true });
+    writeDefaultProjectConfig(weirdRoot);
+    const config = JSON.parse(
+      readFileSync(join(weirdRoot, ".flisk", "project.json"), "utf-8"),
+    ) as ProjectConfig;
+    expect(config.project.name).toBe("my-app-v2");
+  });
+
+  it("reports a complete configuration in --check mode", async () => {
+    writeProjectConfig(projectConfig(["platform"]));
+    writeMasterConfigs();
+
+    await expect(runProject({ check: true, force: false, yes: false })).rejects.toBeInstanceOf(
+      ProcessExit,
+    );
+
+    expect(exitSpy).toHaveBeenCalledWith(0);
+    expect(mocks.showSuccess).toHaveBeenCalledWith("Project configuration is valid");
+  });
+
+  it("exits non-zero in --check mode when configuration is incomplete", async () => {
+    await expect(runProject({ check: true, force: false, yes: false })).rejects.toMatchObject({
+      code: 1,
+    });
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(mocks.showDetail).toHaveBeenCalledWith(".flisk/project.json (not found)", 3);
+  });
+
+  it("keeps --path in the --check recovery message when the project is elsewhere", async () => {
+    mocks.findProjectRoot.mockReturnValue(null);
+    const target = join(root, "elsewhere");
+
+    await expect(
+      runProject({ check: true, force: false, yes: false, path: target }),
+    ).rejects.toMatchObject({ code: 1 });
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(mocks.showDetail).toHaveBeenCalledWith(
+      `Run \`flisk project --path '${target}'\` to create them.`,
+    );
+  });
+
+  it("keeps --path in the --check recovery suggestion in --json mode", async () => {
+    mocks.findProjectRoot.mockReturnValue(null);
+    const target = join(root, "elsewhere");
+    let output = "";
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((str: string) => {
+      output += str;
+      return true;
+    }) as never);
+
+    await expect(
+      runProject({ json: true, check: true, force: false, yes: false, path: target }),
+    ).rejects.toBeInstanceOf(ProcessExit);
+
+    writeSpy.mockRestore();
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const envelope = JSON.parse(output);
+    expect(envelope.errors[0].suggestions).toContain(
+      `Run \`flisk project --yes --path '${target}'\` to create the missing files`,
+    );
+  });
+
+  it("clears stale volumes after cloning a template (#3983)", async () => {
+    const dest = join(root, "flisk-example");
+
+    await runProject({ yes: true, path: dest, agentSkills: false }, "example");
+
+    expect(existsSync(join(dest, ".flisk", "project.json"))).toBe(true);
+    expect(mocks.cleanStaleVolumesForScaffold).toHaveBeenCalledExactlyOnceWith(dest);
+  });
+
+  it("suggests the closest starter for a mistyped template name", async () => {
+    const lines: string[] = [];
+    logSpy.mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "));
+    });
+
+    await expect(runProject({ yes: true }, "sas")).rejects.toMatchObject({ code: 1 });
+
+    const output = lines.join("\n");
+    expect(output).toContain('Did you mean "saas"?');
+    expect(output.indexOf('Did you mean "saas"?')).toBeLessThan(
+      output.indexOf("Available templates:"),
+    );
+  });
+
+  it("lists the catalog without inventing a suggestion for an unrelated name", async () => {
+    const lines: string[] = [];
+    logSpy.mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "));
+    });
+
+    await expect(runProject({ yes: true }, "shop")).rejects.toMatchObject({ code: 1 });
+
+    const output = lines.join("\n");
+    expect(output).toContain('Unknown template: "shop"');
+    expect(output).toContain("Available templates:");
+    expect(output).not.toContain("Did you mean");
+  });
+
+  it("suggests `flisk project --check` when given validate", async () => {
+    const lines: string[] = [];
+    logSpy.mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "));
+    });
+
+    await expect(runProject({ yes: true }, "validate")).rejects.toMatchObject({ code: 1 });
+
+    const output = lines.join("\n");
+    expect(output).toContain('Did you mean "flisk project --check"?');
+    expect(output).toContain('Unknown template: "validate"');
+    expect(output).toContain("Available templates:");
+  });
+
+  it("suggests `flisk project --check` in --json mode when given validate", async () => {
+    let output = "";
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((str: string) => {
+      output += str;
+      return true;
+    }) as never);
+
+    await expect(runProject({ json: true }, "validate")).rejects.toBeInstanceOf(ProcessExit);
+
+    writeSpy.mockRestore();
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const envelope = JSON.parse(output);
+    expect(envelope.errors[0].message).toContain('Unknown template: "validate"');
+    expect(envelope.errors[0].suggestions).toContain('Did you mean "flisk project --check"?');
+  });
+
+  it("does not suggest a function-derived hint in --json mode for prototype keys", async () => {
+    let output = "";
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((str: string) => {
+      output += str;
+      return true;
+    }) as never);
+
+    await expect(runProject({ json: true }, "constructor")).rejects.toBeInstanceOf(ProcessExit);
+
+    writeSpy.mockRestore();
+    const envelope = JSON.parse(output);
+    expect(envelope.errors[0].message).toContain('Unknown template: "constructor"');
+    expect(JSON.stringify(envelope.errors[0].suggestions)).not.toContain("native code");
+    expect(JSON.stringify(envelope.errors[0].suggestions)).not.toContain("Did you mean");
+  });
+
+  it("keeps existing suggestions in --json mode for unknown non-action templates", async () => {
+    let output = "";
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((str: string) => {
+      output += str;
+      return true;
+    }) as never);
+
+    await expect(runProject({ json: true }, "zzzz")).rejects.toBeInstanceOf(ProcessExit);
+
+    writeSpy.mockRestore();
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const envelope = JSON.parse(output);
+    expect(envelope.errors[0].message).toContain('Unknown template: "zzzz"');
+    expect(envelope.errors[0].suggestions).not.toContain('Did you mean "flisk project --check"?');
+    expect(envelope.errors[0].suggestions).toEqual([
+      expect.stringContaining("Use one of:"),
+      "Or run `flisk project` with no template for a blank project",
+    ]);
+  });
+
+  it("regenerates master configs and completes an existing .env", async () => {
+    writeProjectConfig(projectConfig(["platform"]));
+    mocks.completeEnvFile.mockReturnValue(["JWT_SECRET"]);
+    mocks.ensureGitignore.mockReturnValue([".env"]);
+
+    await runProject({ check: false, force: false, yes: false });
+
+    expect(mocks.generateMasterConfigs).toHaveBeenCalledWith(root, { quiet: false });
+    expect(mocks.ensureEnvFile).toHaveBeenCalledWith(root, { verdaccio: false });
+    expect(mocks.completeEnvFile).toHaveBeenCalledWith(root, { verdaccio: false });
+    expect(mocks.ensureGitignore).toHaveBeenCalledWith(root);
+    expect(mocks.showSuccess).toHaveBeenCalledWith(
+      "Updated: .env (added JWT_SECRET; existing values unchanged)",
+    );
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("creates a default project in non-interactive mode", async () => {
+    await runProject({ check: false, force: false, yes: true });
+
+    const config = readProjectConfig();
+    expect(Object.keys(config.phases)).toEqual(["pre_alpha", "alpha", "beta", "out_of_scope"]);
+    expect(config.project.name).toContain("flisk-project-command-");
+    expect(mocks.promptText).not.toHaveBeenCalled();
+    expect(mocks.generateMasterConfigs).toHaveBeenCalledWith(root, { quiet: false });
+    expect(mocks.ensureEnvFile).toHaveBeenCalledWith(root, { verdaccio: false });
+  });
+
+  it("gives two non-ASCII folders distinct names and Compose identities", async () => {
+    const first = join(root, "магазин");
+    const second = join(root, "店铺");
+    mkdirSync(first);
+    mkdirSync(second);
+
+    await runProject({ check: false, force: false, yes: true, path: first });
+    await runProject({ check: false, force: false, yes: true, path: second });
+
+    const firstName = sharedReadProjectConfig(first).project.name;
+    const secondName = sharedReadProjectConfig(second).project.name;
+    expect(firstName).toMatch(/^project-[0-9a-f]{8}$/);
+    expect(secondName).toMatch(/^project-[0-9a-f]{8}$/);
+    expect(firstName).not.toBe(secondName);
+    expect(firstName.replace(/-/g, "_")).not.toBe(secondName.replace(/-/g, "_"));
+  });
+
+  it("writes the --name project name instead of the folder name", async () => {
+    await runProject({ check: false, force: false, yes: true, name: "my-shop" });
+
+    expect(readProjectConfig().project.name).toBe("my-shop");
+    expect(mocks.promptText).not.toHaveBeenCalled();
+    expect(mocks.generateMasterConfigs).toHaveBeenCalledWith(root, { quiet: false });
+  });
+
+  it("trims the --name value before writing it", async () => {
+    await runProject({ check: false, force: false, yes: true, name: "  my-shop  " });
+
+    expect(readProjectConfig().project.name).toBe("my-shop");
+  });
+
+  it.each(["My Shop", "my_shop", "-shop", "shop-", "", "a".repeat(64)])(
+    "rejects --name %j and writes nothing",
+    async (name) => {
+      await expect(
+        runProject({ check: false, force: false, yes: true, name }),
+      ).rejects.toBeInstanceOf(FliskError);
+
+      expect(existsSync(projectJsonPath())).toBe(false);
+      expect(mocks.generateMasterConfigs).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses --name with a template clone", async () => {
+    await expect(
+      runProject({ check: false, force: false, yes: true, name: "my-shop" }, "saas"),
+    ).rejects.toThrow("`--name` applies to a blank project, not a template clone");
+  });
+
+  it("refuses --name with --check", async () => {
+    await expect(
+      runProject({ check: true, force: false, yes: true, name: "my-shop" }),
+    ).rejects.toThrow("`--name` does not apply to `--check`, which only reports");
+  });
+
+  it("refuses --name with --config-file", async () => {
+    const customPath = join(root, "custom-config.json");
+    writeFileSync(customPath, JSON.stringify(projectConfig([]), null, 2));
+
+    await expect(
+      runProject({
+        check: false,
+        force: false,
+        yes: true,
+        name: "my-shop",
+        configFile: customPath,
+      }),
+    ).rejects.toThrow("`--name` cannot be combined with `--config-file`");
+    expect(existsSync(projectJsonPath())).toBe(false);
+  });
+
+  it("refuses --name that would rename an existing project", async () => {
+    const original = writeProjectConfig(projectConfig([]));
+
+    await expect(
+      runProject({ check: false, force: false, yes: true, name: "new-name" }),
+    ).rejects.toThrow('--name cannot rename the existing project "fixture"');
+    expect(readFileSync(projectJsonPath(), "utf-8")).toBe(original);
+  });
+
+  it("accepts --name matching the existing project name and refreshes", async () => {
+    writeProjectConfig(projectConfig([]));
+
+    await runProject({ check: false, force: false, yes: true, name: "fixture" });
+
+    expect(mocks.generateMasterConfigs).toHaveBeenCalledWith(root, { quiet: false });
+    expect(readProjectConfig().project.name).toBe("fixture");
+  });
+
+  it("applies --name when --force recreates the project", async () => {
+    writeProjectConfig(projectConfig([]));
+
+    await runProject({ check: false, force: true, yes: true, name: "recreated" });
+
+    expect(readProjectConfig().project.name).toBe("recreated");
+  });
+
+  it("skips the name question in the wizard when --name is given", async () => {
+    mocks.promptText.mockResolvedValueOnce("2.0.0-beta").mockResolvedValueOnce("services/*/*");
+    mocks.promptMultiSelect
+      .mockResolvedValueOnce(["infra"])
+      .mockResolvedValueOnce(["api"])
+      .mockResolvedValueOnce(["worker"])
+      .mockResolvedValueOnce(["monitoring"]);
+
+    await runProject({ check: false, force: false, yes: false, name: "wizard-app" });
+
+    // The version and discovery questions still run; the name question is the only one skipped.
+    expect(mocks.promptText).toHaveBeenCalledTimes(2);
+    const savedConfig = readProjectConfig();
+    expect(savedConfig.project.name).toBe("wizard-app");
+    expect(savedConfig.project.version).toBe("2.0.0-beta");
+  });
+
+  it("initialises a blank project in --path instead of the current directory", async () => {
+    mocks.findProjectRoot.mockReturnValue(null);
+    const target = join(root, "elsewhere");
+
+    await runProject({ check: false, force: false, yes: true, quiet: true, path: target });
+
+    const config = JSON.parse(
+      readFileSync(join(target, ".flisk", "project.json"), "utf-8"),
+    ) as ProjectConfig;
+    expect(config.project.name).toBe("elsewhere");
+    expect(mocks.generateMasterConfigs).toHaveBeenCalledWith(target, { quiet: true });
+    expect(mocks.ensureEnvFile).toHaveBeenCalledWith(target, { verdaccio: false });
+    expect(existsSync(join(root, ".flisk", "project.json"))).toBe(false);
+  });
+
+  it("prefers --path over the enclosing project root", async () => {
+    const original = writeProjectConfig(projectConfig(["platform"]));
+    const target = join(root, "elsewhere");
+
+    await runProject({ check: false, force: false, yes: true, quiet: true, path: target });
+
+    const config = JSON.parse(
+      readFileSync(join(target, ".flisk", "project.json"), "utf-8"),
+    ) as ProjectConfig;
+    expect(config.project.name).toBe("elsewhere");
+    expect(readFileSync(projectJsonPath(), "utf-8")).toBe(original);
+    expect(mocks.generateMasterConfigs).toHaveBeenCalledWith(target, { quiet: true });
+  });
+
+  it("prints a cd step before the next steps when --path puts the project elsewhere", async () => {
+    mocks.findProjectRoot.mockReturnValue(null);
+    const target = join(root, "elsewhere");
+
+    await runProject({ check: false, force: false, yes: true, path: target });
+
+    // Derive the expected cd line from the same helper the command uses, so
+    // the assertion holds on every shell instead of pinning a posix `cd`.
+    const { cdCommands } = formatProjectPaths(target);
+    const [first, ...rest] = cdCommands;
+    expect(mocks.showDetail).toHaveBeenCalledWith(`1. ${first}`);
+    for (const alt of rest) expect(mocks.showDetail).toHaveBeenCalledWith(`   ${alt}`);
+    expect(mocks.showDetail).toHaveBeenCalledWith(
+      "2. flisk resource api --type backend --stack main   # scaffold a service",
+    );
+    expect(mocks.showDetail).toHaveBeenCalledWith(
+      "3. flisk up main                                     # start it",
+    );
+  });
+
+  it("prints no cd step when the blank project is in the current directory", async () => {
+    mocks.findProjectRoot.mockReturnValue(null);
+    // No --path: the project is initialised in cwd(), so the next steps need no cd.
+    const { cwd } = await import("node:process");
+    const originalCwd = cwd();
+    process.chdir(root);
+    try {
+      await runProject({ check: false, force: false, yes: true });
+    } finally {
+      process.chdir(originalCwd);
+    }
+
+    const printed = mocks.showDetail.mock.calls.map((call) => String(call[0]));
+    expect(printed).toContain(
+      "1. flisk resource api --type backend --stack main   # scaffold a service",
+    );
+    expect(printed).toContain("2. flisk up main                                     # start it");
+    expect(printed.some((line) => line.startsWith("1. cd "))).toBe(false);
+  });
+
+  it("prints nothing but the files it writes when asked to be quiet", async () => {
+    await runProject({ check: false, force: false, yes: true, quiet: true });
+
+    expect(mocks.generateMasterConfigs).toHaveBeenCalledWith(root, { quiet: true });
+    expect(mocks.showCommandHeader).not.toHaveBeenCalled();
+    expect(mocks.showStep).not.toHaveBeenCalled();
+    expect(mocks.showDetail).not.toHaveBeenCalled();
+    expect(mocks.showSuccess).not.toHaveBeenCalled();
+    expect(readProjectConfig().project.name).toContain("flisk-project-command-");
+  });
+
+  it("keeps the existing project when --force is declined", async () => {
+    const original = writeProjectConfig(projectConfig([]));
+    writeMasterConfigs();
+    mocks.promptConfirm.mockResolvedValue(false);
+
+    await runProject({ check: false, force: true, yes: false });
+
+    expect(mocks.promptConfirm).toHaveBeenCalledOnce();
+    expect(mocks.showCancelled).toHaveBeenCalledOnce();
+    expect(readFileSync(projectJsonPath(), "utf-8")).toBe(original);
+    expect(mocks.generateMasterConfigs).not.toHaveBeenCalled();
+  });
+
+  it("overwrites the project with --force --yes without prompting", async () => {
+    writeProjectConfig(projectConfig(["platform"]));
+
+    await runProject({ check: false, force: true, yes: true });
+
+    expect(mocks.promptConfirm).not.toHaveBeenCalled();
+    expect(readProjectConfig().project.name).toContain("flisk-project-command-");
+    expect(mocks.generateMasterConfigs).toHaveBeenCalledWith(root, { quiet: false });
+  });
+
+  it("backs up project.json and lists what --force --yes reset (#5477)", async () => {
+    const config = projectConfig([], { beta: ["billing"] });
+    config.discovery.paths = ["apps/*/*", "services/*/*"];
+    config.project.version = "9.9.9";
+    const original = writeProjectConfig(config);
+
+    await runProject({ check: false, force: true, yes: true });
+
+    expect(readFileSync(`${projectJsonPath()}.bak`, "utf-8")).toBe(original);
+    const printed = mocks.showDetail.mock.calls.map((call) => String(call[0]));
+    expect(logSpy.mock.calls.flat().join("\n")).toContain("--force reset");
+    expect(printed).toContain("discovery.paths: [apps/*/*, services/*/*] -> [services/*/*]");
+    expect(printed).toContain("phases.beta.enabledStacks: [billing] -> []");
+    expect(printed).toContain("project.version: 9.9.9 -> 1.0.0");
+    expect(printed.some((line) => line.includes("Saved the previous file"))).toBe(true);
+    expect(readProjectConfig().discovery.paths).toEqual(["services/*/*"]);
+  });
+
+  it("does not write a backup when there is no project.json to replace", async () => {
+    await runProject({ check: false, force: true, yes: true });
+
+    expect(existsSync(join(root, ".flisk", "project.json.bak"))).toBe(false);
+    expect(
+      mocks.showDetail.mock.calls.some((call) => String(call[0]).includes("--force reset")),
+    ).toBe(false);
+  });
+
+  it("still backs up a corrupt project.json when --force replaces it", async () => {
+    mkdirSync(join(root, ".flisk"), { recursive: true });
+    writeFileSync(projectJsonPath(), "{ not json", "utf-8");
+
+    await runProject({ check: false, force: true, yes: true });
+
+    expect(readFileSync(`${projectJsonPath()}.bak`, "utf-8")).toBe("{ not json");
+    expect(readProjectConfig().project.name).toContain("flisk-project-command-");
+  });
+
+  it("checks only the scaffolding prerequisites, not the local runtime", async () => {
+    await runProject({ check: false, force: false, yes: true });
+
+    expect(mocks.assertMachineReadyOrExit).toHaveBeenCalledWith({ scope: "scaffold" });
+  });
+
+  it("prints the runtime next steps after the project is configured", async () => {
+    mocks.formatRuntimeNextSteps.mockReturnValue(["Tilt is not installed. Install it."]);
+
+    await runProject({ check: false, force: false, yes: true });
+
+    expect(mocks.detectRuntimePrerequisites).toHaveBeenCalled();
+    expect(mocks.showDetail).toHaveBeenCalledWith("Tilt is not installed. Install it.", 0);
+  });
+
+  it("handles existing project: preserves project.json, regenerates configs, and avoids prompts", async () => {
+    const initialConfig = projectConfig(["platform", "api"]);
+    const originalJson = writeProjectConfig(initialConfig);
+    writeMasterConfigs();
+    mocks.ensureEnvFile.mockReturnValue(false);
+    mocks.completeEnvFile.mockReturnValue([]);
+
+    await runProject({ check: false, force: false, yes: false });
+
+    expect(mocks.showSuccess).toHaveBeenCalledWith(".flisk/project.json exists");
+    expect(mocks.promptConfirm).not.toHaveBeenCalled();
+    expect(mocks.promptText).not.toHaveBeenCalled();
+    expect(mocks.promptMultiSelect).not.toHaveBeenCalled();
+    expect(readFileSync(projectJsonPath(), "utf-8")).toBe(originalJson);
+    expect(mocks.generateMasterConfigs).toHaveBeenCalledWith(root, { quiet: false });
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Project configuration regenerated!"),
+    );
+  });
+
+  it("handles existing project: reports when .env is newly created", async () => {
+    writeProjectConfig(projectConfig(["platform"]));
+    mocks.ensureEnvFile.mockReturnValue(true);
+
+    await runProject({ check: false, force: false, yes: false });
+
+    expect(mocks.showSuccess).toHaveBeenCalledWith(".flisk/project.json exists");
+    expect(mocks.showSuccess).toHaveBeenCalledWith("Created: .env (the defaults work as-is)");
+    expect(mocks.completeEnvFile).not.toHaveBeenCalled();
+  });
+
+  it("handles existing project: auto-enables discovered service stacks", async () => {
+    mkdirSync(join(root, "services/shop/orders"), { recursive: true });
+    writeFileSync(
+      join(root, "services/shop/orders/service.json"),
+      JSON.stringify({
+        name: "orders",
+        appName: "orders",
+        appType: "backend",
+        runtime: "node",
+        stack: "shop",
+      }),
+    );
+    writeProjectConfig(projectConfig(["platform"]));
+
+    await runProject({ check: false, force: false, yes: false });
+
+    expect(mocks.showDetail).toHaveBeenCalledWith(
+      "Auto-enabled discovered service stacks: shop",
+      0,
+    );
+    expect(readProjectConfig().phases.pre_alpha.enabledStacks).toEqual(["platform", "shop"]);
+  });
+
+  it("loads configuration from an existing --config-file without prompting", async () => {
+    const customConfig = projectConfig(["custom-stack"]);
+    customConfig.project.name = "from-config-file";
+    const customPath = join(root, "custom-config.json");
+    writeFileSync(customPath, JSON.stringify(customConfig, null, 2));
+
+    await runProject({ check: false, force: false, yes: false, configFile: customPath });
+
+    expect(mocks.showSuccess).toHaveBeenCalledWith(`Loaded config from: ${customPath}`);
+    expect(mocks.promptText).not.toHaveBeenCalled();
+    expect(readProjectConfig().project.name).toBe("from-config-file");
+    expect(readProjectConfig().phases.pre_alpha.enabledStacks).toEqual(["custom-stack"]);
+    expect(mocks.generateMasterConfigs).toHaveBeenCalledWith(root, { quiet: false });
+  });
+
+  it("reports error and exits when --config-file does not exist", async () => {
+    const missingFile = join(root, "missing-file.json");
+
+    await expect(
+      runProject({ check: false, force: false, yes: false, configFile: missingFile }),
+    ).rejects.toBeInstanceOf(FliskError);
+    await expect(
+      runProject({ check: false, force: false, yes: false, configFile: missingFile }),
+    ).rejects.toThrow(`Config file not found: ${missingFile}`);
+  });
+
+  it("warns when required environment variables are missing from .env", async () => {
+    mocks.validateEnvFile.mockReturnValue({
+      missing: ["DATABASE_URL", "STRIPE_SECRET_KEY"],
+      invalid: [],
+      warnings: [],
+    });
+
+    await runProject({ check: false, force: false, yes: true });
+
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Missing required environment variables:"),
+    );
+    expect(mocks.showDetail).toHaveBeenCalledWith("- DATABASE_URL", 1);
+    expect(mocks.showDetail).toHaveBeenCalledWith("- STRIPE_SECRET_KEY", 1);
+    expect(mocks.showDetail).toHaveBeenCalledWith(
+      "→ Edit .env and fill in these values before running `flisk up`",
+      1,
+    );
+  });
+
+  it("runs interactive project wizard and builds configuration from user prompts", async () => {
+    mocks.promptText
+      .mockResolvedValueOnce("interactive-app")
+      .mockResolvedValueOnce("2.0.0-beta")
+      .mockResolvedValueOnce("services/*/*");
+    mocks.promptMultiSelect
+      .mockResolvedValueOnce(["infra"])
+      .mockResolvedValueOnce(["api"])
+      .mockResolvedValueOnce(["worker"])
+      .mockResolvedValueOnce(["monitoring", "elk"]);
+
+    await runProject({ check: false, force: false, yes: false });
+
+    expect(mocks.showStep).toHaveBeenCalledWith("📝 Project Setup Wizard\n");
+    const savedConfig = readProjectConfig();
+    expect(savedConfig.project.name).toBe("interactive-app");
+    expect(savedConfig.project.version).toBe("2.0.0-beta");
+    expect(savedConfig.phases.pre_alpha.enabledStacks).toEqual(["infra"]);
+    expect(savedConfig.phases.alpha.enabledStacks).toEqual(["api"]);
+    expect(savedConfig.phases.beta.enabledStacks).toEqual(["worker"]);
+    expect(savedConfig.optional_infra.monitoring).toBe(true);
+    expect(savedConfig.optional_infra.elk).toBe(true);
+    expect(savedConfig.optional_infra.verdaccio).toBe(false);
+    expect(savedConfig.discovery.paths).toEqual(["services/*/*"]);
+    expect(mocks.generateMasterConfigs).toHaveBeenCalledWith(root, { quiet: false });
+  });
+
+  it("reports found .env when env file already exists during initial setup", async () => {
+    mocks.ensureEnvFile.mockReturnValue(false);
+    mocks.completeEnvFile.mockReturnValue([]);
+
+    await runProject({ check: false, force: false, yes: true });
+
+    expect(mocks.showSuccess).toHaveBeenCalledWith("Found: .env (environment already configured)");
+  });
+
+  it("warns when agent skills installation throws", async () => {
+    mocks.installAgentSkills.mockImplementation(() => {
+      throw new Error("disk full");
+    });
+
+    await runProject({ check: false, force: false, yes: true });
+
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Could not add the agent skills: disk full"),
+    );
+  });
+
+  it("skips agent skills installation when agentSkills option is false", async () => {
+    await runProject({ check: false, force: false, yes: true, agentSkills: false });
+
+    expect(mocks.installAgentSkills).not.toHaveBeenCalled();
+  });
+
+  it("reports created .env and added .gitignore during initial setup", async () => {
+    mocks.ensureEnvFile.mockReturnValue(true);
+    mocks.ensureGitignore.mockReturnValue([".env"]);
+
+    await runProject({ check: false, force: false, yes: true });
+
+    expect(mocks.showSuccess).toHaveBeenCalledWith("Created: .env (the defaults work as-is)");
+    expect(mocks.showSuccess).toHaveBeenCalledWith("Added to .gitignore: .env");
+  });
+});
+
+describe("non-interactive project creation cleanup", () => {
+  const noInputMessage = "No input available to answer the prompt. Run this in a terminal.";
+
+  it("removes the .flisk directory it created when the wizard cannot prompt", async () => {
+    mocks.promptText.mockRejectedValueOnce(new Error(noInputMessage));
+
+    await expect(runProject({ check: false, force: false, yes: false })).rejects.toThrow(
+      noInputMessage,
+    );
+
+    expect(existsSync(join(root, ".flisk"))).toBe(false);
+  });
+
+  it("keeps a pre-existing .flisk directory intact when the wizard cannot prompt", async () => {
+    mkdirSync(join(root, ".flisk"), { recursive: true });
+    writeFileSync(join(root, ".flisk", "notes.txt"), "user file");
+    mocks.promptText.mockRejectedValueOnce(new Error(noInputMessage));
+
+    await expect(runProject({ check: false, force: false, yes: false })).rejects.toThrow(
+      noInputMessage,
+    );
+
+    expect(readFileSync(join(root, ".flisk", "notes.txt"), "utf-8")).toBe("user file");
+  });
+
+  it("removes the .flisk directory it created when a --config-file without phases fails the stack sync", async () => {
+    const emptyConfigPath = join(root, "empty-config.json");
+    writeFileSync(emptyConfigPath, "{}");
+
+    await expect(
+      runProject({ check: false, force: false, yes: false, configFile: emptyConfigPath }),
+    ).rejects.toThrow();
+
+    expect(existsSync(join(root, ".flisk"))).toBe(false);
+  });
+
+  it("keeps the .flisk directory when the wizard completes", async () => {
+    mocks.promptText
+      .mockResolvedValueOnce("wizard-app")
+      .mockResolvedValueOnce("1.0.0-alpha")
+      .mockResolvedValueOnce("services/*/*");
+    mocks.promptMultiSelect
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+
+    await runProject({ check: false, force: false, yes: false });
+
+    expect(existsSync(projectJsonPath())).toBe(true);
+    expect(readProjectConfig().project.name).toBe("wizard-app");
+  });
+});
+
+describe("projectCommand", () => {
+  it("registers the expected arguments and options", () => {
+    expect(projectCommand.name()).toBe("project");
+    expect(projectCommand.registeredArguments.map((argument) => argument.name())).toEqual([
+      "template",
+    ]);
+
+    const flags = projectCommand.options.map((option) => option.long);
+    for (const flag of ["--yes", "--path", "--check", "--force", "--config-file"]) {
+      expect(flags).toContain(flag);
+    }
+  });
+});
+
+describe("project command alias", () => {
+  it("answers to `init` as well as `project`", () => {
+    expect(projectCommand.name()).toBe("project");
+    expect(projectCommand.aliases()).toContain("init");
+  });
+});

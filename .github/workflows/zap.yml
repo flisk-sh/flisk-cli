@@ -1,0 +1,80 @@
+# Nightly OWASP ZAP full (active) scan of the Flisk demo. It reuses the demo journey (tests/e2e/journeys/demo, cases N1-N3):
+# N1 starts the demo without Docker, ZAP attacks the website it prints (the website forwards /api/* to the menu API, so both are
+# scanned), then N2 and N3 check the demo still reopens, stops and restarts. Any finding not listed in
+# docs/security/zap-rules.tsv fails the run. Nightly and by hand only: an active scan takes minutes and is not a per-PR check.
+name: 🌙 Nightly | Security | OWASP ZAP
+
+on:
+  schedule:
+    - cron: "41 3 * * *" # nightly
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  zap-full-scan:
+    name: 🕷️ ZAP full scan (demo)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.23.5
+      - uses: ./.github/actions/setup-bun # zizmor: ignore[self-repository] composite action resolves from this commit
+
+      - name: Install Flisk from this checkout
+        uses: ./.github/actions/install-flisk # zizmor: ignore[self-repository] composite action resolves from this commit
+        with:
+          version: local
+
+      # Reused Flisk test: starts the demo as local processes and checks the page and /api/menu answer. The demo stays up.
+      - name: Start the demo (demo journey N1)
+        env:
+          E2E_ROOT: ${{ runner.temp }}/flisk-e2e
+        run: tests/e2e/journeys/demo/run.sh N1
+
+      - name: Find the demo URL
+        id: target
+        env:
+          E2E_ROOT: ${{ runner.temp }}/flisk-e2e
+        run: |
+          url="$(grep -aoE 'http://localhost:[0-9]+' "$E2E_ROOT/demo/out/native-first.out" | head -1)"
+          [ -n "$url" ] || { echo "::error::no demo URL in the N1 output"; exit 1; }
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+      - name: OWASP ZAP full scan
+        uses: zaproxy/action-full-scan@3c58388149901b9a03b7718852c5ba889646c27c # v0.13.0
+        with:
+          target: ${{ steps.target.outputs.url }}
+          rules_file_name: docs/security/zap-rules.tsv
+          cmd_options: -a
+          fail_action: true
+          allow_issue_writing: false
+          artifact_name: zap-full-scan-report
+
+      # The action uploads the reports as an artifact but writes no job summary, so print the Markdown report there.
+      - name: Show the ZAP report in the job summary
+        if: ${{ !cancelled() && steps.target.outcome == 'success' }}
+        run: |
+          if [ -f report_md.md ]; then cat report_md.md >> "$GITHUB_STEP_SUMMARY"; else echo "No ZAP report was written." >> "$GITHUB_STEP_SUMMARY"; fi
+
+      # Reused Flisk tests: reopen, flisk down, start again, then stop for good.
+      - name: Reopen, stop and restart the demo (demo journey N2, N3)
+        if: ${{ !cancelled() && steps.target.outcome == 'success' }}
+        env:
+          E2E_ROOT: ${{ runner.temp }}/flisk-e2e
+        run: tests/e2e/journeys/demo/run.sh N2 N3
+
+      - name: Tear down
+        if: always()
+        env:
+          E2E_ROOT: ${{ runner.temp }}/flisk-e2e
+        run: tests/e2e/journeys/demo/run.sh cleanup || true

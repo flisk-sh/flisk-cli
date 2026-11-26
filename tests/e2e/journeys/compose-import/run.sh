@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# Copyright (c) 2026 Flisk Landscape contributors
+# SPDX-License-Identifier: MIT
+# The homepage pitch, end to end on a clean machine: a plain docker-compose.yml, `flisk import --yes`, `flisk up`, and the app
+# answering. It failed silently before 1.4.11 (the importer wrote the pre-rename project folder, moved the API off its port, renamed
+# db and dropped the Postgres password), so it is a journey: it runs on every pull request and records the cold time the homepage may quote.
+#
+#   tests/e2e/journeys/compose-import/run.sh all      every case in order, then cleanup
+#   tests/e2e/journeys/compose-import/run.sh CI1 CI2  single cases
+set -euo pipefail
+
+SUITE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../lib/lib.sh
+source "$SUITE_DIR/../../lib/lib.sh"
+e2e_init compose-import composeapp
+# Read by e2e_diagnostics in tests/e2e/lib/lib.sh (container logs to collect).
+# shellcheck disable=SC2034
+RESOURCES=(api db)
+T0_FILE="$SUITE_ROOT/t0"
+api_answers() { [ "$(traefik_request api / 2>/dev/null)" = "hello from api" ]; }
+
+CI1() { # write the Compose app and import it: ports and names kept, the password in .env, no pre-rename names
+  log "CI1 flisk import a plain Compose app"
+  rm -rf "$DIR" && mkdir -p "$DIR/api" && cd "$DIR"
+  cat > api/server.js <<'JS'
+const http = require("node:http");
+const net = require("node:net");
+// The app keeps its own port and reaches Postgres by its Compose name, as it does under docker compose.
+http.createServer((req, res) => {
+  if (req.url === "/db") {
+    const socket = net.connect(5432, "db");
+    socket.on("connect", () => { socket.destroy(); res.end("db:5432 reachable\n"); });
+    socket.on("error", (e) => { res.statusCode = 503; res.end(`db: ${e.message}\n`); });
+    return;
+  }
+  res.end("hello from api\n");
+}).listen(3000);
+JS
+  printf 'FROM node:22-alpine\nWORKDIR /app\nCOPY server.js .\nCMD ["node", "server.js"]\n' > api/Dockerfile
+  cat > docker-compose.yml <<'YAML'
+services:
+  api:
+    build: ./api
+    ports: ["3000:3000"]
+    depends_on: [db]
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: example
+YAML
+  # The clock the homepage quotes starts here: from `flisk import` to the first answer through Traefik (CI3).
+  date +%s > "$T0_FILE"
+  flisk import . --yes | tee "$OUT/import.out"
+  [ -f .flisk/project.json ] || die "flisk import did not write .flisk/project.json"
+  [ ! -e .tdk ] || die "flisk import wrote .tdk/"
+  ! grep -qiE 'tdk (up|core)|\.tdk/' "$OUT/import.out" || die "flisk import printed the old tdk name"
+  local api="services/composeapp/api/service.json" db="services/composeapp/db/service.json"
+  [ "$(jq -r .port "$api")" = 3000 ] || die "api port is $(jq -r .port "$api"), not the Compose port 3000"
+  [ -f "$db" ] || die "db was renamed (no $db)"
+  jq -e '.secrets.required == ["POSTGRES_PASSWORD"]' "$db" >/dev/null || die "db does not require POSTGRES_PASSWORD"
+  grep -qx 'POSTGRES_PASSWORD=example' .env || die "POSTGRES_PASSWORD was not copied to .env"
+  grep -qx '.env' .gitignore || die ".env is not gitignored"
+}
+
+CI2() { # flisk up, then wait until the API answers through Traefik
+  log "CI2 flisk up and wait for the api"
+  cd "$DIR"
+  start_stack composeapp
+  wait_status_url api
+  poll_until "api answers through Traefik" "$READY_TIMEOUT" api_answers
+}
+
+CI3() { # the time from flisk import to the first answer, as a job summary line and a JSON file
+  log "CI3 record the time from flisk import to a running app"
+  local t0 t1 seconds
+  t0="$(cat "$T0_FILE")"
+  t1="$(date +%s)"
+  seconds=$((t1 - t0))
+  printf '{"metric":"compose_import_to_running","seconds":%d,"flisk_version":"%s","runner":"%s","start_cache":"cold"}\n' \
+    "$seconds" "${FLISK_VERSION:-local}" "${RUNNER_OS:-$(uname -s)}" | tee "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/compose-import-time.json"
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    {
+      echo "### Compose import to a running app"
+      echo ""
+      echo "- \`flisk import\` to the API answering through Traefik: **${seconds}s** ($((seconds / 60))m $((seconds % 60))s)"
+      echo "- Cold start: no images or build cache on the runner"
+    } >> "$GITHUB_STEP_SUMMARY"
+  fi
+}
+
+CI4() { # the app reaches Postgres by its Compose name
+  log "CI4 api reaches db:5432"
+  [ "$(traefik_request_ok api /db)" = "db:5432 reachable" ] || die "api cannot reach db:5432"
+}
+
+CI5() { # the URL flisk prints opens exactly as printed (#3209): no trailing slash added by hand
+  log "CI5 the printed api URL opens as printed"
+  cd "$DIR"
+  local printed host port
+  printed="$(flisk networks --raw | grep -E '/api/api/?$' | head -n1)"
+  [ -n "$printed" ] || die "flisk networks printed no URL for the api"
+  case "$printed" in */) ;; *) die "printed URL has no trailing slash: $printed" ;; esac
+  host="$(echo "$printed" | sed -E 's#^https?://([^:/]+).*#\1#')"
+  port="$(echo "$printed" | sed -nE 's#^https?://[^:/]+:([0-9]+).*#\1#p')"; port="${port:-80}"
+  [ "$(curl -sS --max-time 20 --resolve "$host:$port:127.0.0.1" "$printed")" = "hello from api" ] \
+    || die "the printed URL $printed does not open as printed"
+}
+
+# url_answers <url>: true when the URL gets an HTTP response from the service itself. Traefik's own errors, told apart by their
+# body ("404 page not found", "Bad Gateway", "Service Unavailable", "no available server", "Gateway Timeout"), are not answers;
+# any status the app writes is. Same rule as classifyProbe in cli/src/utils/url-check.ts.
+url_answers() {
+  local url="$1" host port out status body
+  host="$(echo "$url" | sed -E 's#^https?://([^:/]+).*#\1#')"
+  port="$(echo "$url" | sed -nE 's#^https?://[^:/]+:([0-9]+).*#\1#p')"; port="${port:-80}"
+  out="$(curl -sS --max-time 10 --resolve "$host:$port:127.0.0.1" -w '\n%{http_code}' "$url" 2>/dev/null)" || return 1
+  status="${out##*$'\n'}"; body="${out%$'\n'*}"
+  [ "$status" != 000 ] || return 1
+  body="$(printf '%s' "$body" | tr -d '\n')"
+  case "$status:$body" in
+    "404:404 page not found" | "502:Bad Gateway" | "503:Service Unavailable" | "503:no available server" | "504:Gateway Timeout") return 1 ;;
+  esac
+}
+
+CI6() { # "ready" means ready (#3211): flisk up printed "Flisk is up", and every URL it printed answers
+  log "CI6 every URL flisk up printed answers"
+  cd "$DIR"
+  poll_until "flisk up printed its ready summary" "$READY_TIMEOUT" grep -q '^Flisk is up' up.log
+  ! grep -q 'Not ready:' up.log || die "flisk up reported URLs that do not answer: $(grep -A4 'Not ready:' up.log)"
+  local urls url count=0
+  # The URLs after "Services:" (→ <url>) and "Health checks:" (<name>: <url>) in the ready summary, not the Tilt UI.
+  urls="$(sed -n '/^Services:/,/^Stop:/p' up.log | grep -oE 'https?://[^ ]+' | sort -u)"
+  [ -n "$urls" ] || die "flisk up printed no service URL"
+  while IFS= read -r url; do
+    url_answers "$url" || die "printed URL does not answer: $url"
+    count=$((count + 1))
+  done <<<"$urls"
+  log "CI6 $count printed URLs answer"
+}
+
+e2e_main "$@"

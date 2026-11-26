@@ -1,0 +1,284 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+
+import { createServer } from "node:net";
+import { describe, expect, it } from "vitest";
+import type { HostPortPlan } from "../../types/index.js";
+import { FliskError } from "../errors.js";
+import {
+  createHostPortPlan,
+  DEFAULT_HOST_PORT_RANGES,
+  formatHostPortPlan,
+  type HostPortPlanOptions,
+  isPrivilegedBindFree,
+  PREFERRED_HOST_PORTS,
+} from "../host-port-plan.js";
+import { resolveSubdomainBases } from "../service-urls.js";
+
+describe("host port allocation defaults", () => {
+  // Deliberate changes to default port allocations require corresponding test updates.
+  it("pins the default ranges and preferred host ports", () => {
+    expect(DEFAULT_HOST_PORT_RANGES).toEqual({
+      ingressHttp: { start: 8080, end: 8180 },
+      ingressHttps: { start: 8443, end: 8543 },
+      postgres: { start: 15432, end: 15532 },
+    });
+    expect(PREFERRED_HOST_PORTS).toEqual({
+      ingressHttp: 80,
+      ingressHttps: 443,
+    });
+  });
+});
+
+describe("createHostPortPlan", () => {
+  it("throws FliskError with suggestions on invalid port or exhausted ranges", async () => {
+    await expect(
+      createHostPortPlan({ env: { FLISK_HTTP_PORT: "70000" }, isAvailable: async () => true }),
+    ).rejects.toSatisfy((err: unknown) => {
+      return err instanceof FliskError && err.suggestions.length > 0;
+    });
+  });
+
+  it("chooses bounded fallback ports when defaults are occupied", async () => {
+    const plan = await createHostPortPlan({
+      env: {},
+      isAvailable: async (port) => ![80, 443, 8080, 8443, 15432].includes(port),
+      ranges: {
+        ingressHttp: { start: 8080, end: 8081 },
+        ingressHttps: { start: 8443, end: 8444 },
+        postgres: { start: 15432, end: 15433 },
+      },
+    });
+    expect(plan).toEqual({
+      ingressHttp: 8081,
+      ingressHttps: 8444,
+      postgres: 15433,
+      explicit: { ingressHttp: false, ingressHttps: false, postgres: false },
+      requested: { ingressHttp: 80, ingressHttps: 443, postgres: 15432 },
+      reason: {
+        ingressHttp: "selected from fallback range 8080-8081",
+        ingressHttps: "selected from fallback range 8443-8444",
+        postgres: "selected from fallback range 15432-15433",
+      },
+    });
+  });
+
+  it("shows the chosen Postgres fallback and matches dry-run ingress URLs", async () => {
+    const plan = await createHostPortPlan({
+      env: {},
+      isAvailable: async (port) => port === 8080 || port === 8443 || port === 15432,
+    });
+    expect(plan.requested.postgres).toBe(15432);
+    expect(plan.postgres).toBe(15432);
+    expect(plan.reason.postgres).toBe("requested port is free");
+    expect(formatHostPortPlan(plan)).toContain("Postgres 15432");
+    const originalBaseUrl = process.env.FLISK_SERVICE_BASE_URL;
+    process.env.FLISK_SERVICE_BASE_URL = "http://port-plan.localhost";
+    try {
+      expect(resolveSubdomainBases(plan.ingressHttp)).toEqual({
+        appBase: "http://app.port-plan.localhost:8080",
+        apiBase: "http://api.port-plan.localhost:8080",
+      });
+    } finally {
+      if (originalBaseUrl === undefined) delete process.env.FLISK_SERVICE_BASE_URL;
+      else process.env.FLISK_SERVICE_BASE_URL = originalBaseUrl;
+    }
+  });
+
+  it("uses ports 80 and 443 when free so routed URLs need no port", async () => {
+    const plan = await createHostPortPlan({ env: {}, isAvailable: async () => true });
+    expect([plan.ingressHttp, plan.ingressHttps, plan.postgres]).toEqual([80, 443, 15432]);
+    expect(plan.reason.ingressHttp).toBe("requested port is free");
+    const originalBaseUrl = process.env.FLISK_SERVICE_BASE_URL;
+    process.env.FLISK_SERVICE_BASE_URL = "http://port-plan.localhost";
+    try {
+      expect(resolveSubdomainBases(plan.ingressHttp)).toEqual({
+        appBase: "http://app.port-plan.localhost",
+        apiBase: "http://api.port-plan.localhost",
+      });
+    } finally {
+      if (originalBaseUrl === undefined) delete process.env.FLISK_SERVICE_BASE_URL;
+      else process.env.FLISK_SERVICE_BASE_URL = originalBaseUrl;
+    }
+  });
+
+  it("honors explicit overrides and rejects collisions", async () => {
+    const env = {
+      FLISK_HTTP_PORT: "18080",
+      FLISK_HTTPS_PORT: "18443",
+      FLISK_POSTGRES_PORT: "15433",
+    };
+    const plan = await createHostPortPlan({ env, isAvailable: async () => true });
+    expect([plan.ingressHttp, plan.ingressHttps, plan.postgres]).toEqual([18080, 18443, 15433]);
+    expect(Object.values(plan.explicit).every(Boolean)).toBe(true);
+    await expect(
+      createHostPortPlan({ env, isAvailable: async (port) => port !== 18080 }),
+    ).rejects.toThrow("FLISK_HTTP_PORT=18080 is already in use");
+  });
+
+  it("rejects invalid ports and fails with an override hint when ranges are exhausted", async () => {
+    await expect(
+      createHostPortPlan({ env: { FLISK_HTTP_PORT: "70000" }, isAvailable: async () => true }),
+    ).rejects.toThrow("FLISK_HTTP_PORT must be an integer");
+    await expect(
+      createHostPortPlan({
+        env: {},
+        isAvailable: async () => false,
+        ranges: {
+          ingressHttp: { start: 8080, end: 8080 },
+          ingressHttps: { start: 8443, end: 8443 },
+          postgres: { start: 15432, end: 15432 },
+        },
+      }),
+    ).rejects.toThrow("Set FLISK_HTTP_PORT to a free port");
+  });
+
+  it("probes host publish availability on IPv4 loopback", async () => {
+    const server = createServer();
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected an IP socket");
+    try {
+      await expect(
+        createHostPortPlan({
+          env: { FLISK_HTTP_PORT: String(address.port) },
+          isAvailable: undefined,
+        }),
+      ).rejects.toThrow(`FLISK_HTTP_PORT=${address.port} is already in use`);
+    } finally {
+      server.close();
+    }
+  });
+});
+
+describe("ports another project's containers hold", () => {
+  const heldPorts = new Map<number, string>([
+    [80, "container shop-main-autogenerated-traefik-1"],
+    [15432, "container shop_postgres"],
+  ]);
+
+  it("never plans a port a running container publishes, even when the loopback probe says free", async () => {
+    // macOS + Colima: a bind under 1024 fails with EACCES whatever owns it, and the forwarder is no
+    // listener connect() sees, so probes report 80 and 15432 free while Docker holds them (#4216).
+    const plan = await createHostPortPlan({
+      env: {},
+      isAvailable: async () => true,
+      heldPorts,
+    });
+    expect([plan.ingressHttp, plan.ingressHttps, plan.postgres]).toEqual([8080, 443, 15433]);
+  });
+
+  it("names the owning container in the reason for the port it made the plan skip", async () => {
+    const plan = await createHostPortPlan({
+      env: {},
+      isAvailable: async () => true,
+      heldPorts,
+    });
+    expect(plan.reason.ingressHttp).toBe(
+      "selected from fallback range 8080-8180 (80 held by container shop-main-autogenerated-traefik-1)",
+    );
+    expect(plan.reason.postgres).toBe(
+      "selected from fallback range 15432-15532 (15432 held by container shop_postgres)",
+    );
+    expect(plan.reason.ingressHttps).toBe("requested port is free");
+  });
+
+  it("rejects an explicit override that names a container-held port, with the owner in the error", async () => {
+    await expect(
+      createHostPortPlan({
+        env: { FLISK_HTTP_PORT: "80" },
+        isAvailable: async () => true,
+        heldPorts,
+      }),
+    ).rejects.toThrow(
+      "FLISK_HTTP_PORT=80 is already in use by container shop-main-autogenerated-traefik-1",
+    );
+  });
+
+  it("keeps a held port out of the candidates but still probes the rest", async () => {
+    const probed: number[] = [];
+    const plan = await createHostPortPlan({
+      env: {},
+      isAvailable: async (port) => {
+        probed.push(port);
+        return true;
+      },
+      heldPorts,
+    });
+    expect(probed).not.toContain(80);
+    expect(probed).not.toContain(15432);
+    expect(plan.ingressHttp).toBe(8080);
+  });
+});
+
+describe("isPrivilegedBindFree", () => {
+  it("treats a refused privileged bind as free only on macOS", () => {
+    expect(isPrivilegedBindFree("EACCES", "darwin")).toBe(true);
+    expect(isPrivilegedBindFree("EACCES", "linux")).toBe(false);
+    expect(isPrivilegedBindFree("EACCES", "win32")).toBe(false);
+  });
+
+  it("never treats other bind errors as free", () => {
+    expect(isPrivilegedBindFree("EADDRINUSE", "darwin")).toBe(false);
+    expect(isPrivilegedBindFree(undefined, "darwin")).toBe(false);
+  });
+});
+
+describe("concurrent projects", () => {
+  function createHost(
+    occupied: number[] = [],
+  ): (ranges?: HostPortPlanOptions["ranges"]) => Promise<HostPortPlan> {
+    const taken = new Set(occupied);
+    return async (ranges?: HostPortPlanOptions["ranges"]): Promise<HostPortPlan> => {
+      const plan = await createHostPortPlan({
+        env: {},
+        isAvailable: async (port) => !taken.has(port),
+        ranges,
+      });
+      taken.add(plan.ingressHttp);
+      taken.add(plan.ingressHttps);
+      taken.add(plan.postgres);
+      return plan;
+    };
+  }
+
+  it("gives each of the first 4 projects distinct ports", async () => {
+    const start = createHost();
+    const plans = [await start(), await start(), await start(), await start()];
+    expect(plans.map((p) => [p.ingressHttp, p.ingressHttps, p.postgres])).toEqual([
+      [80, 443, 15432],
+      [8080, 8443, 15433],
+      [8081, 8444, 15434],
+      [8082, 8445, 15435],
+    ]);
+  });
+
+  it("fails the 102nd project on Postgres when ports 80 and 443 are free", async () => {
+    // 80 and 443 add one candidate to the HTTP and HTTPS ranges, so Postgres runs out first.
+    const start = createHost();
+    for (let i = 0; i < 101; i++) await start();
+    await expect(start()).rejects.toThrow(
+      "No available host port in 15432-15532 for postgres. Set FLISK_POSTGRES_PORT",
+    );
+  });
+
+  it("fails the third project with two-port ranges", async () => {
+    const ranges = {
+      ingressHttp: { start: 8080, end: 8081 },
+      ingressHttps: { start: 8443, end: 8444 },
+      postgres: { start: 15432, end: 15433 },
+    };
+    const start = createHost([80, 443]); // something else already owns 80/443
+    await start(ranges);
+    await start(ranges);
+    await expect(start(ranges)).rejects.toThrow(
+      "No available host port in 8080-8081 for ingressHttp",
+    );
+  });
+
+  it("fails the 102nd project on ingressHttp when ports 80 and 443 cannot be used", async () => {
+    const start = createHost([80, 443]);
+    for (let i = 0; i < 101; i++) await start();
+    await expect(start()).rejects.toThrow("No available host port in 8080-8180 for ingressHttp");
+  });
+});

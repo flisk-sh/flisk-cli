@@ -1,0 +1,711 @@
+# 🚀 Flisk: local development for multi-service apps, started with one command
+
+Flisk runs your whole app on your computer with one command. It is not a deploy and not a Compose file. Define services in `service.json`, then run `flisk up`. No Kubernetes is needed on the machine. If your existing Helm, Compose, or Tilt workflow already works locally, keep using it.
+
+> Command reference for the `flisk` CLI. See the **[main README](../README.md)** for onboarding and the **[Helm handoff guide](../docs/with-helm.md)** for the local-development/production boundary.
+
+New to contributing? Start with the [step-by-step contributor guide](../docs/contributing/README.md). To add a Vite frontend framework, see the [frontend provider guide](../docs/frontend-framework-providers.md).
+
+**Try it with no Docker:** `npx @flisk-sh/flisk demo` needs only Node.js 22.12+. Without Docker or Tilt (or on native Windows) it starts a small menu app as two local processes in about a second and opens it; with Docker and Tilt it starts the full restaurant demo. `flisk up --dry-run` previews any project without Docker or Tilt.
+
+**Pick your own stack:** `npx @flisk-sh/flisk create` asks what you are building with arrow keys and Enter, and offers every website framework, API language and starter Flisk's generators know (type to filter). The default runs on your computer with no Docker, Tilt or database; choose "I know what I want: let me choose every part" to pick the framework and language, or to add queues, databases, workers and agents (those use Docker and Tilt). `--dry-run` shows the commands it would run.
+
+## Cheat sheet
+
+Run in a project with Bun, Docker, and Tilt, or, when every service's `service.json` declares a `command`, with only your app's runtime: `flisk up` then runs the services as local processes ([guide](../docs/run-without-docker.md)). On Windows, run the CLI in WSL2.
+
+`flisk project` writes the project configuration and clones starter templates without a running Docker daemon or an installed Tilt; the runtime is only needed by `flisk up`.
+Cloned starters keep their source remote as `upstream`, leaving `origin` available for your own repository (`git remote add origin <url>`). Unpinned starters use a shallow clone; pinned starters retain the history needed to check out their exact commit.
+
+| Command | When to use it |
+| --- | --- |
+| `flisk create` | Pick a stack with a few questions (arrow keys and Enter). The default runs on your computer, with no Docker or Tilt. |
+| `flisk project --yes` | Create a project with the default setup. |
+| `flisk resource api --type backend --stack api --yes` | Scaffold `api` directly into the `api` stack. |
+| `flisk stack api` | Assign unstacked resources to `api` interactively. |
+| `flisk stacks --services` | See which resources belong to each stack. |
+| `flisk resources --ports` | Check resource assignments and port mappings. |
+| `flisk up api` | Start services in the `api` stack. |
+| `flisk status` | Check the current stack and service state. |
+| `flisk open --print` | Print the first ready frontend URL without opening a browser. |
+| `flisk open web2` | Open the `web2` frontend instead of the first ready one. |
+| `flisk down --force` | Stop all services. `--force` is accepted for script compatibility and has no effect. |
+| `flisk doctor --problems-only` | Report only failing checks and summary counts. |
+| `flisk doctor --no-ping` | Check readiness without pinging service health endpoints. |
+| `flisk projects --check` | Validate project configuration before CI. |
+
+Every command and flag: [mega cheat sheet](../docs/cheat-sheet.md).
+
+`flisk open --print` waits for a frontend to answer, like `flisk open`, then writes only its URL and a newline to stdout. Local-process projects use the frontend's localhost port. If no frontend is available, it reports the problem on stderr and exits with status 1. `flisk open --json` (or `flisk open --print --json`) outputs the standard machine envelope with `{ url, resource }` on stdout. `flisk open <name>` acts on that frontend instead of the first ready one, and works with `--print` and `--json`; a name that is not a frontend of the project fails with `Resource "<name>" not found` and lists the frontends.
+
+---
+
+## 🏗️ Project-Stack-Resource Commands
+
+### 🌍 Project Level
+
+Initialize your project with master configuration files:
+
+```bash
+# 🆕 Initialize project (creates master configs)
+flisk project
+
+# 📊 Check project info and config status
+flisk projects                  # Overview
+
+flisk projects --check          # ✅ CI validation (exit 0/1)
+flisk projects --json           # Versioned JSON report
+flisk projects --json --check   # Machine-readable CI validation (exit 0/1; 1 also if no project root)
+```
+
+**Creates:**
+- ⚙️ `TILT_RESOURCE_DEFAULTS.star` — Platform config (ports 3000-4999, health checks, memory limits)
+- ⚙️ `TILT_TECH_STACK.star` — Platform technology labels and compatibility checks, not version pins. See [the tech stack guide](../docs/tech-stack-lock.md).
+
+### `flisk repos`
+
+Lists or clones the Git repositories declared under `repos` in `.flisk/project.json`, for a project that spans several repositories (see the [layout guide](../docs/layout.md)). Each entry has a `url`, a `dir` relative to the project root, and an optional `branch`.
+
+`flisk repos list` prints the configured repositories and whether each destination already holds a Git checkout; it never clones:
+
+```bash
+$ flisk repos list
+Name	Path	Cloned
+orders-api	services/shop/orders-api	yes
+inventory-api	services/shop/inventory-api	no
+```
+
+`flisk repos clone` clones each repository whose `dir` does not exist yet (`git clone --quiet`, plus `--branch` when the entry sets one) and leaves existing directories untouched; `flisk up` runs the same clone before starting.
+
+```bash
+$ flisk repos clone
+✓ Cloned https://github.com/acme/inventory-api.git into services/shop/inventory-api
+○ Kept existing folder services/shop/orders-api untouched
+```
+
+- `--json` (both subcommands): Print one JSON envelope on stdout. `repos list` reports `data.repos` with `name`, `url`, `path` and `cloned` for each entry; `repos clone` reports `data.cloned` and `data.existing` with `url` and `dir` each.
+- `-h, --help` (both subcommands): Show the subcommand help.
+
+URLs are printed with any user-info credentials redacted (`https://***@host/...`).
+
+**Exit codes:**
+- `0`: the list printed, or every repository was cloned or already present. An empty `repos` prints `No external repositories configured in .flisk/project.json.` and also exits 0.
+- `1`: not in a Flisk project, an invalid `repos` entry (URL, `dir` or `branch`), a failed `git clone`, or a destination that exists but is not a directory. Under `--json`, a failure inside a project prints one error envelope with `data: null`.
+- `2`: `flisk repos` alone, with no subcommand, prints its help and exits 2.
+
+It never removes or overwrites an existing directory: a present `dir` is skipped whether or not it is a checkout, and `flisk repos list` never clones.
+
+---
+
+### 📦 Stack Level
+
+Organize resources into deployment groups:
+
+```bash
+# 📋 List all stacks
+flisk stacks
+flisk stacks --json
+flisk stacks --services     # 🔍 Include resources in each stack
+
+# 🗂️ Organize resources into stacks (interactive)
+flisk stack api
+flisk stack order
+
+# Scriptable assignment (names can be comma- or space-separated)
+flisk stack api --resources orders-api users-api --yes
+flisk stack api --resources orders-api,users-api --yes
+flisk stack --list
+
+# Move resources to another stack, or leave them unassigned
+flisk stack backend --move --resources orders-api --yes
+flisk stack --remove --resources orders-api --yes
+
+# ▶️ Start/stop a stack
+flisk up api                     # 🚀 Start api stack
+flisk up                         # 🚀 Start all stacks
+flisk up --dry-run               # 🔍 Preview services and URLs without starting
+flisk up --quiet                 # 🤫 Suppress non-essential output (-q)
+flisk up --verbose               # 📝 Verbose output (shows runtime assets, Tilt logs) (-v)
+flisk up --force                 # ⚡ Kill existing Tilt process before starting (-f)
+flisk up --env-file .env.integration  # 🔀 Use another project env file for this run
+
+flisk down                       # ⏹️ Stop all services and Tilt
+flisk down --force               # ⚙️ Accepted for script compatibility; has no effect (-f)
+flisk down --dry-run             # 🔍 Show the command without stopping resources
+flisk down --verbose             # 📝 Verbose output (-v)
+flisk down --no-prune-networks   # Keep the project's Docker networks (by default the unused ones are removed)
+flisk down --prune-cache         # 🧹 Prune old Docker build cache (default: older than 24h)
+flisk down --prune-cache --cache-until 7d # 🧹 Keep cache newer than 7 days
+flisk down --project ~/code/shop # 📁 Stop the project in that folder, from anywhere
+```
+
+Outside a project folder, `flisk down` stops the one Flisk project that is running; with several running it lists them and asks for `--project`.
+
+For non-interactive assignment of unassigned resources, pass the stack name and `--resources`; names may be space- or comma-separated. Add `--yes` to skip confirmation. Use `flisk stack --list` to inspect unassigned resources without changing them.
+
+Add `--move` to assign resources that already belong to another stack. Use `--remove --resources <names...>` without a stack name to delete their `stack` field; the resources and their other settings are preserved. Removing an already unassigned resource is safe to repeat. Both flags require explicit resource names and cannot be combined with each other or `--list`.
+
+`--json` implies `--yes` and reports the stacks and unassigned resources after the change. Moves appear in `data.assigned`; removals appear in `data.removed`, with `data.stack` set to `null` and `data.assigned` empty.
+
+---
+
+When a blank project is created below an existing Git worktree's root, Flisk skips the new `.github/workflows/flisk.yml` and explains why: GitHub only loads workflows at the Git root. Set up CI there with its `working-directory` pointing at the project subdirectory. JSON output includes the warning in `data.warnings`. Existing workflows are preserved, and Flisk does not write into the parent repository. Root-level and non-Git projects keep their generated workflow.
+
+### ⚡ Resource Level
+
+Create and manage individual services:
+
+Queues and inference services are saved as `bring-your-own` resources. To list them, use `flisk resources --type bring-your-own`. Passing `--type queue` or `--type inference` to `flisk resources` reports this filter in the error message.
+
+`flisk resource` creates a resource; use `flisk resources` to list them. Command-like names
+such as `list`, `ls`, `status` and `help` are rejected with a command hint. Scripts and agents
+must pass `--yes` or `--json` to create a resource without a terminal, even when `--stack`
+is specified. Otherwise the command exits immediately without prompting or creating files.
+`--json` implies `--yes`; the read-only `--frameworks` inventory needs neither flag.
+
+```bash
+# 📋 List all resources
+flisk resources
+flisk resources --json
+flisk resources --stack api     # 🔍 Filter by stack
+flisk resources --type backend  # Filter by resource type
+flisk resources --type backend --stack api
+flisk resources --no-stack           # ⚠️ Show unassigned only
+flisk resources --ports              # 🔌 Show port assignments
+flisk resources --stack api --json
+flisk resources --no-stack --json
+
+# 🆕 Create new resource (interactive)
+flisk resource my-api --type backend --stack api
+flisk resource my-app --type frontend --stack api
+flisk resource my-vue-app --type frontend --framework vue --stack api
+flisk resource my-svelte-app --type frontend --framework svelte --stack api
+flisk resource my-preact-app --type frontend --framework preact --stack api
+flisk resource my-lit-app --type frontend --framework lit --stack api
+flisk resource my-py-api --type backend --language python --stack api
+flisk resource my-go-api --type backend --language go --stack api
+flisk resource my-rust-api --type backend --language rust --stack api
+flisk resource my-node-api --type backend --language node --stack api
+flisk resource my-express-api --type backend --framework express --stack api
+flisk resource my-elysia-api --type backend --framework elysia --stack api
+flisk resource my-nest-api --type backend --framework nestjs --stack api
+flisk resource my-koa-api --type backend --framework koa --stack api
+flisk resource my-h3-api --type backend --framework h3 --stack api
+flisk resource my-fastify-api --type backend --framework fastify --stack api
+flisk resource my-worker --type worker --stack background
+flisk resource my-mcp --type mcp --stack api
+flisk resource --frameworks                                     # list frontend frameworks
+flisk resource --type backend --frameworks                      # list backend frameworks
+
+# Non-interactive resource creation
+flisk resource my-api --type backend --stack api --yes
+
+# Preview the configuration and planned files without changing the project
+flisk resource my-api --type backend --stack api --dry-run --yes
+flisk resource my-api --type backend --stack api --dry-run --json
+```
+
+`--yes` skips resource creation prompts and requires an explicit resource name. A new project uses the
+`main` stack, an existing single-stack project reuses that stack, and a project with multiple stacks
+must pass `--stack`. Scripts must use `--yes` or `--json`; piping prompt answers alone is not supported.
+
+`--dry-run` resolves the same type, stack, framework/language and port as creation, then lists the
+files it would create or update, including a Prisma migrator when requested. Interactive choices
+still work; the final creation confirmation is skipped. No files, generated configs or port
+reservations are changed. Run again without `--dry-run` to apply; the plan is resolved again at
+that time. `--json` returns the plan in the [machine-readable envelope](../docs/reference/machine-readable-cli.md).
+For `--ddd`, previews require a fresh cached license result so checking entitlement cannot write
+license state or register a project remotely.
+
+Both preview and creation reject colliding generated file paths and file/directory conflicts
+before writing. Custom Dockerfile paths cannot replace `service.json` or `AGENTS.md`.
+When registering an existing resource, the report reflects the type, language and framework
+preserved in its manifest, including the defaults for omitted runtime fields.
+
+**Creates:**
+- 📄 `service.json` — Auto-assigned port from master config
+- 📦 `package.json` — Scripts, dependencies (Hono/Vite/Biome)
+- ⚙️ `tsconfig.json` — TypeScript configuration
+- 🐳 `Dockerfile` — Multi-stage build with health checks
+- 💻 `src/` — Starter code (Hono, Express, Elysia, Fastify, NestJS, Koa or h3 for backend, React, Vue, Svelte, Preact, Lit, Solid, Qwik, plain TypeScript or Next.js for frontend)
+- 🧪 `tests/` — Vitest test file
+
+For generated Bun resources, use `bun run test` to run tests once, or `bun run test:watch` to watch for changes. These scripts use Bun’s built-in test runner (`bun:test`) and do not need a separate Node.js installation. The default Hono backend includes a `/health` smoke test; worker and frontend placeholders remain TODOs until you add tests. Existing projects using Vitest are not migrated.
+
+`service.json` files point to the published [JSON Schema](https://flisk.sh/schema.service.json) for editor autocomplete and validation. The schema source is [`runtime/engine/schemas/service-schema.json`](../runtime/engine/schemas/service-schema.json); it documents supported service fields and known `featuresEnabled` names. For the complete list of code generators controlled by `featuresEnabled`, see the [resource features guide](../docs/resource-features.md). Legacy manifests may use `type` in place of `appType`.
+
+See the complete [`service.json` field reference](../docs/service-json.md) for field defaults, resource applicability, validation behavior, and backend/frontend examples.
+
+Backend creation defaults to Bun + Hono, exactly as it always has: omit `--language` and nothing changes. Use `--language python` for FastAPI on Python 3.12, `--language go` for a standard-library `net/http` service on Go 1.23, `--language rust` for an axum service (Go and Rust have no live reload: Tilt rebuilds the image on change), or `--language node` for a Node.js 22 service with built-in `node:http` and `node --watch` live reload. The selected id is saved as `language` in `service.json`; a legacy manifest without it still means Bun and is never rewritten. The flag applies only to `--type backend`, and unknown ids fail before a resource is written. On the Bun runtime the HTTP framework is Hono by default. To use another, pass one of these to `--framework`:
+
+| Id | Framework | Version |
+| --- | --- | --- |
+| `express` | Express | 5 |
+| `elysia` | Elysia | 1 |
+| `fastify` | Fastify | 5 |
+| `nestjs` | NestJS | 11 |
+| `koa` | Koa | 3 |
+| `h3` | h3 | 1.x |
+
+The selected id is saved as `framework` in `service.json`. `--framework hono` is accepted and saved too, and omitting it changes nothing. `--framework` cannot be combined with `--language python`, and unknown ids fail before a resource is written. Languages without a provider can use `--type bring-your-own`. Python services also support opt-in pytest-on-save via `dev.testOnSave` in `service.json`. See the [backend provider guide](../docs/backend-language-providers.md) and the runnable [Python example](../examples/one-backend-python/README.md).
+
+An interactive terminal asks which backend framework to use and lists Hono first. `--yes` and `--json` skip this prompt. A language that owns its runtime (Python, Go, Rust, Node) does not use the backend framework picker. Non-terminal creation still requires `--yes` or `--json`.
+
+Run `flisk resource --type backend --frameworks` to list the registered backend frameworks with the language (and runtime) they are scaffolded with, their compatibility with the requested language, and the command that creates them:
+
+```bash
+$ flisk resource --type backend --frameworks
+hono       Bun + Hono       bun       compatible with bun        flisk resource <name> --type backend --framework hono
+express    Bun + Express    bun       compatible with bun        flisk resource <name> --type backend --framework express
+elysia     Bun + Elysia     bun       compatible with bun        flisk resource <name> --type backend --framework elysia
+fastify    Bun + Fastify    bun       compatible with bun        flisk resource <name> --type backend --framework fastify
+h3         Bun + h3         bun       compatible with bun        flisk resource <name> --type backend --framework h3
+koa        Bun + Koa        bun       compatible with bun        flisk resource <name> --type backend --framework koa
+nestjs     Bun + NestJS     bun       compatible with bun        flisk resource <name> --type backend --framework nestjs
+```
+
+The compatibility cell names the language it is judged against (`bun` is the default backend language). Add `--language <id>` to see what that language rules out: a language that owns its runtime (Python, Go, Rust, Node) marks every framework as `incompatible with --language <id>`, and the command of such a row creates the resource in that language, without a framework:
+
+```bash
+$ flisk resource --type backend --language python --frameworks
+hono       Bun + Hono       bun       incompatible with --language python    flisk resource <name> --type backend --language python
+```
+
+A requested `--language` is part of the printed command, so a copied row scaffolds the language the listing was asked about instead of silently falling back to Bun.
+
+Frontend creation defaults to React. Use `--framework vue` for Vue 3, `--framework svelte` for Svelte 5, `--framework preact` for Preact 10, `--framework lit` for Lit 3, `--framework solid` for Solid 1, `--framework qwik` for Qwik 1, `--framework next` for Next.js (App Router), `--framework tanstack-router` for a React SPA with TanStack Router (client-side; TanStack Start SSR is a [bring-your-own](../docs/frontend-framework-providers.md#tanstack-start-ssr) app) or `--framework vanilla` for plain TypeScript with no UI framework; `--framework react` is also accepted. The selected id is saved in `service.json`. The flag applies only to frontend resources, and unknown ids fail before a resource is written. Existing frontend manifests without the field continue to use React. Run `flisk resource --frameworks` (or `flisk resource --type frontend --frameworks`) to list the registered ids, and an interactive terminal offers them as a picker (React first). Without a `--type` the listing stays this frontend one: `--language` is a backend option and does not apply to it. `--framework next` scaffolds a Next.js App Router app (a Node server, not a Vite SPA; see [the frontend framework guide](../docs/frontend-framework-providers.md#nextjs)). The other meta-frameworks that own their own server or build config (Nuxt, SvelteKit, Astro, Angular, Remix, TanStack Start) fail before anything is written and point to `flisk resource <name> --type bring-your-own`.
+
+The frontend provider owns root `index.html` and starter source. After Flisk generates runtime config, Vite uses `.autogenerated/vite.config.frontend.autogenerated.ts` for development and `.autogenerated/vite.config.build.autogenerated.ts` for builds. Docker, nginx, Traefik, ports, and generated API/environment modules are shared by both providers. See the [provider contribution guide](../docs/frontend-framework-providers.md) to add another Vite-based SPA framework.
+
+---
+
+## 🔄 Lifecycle Commands
+
+| Command | Description | Example |
+|---------|-------------|---------|
+| `flisk up` | 🚀 Start all services | `flisk up` |
+| `flisk up <stack>` | 🚀 Start a stack | `flisk up api` |
+| `flisk up --dry-run` | 👀 Preview the services and URLs without Docker, Tilt, or file changes | `flisk up api --dry-run` |
+| `flisk up --env-file <path>` | 🔀 Use another project env file for the run instead of `.env` (inside the project) | `flisk up --env-file .env.integration` |
+| `flisk up` (services with `command`) | 🏃 Run them as local processes without Docker or Tilt, in `dependsOn` order, with prefixed logs and restarts; Ctrl+C or `flisk down` stops them | `flisk up` |
+| `flisk down` | ⏹️ Stop all services | `flisk down` |
+| `flisk status` | 📊 Show resource status | `flisk status` |
+| `flisk logs` | 📜 Print a bounded snapshot of recent logs; filter content with `--grep <text>` and optional per-service `--context <n>` (`--json`) | `flisk logs --grep error --context 2` |
+
+`--grep` matches plain text on redacted log content: regular expression meta-characters have no
+special meaning. Patterns without uppercase letters ignore case. `--context` defaults to zero and
+keeps neighboring lines from the same service; overlapping windows emit each line once. Service,
+source, time and tail selection happen first, so context stays inside that bounded snapshot. JSON
+lines have `match: true` for hits and `match: false` for context; no hits return an empty list with
+exit code zero. Invalid context values exit with usage code 2. The MCP `logs` tool accepts the same
+`grep` and `context` options.
+
+---
+
+## 🛠️ Utility Commands
+
+| Command | Description |
+|---------|-------------|
+| `flisk ui [--high-contrast] [--no-animations]` | 🎨 Interactive terminal UI |
+| `flisk os` | 🖥️ Start [FliskOS](https://github.com/flisk-sh/fliskos), the local desktop app for projects, coding agents and Flisk apps: runs `fliskos` for the current project when it is on `PATH`, else opens `FliskOS.app` on macOS; never installs it (`--project`, `--port`, `--no-open`, `--scan-root`, `--json`; see [the reference below](#flisk-os)) |
+| `flisk networks` | 🌐 Show service URLs: Traefik routes, or localhost addresses in a local-process project (`--stack`, `--json`, `--raw`) |
+| `flisk import [dir]` | 📥 Import the services in a directory's root `docker-compose.yml` (`--dry-run`, `--yes`, `--force`) |
+| `flisk eject` | 🚪 Write `EJECTED.md` describing the generated Tilt files; copies nothing (`--dry-run`, `--yes`) |
+| `flisk repos` | 📚 List or clone the Git repositories configured in `.flisk/project.json` (`--json`; [reference](#flisk-repos)) |
+| `flisk mcp` | 🤖 Run a Model Context Protocol server over stdio for coding agents |
+| `flisk mcp check <url\|resource>` | 🩺 Check an MCP server's protocol, local or remote: initialize, tools and `readOnlyHint`, prompts, error codes, HTTP rules, icon; read-only unless `--call` (`--no-icon`, `--json`; see [docs/mcp.md](../docs/mcp.md#checking-a-server)) |
+| `flisk connect <claude\|cursor\|codex>` | 🔌 Connect a coding agent: merge the `flisk mcp` entry into its MCP config and write the Flisk skills (`--dry-run`, `--global`, `--force`, `--json`; see [Flisk for AI agents](../docs/agents/flisk-for-agents.md)) |
+| `flisk export` | 📤 Write `render.yaml`, `wrangler.toml` or a standalone `docker-compose.yml` from `service.json` through the pinned [flisk-export](https://github.com/flisk-sh/flisk-export) package; never deploys (`--dry-run`; [reference](#flisk-export)) |
+| `flisk config regenerate` | ♻️ Regenerate master config files from `.flisk/project.json` |
+| `flisk config verify` | ✅ Check generated files match `.flisk/project.json` |
+| `flisk config enable-infra <service>` | ➕ Enable an optional infrastructure service (`disable-infra` to turn it off) |
+| `flisk doctor` | 🔍 Print ranked cold-start failures first, then check environment (Docker, Bun, Tilt, ports); a project of `command` services is checked only for what its processes need |
+| `flisk runtime` | 🧰 Check the packaged runtime assets are complete (`--check-assets`, `--json`; [reference](#flisk-runtime)) |
+| `flisk completion --install` | ⌨️ Install shell completions (`--shell bash\|zsh\|fish\|powershell`); setup steps in the [cheat sheet](../docs/cheat-sheet.md#flisk-completion-shell) |
+| `flisk upgrade` | ⬆️ Self-update to the latest version (`--dry-run`, `--dry-run --json`, `--force`, `--all`) |
+| `flisk version` | ℹ️ Show version (`--verbose`, `--json`) |
+| `flisk --help` | ❓ Show help |
+
+### `flisk export`
+
+Writes deploy files from `service.json`: `flisk export render` writes a Render Blueprint (`render.yaml`), `flisk export wrangler` writes a Cloudflare `wrangler.toml` for one resource, and `flisk export compose` writes a standalone `docker-compose.yml` for bring-your-own resources that runs without Flisk.
+
+The generators live in the separate [flisk-export](https://github.com/flisk-sh/flisk-export) repository and run as `@flisk-sh/flisk-export` at the version pinned in [`src/commands/export.ts`](src/commands/export.ts), through `npx` (`bunx` when `npx` is not on `PATH`). The first run fetches the package from npm, so it needs network access; `FLISK_EXPORT_PACKAGE` overrides the package spec. Every argument after `export` is passed to `flisk-export` as given, including `--help`: `flisk export --help` prints the exporter's own help. `--dry-run` is the flag `flisk` declares itself and forwards with the rest.
+
+```bash
+$ flisk export compose --dry-run
+Dry run - would write .autogenerated/docker-compose.yml (nothing written, nothing deployed):
+
+###############################################################################
+# GENERATED by `flisk export compose` from the service.json files. DO NOT EDIT.
+# Change service.json and run `flisk export compose --force`; CI can run
+# `flisk export compose --check` to fail when this file is out of date.
+# Flisk is not needed to start it. Compose reads .env from this file's folder,
+# so from the project root pass the project's .env:
+#   docker compose --env-file .env -f .autogenerated/docker-compose.yml up -d
+###############################################################################
+
+services:
+  cache:
+    image: "redis:7-alpine"
+    init: true
+```
+
+- `render [dir]`: Write `render.yaml` for every resource that serves HTTP (`--resource <name>` for one, `--out <dir>` for the output directory, `--force` to replace an existing file).
+- `wrangler [dir]`: Write `wrangler.toml` for one resource (`--resource <name>` is required, `--route <host>` sets a custom domain, `--out <dir>`, `--allow-non-worker` exports a resource that does not look like a Worker, `--force`).
+- `compose [dir]`: Write `docker-compose.yml` from bring-your-own `service.json` files into `<project>/.autogenerated` by default (`--out <dir>`, `--force`, `--check` to fail when the file on disk differs).
+- `--dry-run`: Print the file instead of writing it (all three subcommands).
+
+`dir` defaults to the current directory. `flisk export` with no subcommand prints the exporter's help and exits 1.
+
+**Exit codes:**
+- `0`: the file was written or printed (with `--check`, it is up to date).
+- `1`: the exporter failed: no subcommand, invalid arguments, no exportable resource found, or `--check` found drift. `flisk` then prints a hint naming the pinned package and `FLISK_EXPORT_PACKAGE`.
+- `127`: the package runner (`npx` or `bunx`) could not be started.
+- Any other code is passed through from `flisk-export` unchanged.
+
+It writes files only: it never deploys, never creates DNS records, never calls a cloud API, and writes environment variable names, never values.
+
+Shell completion for `flisk resource --type` includes the `inference` preset and `sdk` registration.
+It also suggests supported values for `completion --shell`, `doctor --scope`, and `create --runtime` and `--starter`.
+
+`-v` is context-specific: `flisk -v` prints the version, while `flisk up -v` and `flisk down -v`
+enable verbose output. Use `--version` and `--verbose` when clarity matters.
+
+`flisk status` and `flisk ui` poll Tilt on `TILT_PORT` when it contains only decimal digits
+and is in the range 1–65535. Missing or invalid values fall back to port 10350.
+
+Use `flisk ui --high-contrast` for a brighter palette with clearer text hierarchy,
+bold secondary text, and no dimmed text. `flisk ui --no-animations` keeps the loading screen
+static. If `NO_COLOR` is set (including an empty value), or `TERM` begins with
+`dumb`, the environment takes precedence over `--high-contrast`: color styling
+is disabled and ASCII markers, separators, and file-tree symbols are used.
+ASCII markers are also used, with colors kept, when `TERM` is `linux` or the first
+set of `LC_ALL`, `LC_CTYPE` and `LANG` does not name UTF-8 (for example `LANG=C`).
+
+If `flisk ui` finds no services, its empty state points to `flisk project` to create a
+project and `flisk resource api --type backend` to add a service. Press `q` to leave
+the UI before running these commands, then reopen it or press `r` to refresh
+after another terminal adds a service.
+
+### `flisk os`
+
+Starts [FliskOS](https://github.com/flisk-sh/fliskos), the local desktop app for your Flisk projects, coding agents and Flisk apps. It runs the `fliskos` command when that is on `PATH`, otherwise it opens `FliskOS.app` on macOS (`/Applications` or `~/Applications`). Flisk never installs it: when neither exists, the command says how (`npm install --global @flisk-sh/fliskos`, or `npm run install:mac` in a checkout of the FliskOS repository) and exits 1. This is not `flisk ui`, the terminal dashboard.
+
+```bash
+$ flisk os
+Starting FliskOS: fliskos --project /home/me/shop
+FliskOS is running at http://localhost:4300/?token=<access-token>
+```
+
+With the `fliskos` command, `flisk os` stays in the foreground until FliskOS stops and then exits with its exit code. Ctrl+C in the terminal reaches FliskOS directly; a signal sent to `flisk os` alone is passed on. `FliskOS.app` opens its own window, takes none of the options, and `flisk os` names the ones it could not pass on before returning.
+
+- `--project <dir>`: Open this Flisk project (default: the project around the current folder). A folder that is not a Flisk project fails; with no project at all, FliskOS lists the projects it finds.
+- `--port <port>`: Port FliskOS listens on, an integer from 0 (pick a free port, the default) to 65535.
+- `--no-open`: Start the server without opening a window or browser.
+- `--scan-root <dir>`: Also look for Flisk projects under this folder; repeat it for more roots.
+- `--json`: Print one JSON envelope on stdout once FliskOS is up, with `data.via`, `data.path`, `data.args`, `data.project`, `data.url` and `data.ignored`; progress goes to stderr and FliskOS keeps running until it stops.
+
+```bash
+$ flisk os --json --port 4300 --no-open
+{"schemaVersion":1,"data":{"via":"command","path":"/usr/local/bin/fliskos","args":["--project","/home/me/shop","--port","4300","--no-open"],"project":"/home/me/shop","url":"http://localhost:4300/?token=<access-token>","ignored":[]},"errors":[]}
+```
+
+`data.url` carries FliskOS's access token in its query string, so keep it out of logs. The `ignored` list names the options `FliskOS.app` could not take.
+
+**Exit codes:**
+- `0`: `fliskos` exited cleanly, or `FliskOS.app` was opened.
+- `1`: FliskOS is not installed (`FLISKOS_NOT_INSTALLED` under `--json`), `--port` is not an integer from 0 to 65535, the `--project` folder is not a Flisk project, `fliskos` could not be started, or it did not report its URL within 30 seconds under `--json` (`FLISKOS_FAILED`).
+- Any other code is the exit code of `fliskos` itself; `flisk os` passes it through.
+
+`flisk os` never installs FliskOS and never touches `flisk ui`.
+
+---
+
+## 🚀 Quick Start Workflow
+
+```bash
+# 1️⃣ Initialize project
+cd my-project
+flisk project
+
+# 2️⃣ Create resources
+flisk resource api-api --type backend --stack api
+# → Creates service.json with port 4000
+# → Generates src/index.ts with Hono starter
+# → Creates Dockerfile, tests/, package.json
+
+flisk resource api-app --type frontend --stack api
+# → Creates service.json with port 3000
+# → Generates React starter with Vite
+
+# 3️⃣ Install dependencies
+cd api-api && bun install
+cd ../api-app && bun install
+
+# 4️⃣ Start development
+flisk up api
+
+# 5️⃣ Check status
+flisk status                     # 📋 Overview of stacks and resources
+flisk status --stacks            # 🗂️ Show stack information (default)
+flisk status --tilt              # 🔍 Query active Tilt resource status
+flisk status --verbose           # 📝 Detailed resource breakdowns per stack (-v)
+flisk status --json              # 🤖 Machine-readable JSON status report
+flisk status --unhealthy         # Show only failing or still-starting services
+flisk status --stack api         # Limit the report to one stack
+flisk status --strict            # 🚦 Exit 1 unless every service is ready (for scripts and CI)
+flisk logs --unhealthy           # Show logs only for failing or still-starting services
+flisk resources --stack api
+```
+
+---
+
+## 📊 PSR Command Matrix
+
+| Level | 🔨 Create/Action | 📋 List |
+|-------|------------------|---------|
+| **🌍 Project** | `flisk project` | `flisk projects` |
+| **📦 Stack** | `flisk stack` | `flisk stacks` |
+| **⚡ Resource** | `flisk resource` | `flisk resources` |
+
+---
+
+## 🎨 Resource Types
+
+| Type | Port Range | Template | Use Case |
+|------|------------|----------|----------|
+| `backend` | 4000-4999 | 🏎️ Hono API (or Express, Elysia, Fastify, NestJS, Koa, h3, or Python) | REST APIs, microservices |
+| `frontend` | 3000-3999 | React (default), Vue, Svelte, Preact, Lit, Solid, Qwik or plain TypeScript + Vite; Next.js (`--framework next`) | Web apps, dashboards |
+| `worker` | (optional) | 🔧 Background worker | Queue processors, jobs |
+| `mcp` | 4000-5999 | 🔌 Model Context Protocol server over HTTP (Bun; see [docs/mcp.md](../docs/mcp.md)) | Tools and context for AI clients |
+| `bring-your-own` | 4000-5999 | none | Existing app with your own Dockerfile or image |
+| `sdk` | — | none (register existing, `packages/<name>`) | Shared libraries |
+
+---
+
+## 🔒 Deterministic Operations
+
+Use `Determinism` in your Tiltfile for reproducible builds:
+
+```starlark
+load('ext://flisk-cli', 'Determinism')
+
+# Deterministic file discovery (sorted results)
+files = Determinism.deterministic_find('./services', 'service.json')
+
+# Deterministic service discovery
+services = Determinism.deterministic_resource_discovery(['services/product'])
+
+# Check deterministic mode
+if Determinism.is_deterministic_mode():
+    print("✅ Running in deterministic mode")
+```
+
+---
+
+## 🔍 Environment Validation
+
+Cold first run: `npx @flisk-sh/flisk`; diagnostics: `npx @flisk-sh/flisk doctor`.
+
+```bash
+# Check local environment and project readiness
+flisk doctor
+
+# Show only failing checks (in --json mode, drops passed checks and adds summary counts)
+flisk doctor --problems-only
+
+# Skip pinging running services' /health endpoints
+flisk doctor --no-ping
+
+# Custom per-service ping timeout in milliseconds (default: 5000)
+flisk doctor --ping-timeout 3000
+
+# Machine-readable JSON readiness report
+flisk doctor --json
+```
+
+Checks for:
+- ✅ Docker daemon running
+- ✅ Bun runtime installed (v1.2+)
+- ✅ Tilt CLI available
+- ✅ Required ports free
+- ✅ Tiltfile present
+- ✅ Master config files exist
+- ✅ Docker Engine 25+ and Docker Compose 2.20.2+ (generated healthchecks use `start_interval`)
+- ✅ A package runner for `flisk import` and `flisk export` (npx, or bunx when npx is absent)
+
+### Options & Exit Codes
+
+- `--no-ping`: Skip pinging running services' `/health` endpoints. Useful when checking host tools or static configurations without probing runtime services.
+- `--ping-timeout <ms>`: Per-service health check timeout in milliseconds (must be a positive integer, defaults to `5000`).
+- `--json`: Output a single machine-readable JSON readiness report on stdout (suppressing human banners and progress text) with `data.ready`, `data.checks` (`name`, `didPass`, `message`, optional `fix`, `isSkipped`, `isWarning`), `data.ports`, and `errors`. Uses the same exit codes as text mode:
+
+  ```json
+  {
+    "schemaVersion": 1,
+    "data": {
+      "ready": false,
+      "inProject": true,
+      "checks": [
+        { "name": "Container Runtime", "didPass": true, "message": "Docker daemon is running" },
+        { "name": "Tilt CLI", "didPass": false, "message": "Tilt CLI not found", "fix": "curl -fsSL https://raw.githubusercontent.com/tilt-dev/tilt/master/scripts/install.sh | bash" }
+      ]
+    },
+    "errors": []
+  }
+  ```
+- `--fix`: When free disk is below 10 GB, also runs `docker builder prune -f` and `docker image prune -f` (untagged images only, never volumes), showing the reclaimable size. Before the checks run, remove unused Docker networks that belong to this project (the exact names `flisk up` creates) and leftover `flisk_doctor_probe_*` networks from interrupted runs. Asks before each removal. Never touches another project's networks, never runs `sudo`.
+- `--scope <project|machine>`: With `--fix`, `machine` also removes unused networks of other Flisk projects on this machine (a project is recognised by its Traefik network), naming each owner. Default `project`.
+- `--dry-run`: With `--fix`, list the commands without running them.
+- `-y, --yes`: With `--fix`, run every repair without asking. Without a terminal and without `--yes`, repairs are skipped.
+
+When checks fail, `flisk doctor` prints each issue with `✗` in red. It prints `ℹ Fix: ...` when a check provides remediation.
+The general Tilt-resource fix points to the URL printed by `flisk up`; the default port can be auto-switched when occupied, and `TILT_PORT` can override it.
+
+**Exit codes:**
+- `0`: All required checks passed (warnings permitted).
+- `1`: One or more blocking checks failed; environment or project needs fixing.
+- `2`: Invalid CLI usage, option validation failure (e.g., non-positive `--ping-timeout`), or internal doctor-check error.
+
+### Container footprint
+
+Generated runtimes are sized so large landscapes fit on a 16 GB machine:
+
+- **One process per container.** A service whose `start` script is just `bun run <file>` runs `bun <file>` directly under Docker's init (`init: true`). Any other `start` script keeps `bun run start`.
+- **Healthchecks:** every 0.5 s during startup, then every 30 s. You can override the timing for a run:
+
+  ```bash
+  FLISK_HEALTHCHECK_INTERVAL_SECONDS=15 flisk up
+  ```
+
+  `FLISK_HEALTHCHECK_START_INTERVAL_SECONDS` takes decimals (`0.5`). The other overrides are `FLISK_HEALTHCHECK_TIMEOUT_SECONDS`, `FLISK_HEALTHCHECK_START_PERIOD_SECONDS` and `FLISK_HEALTHCHECK_RETRIES`.
+- **Optional tooling is per service.** The golden backend image no longer ships `hugo`. A service that needs it declares it in `service.json`:
+
+  ```json
+  { "featuresEnabled": ["hugo"] }
+  ```
+
+To check a running backend against the idle budget (one Bun process, at most 64 MiB, under 2% CPU):
+
+```bash
+scripts/measure-idle-footprint.sh finance-autogenerated-cash-management-api-1
+```
+
+### `flisk runtime`
+
+Checks that the packaged Flisk runtime assets are complete: the `Tiltfile`, the `engine`, `discovery`, `specs` and `ext` directories, `cli/templates` and the shared-platform Docker templates that `flisk up` runs from. Run it when an install looks broken or to verify a packaged build.
+
+```bash
+$ flisk runtime --check-assets
+Flisk runtime assets found at /usr/local/lib/node_modules/@flisk-sh/flisk
+```
+
+- `--check-assets`: Check the bundled engine and template assets. `flisk runtime` without it prints help and exits 2.
+- `--json`: Print the check result as one JSON envelope on stdout with `data.ok`, `data.assetRoot`, `data.missing`, `data.layoutErrors` and `data.templateErrors`; a failed check reports one `RUNTIME_CHECK_FAILED` error:
+
+  ```json
+  {"schemaVersion":1,"data":{"ok":true,"assetRoot":"/usr/local/lib/node_modules/@flisk-sh/flisk","missing":[],"layoutErrors":[],"templateErrors":[]},"errors":[]}
+  ```
+
+**Exit codes:**
+- `0`: the asset root was found, no asset is missing and every required template loads.
+- `1`: the check failed: assets not found, a missing path, a mixed extension layout, or a template that does not load.
+- `2`: no `--check-assets`: the command prints its help and exits.
+
+`flisk runtime` never writes, downloads or repairs files; it only inspects the installed package. For machine and project checks, use `flisk doctor`.
+
+---
+
+## 📁 Project Structure
+
+After `flisk project` + `flisk resource`:
+
+```text
+my-project/
+├── ⚙️ TILT_RESOURCE_DEFAULTS.star
+├── 🔧 TILT_TECH_STACK.star
+├── 📄 Tiltfile
+│
+├── services/
+│   └── api/
+│       ├── api-api/           # 🆕 Created by flisk resource
+│       │   ├── service.json      # Port 4000, stack: api
+│       │   ├── package.json
+│       │   ├── tsconfig.json
+│       │   ├── Dockerfile
+│       │   ├── src/
+│       │   │   └── index.ts      # Hono starter
+│       │   └── tests/
+│       │       └── api-api.test.ts
+│       │
+│       └── api-app/         # 🆕 Created by flisk resource
+│           ├── service.json      # Port 3000, stack: api
+│           ├── package.json
+│           ├── tsconfig.json
+│           ├── Dockerfile
+│           ├── index.html
+│           └── src/
+│               ├── main.tsx
+│               └── App.tsx
+│
+└── workers/
+    └── notification-worker/      # 🆕 Created by flisk resource
+        └── ...
+```
+
+---
+
+## 🆘 Getting Help
+
+```bash
+# General help
+flisk --help
+
+# Command help
+flisk resource --help
+flisk stack --help
+flisk up --help
+flisk eject --help
+flisk import --help
+```
+
+To bring an existing Compose repo in, `flisk import` runs [flisk-import](https://github.com/flisk-sh/flisk-import) on the root `docker-compose.yml` (it needs `npx`). Flags `--dry-run`, `--yes` and `--force` go straight to it.
+
+---
+
+## 📚 Documentation
+
+- [Main README](../README.md)
+- [Writing unit tests for the CLI](../docs/contributing/08-write-cli-unit-tests.md)
+- [Feature flags](../docs/FEATURES.md)
+- [Bring-your-own resources](../docs/byo.md)
+- [Running a landscape from moon](../docs/recipes/moon.md)
+- [Architecture](../runtime/engine/docs/README.md)
+- [Tilt Extension](../runtime/ext/)
+
+---
+
+## 📝 License
+
+[MIT](../LICENSE) © [Flisk](https://github.com/flisk-sh)
+
+---
+
+<div align="center">
+
+**[⬆️ Back to Top](#-flisk-local-development-for-multi-service-apps-started-with-one-command)**
+
+Made with 💚 for developers who ship
+
+</div>
+
+### Doctor machine output
+
+Use `flisk doctor --json` for CI readiness checks. Exit codes: 0 ready (warnings permitted), 1 blocking findings, 2 usage/internal errors. See [doctor contract](../docs/reference/doctor-contract.md) for schema and migration details.
+
+### Machine-readable status
+
+`flisk status --json`, `flisk resources --json`, `flisk stacks --json`, and `flisk networks --json` emit one JSON object with `schemaVersion: 1`, `data`, and `errors`. Use `flisk status --json --tilt` to request live Tilt resources; without `--tilt`, the response reports Tilt availability and sets `resourcesQueried` to false. The old `flisk networks --json` array remains temporarily available as `flisk networks --json-legacy`; migrate consumers to `data.services` before that compatibility flag is removed. `flisk stacks --json` returns `data.stacks` with each stack name and resource count. `--services` adds service names, and `--verbose` adds descriptions. Diagnostics go to stderr.
+
+See [machine-readable CLI](../docs/reference/machine-readable-cli.md) for JSON shapes, exit codes, schema evolution, and an agent polling example.

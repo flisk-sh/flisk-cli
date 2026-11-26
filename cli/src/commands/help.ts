@@ -1,0 +1,294 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import chalk from "chalk";
+import pkg from "../../package.json" with { type: "json" };
+
+const FLISK_BANNER = `
+  ${chalk.bold.cyan("flisk")} ${chalk.gray(`v${pkg.version}`)}  ${chalk.white("Your whole app, running on your computer with one command.")}
+`;
+
+/** The rows of the `flisk --help` table, including the example each row prints. */
+export const COMMAND_GROUPS = [
+  {
+    title: "Project Level",
+    color: chalk.blue,
+    commands: [
+      {
+        name: "demo",
+        desc: "Clone, boot and open a small app",
+        alias: "--no-docker, --project <dir>",
+      },
+      {
+        name: "create",
+        desc: "Pick a stack with a few questions and get a project that runs",
+        alias: "[name] --frontend react --runtime docker --extras queue:nats",
+      },
+      {
+        name: "tool",
+        desc: "Add a tool by name: react, postgresql, fastapi, rag (cloud providers such as aws and kubernetes are rejected)",
+        alias: "add <tool> [name]",
+      },
+      {
+        name: "project",
+        desc: "Initialize or validate project-level configuration",
+        alias: "",
+      },
+      { name: "projects, info", desc: "Show project information and config status", alias: "" },
+      {
+        name: "import",
+        desc: "Import the services a directory describes",
+        alias: "[dir] --dry-run --yes",
+      },
+      {
+        name: "eject",
+        desc: "Write EJECTED.md describing the generated Tilt files",
+        alias: "--dry-run --yes",
+      },
+      {
+        name: "repos",
+        desc: "Clone the Git repositories listed in .flisk/project.json",
+        alias: "clone",
+      },
+      {
+        name: "export",
+        desc: "Write render.yaml, wrangler.toml or docker-compose.yml from service.json (runs flisk-export; never deploys)",
+        alias: "wrangler --resource <name> --dry-run",
+      },
+    ],
+  },
+  {
+    title: "Stack Level",
+    color: chalk.magenta,
+    commands: [
+      { name: "stack", desc: "Organize resources into stacks (interactive)", alias: "" },
+      { name: "stacks, ls", desc: "List all stacks and their resources", alias: "" },
+    ],
+  },
+  {
+    title: "Resource Level",
+    color: chalk.yellow,
+    commands: [
+      { name: "resource", desc: "Create a new resource, or register an existing one", alias: "" },
+      {
+        name: "resources",
+        desc: "List all resources with filtering",
+        alias: "--stack <stack>, --ports",
+      },
+      {
+        name: "agent",
+        desc: "Inspect and operate AI agent resources",
+        alias: "sessions <resource>",
+      },
+    ],
+  },
+  {
+    title: "Lifecycle",
+    color: chalk.green,
+    commands: [
+      { name: "up, deploy", desc: "Start services (optionally by stack)", alias: "[stack-name]" },
+      {
+        name: "down",
+        desc: "Stop every running service of this project (local processes or Docker/Tilt)",
+        alias: "",
+      },
+      { name: "restart", desc: "Restart a running resource in the stack", alias: "<resource>" },
+      {
+        name: "run",
+        desc: "Run a one-off command with a service's stack environment",
+        alias: "<service> -- <command>",
+      },
+      { name: "status", desc: "Show status of resources and stacks", alias: "" },
+      { name: "wait", desc: "Wait until services are healthy", alias: "[services...]" },
+      {
+        name: "open",
+        desc: "Open the first ready frontend in your browser, or the frontend you name",
+        alias: "",
+      },
+      { name: "logs", desc: "Print recent logs from the running stack", alias: "--json" },
+    ],
+  },
+  {
+    title: "Networking",
+    color: chalk.blueBright,
+    commands: [
+      {
+        name: "networks, traefik",
+        desc: "Show service URLs: Traefik routes, or localhost addresses in a local-process project",
+        alias: "--stack <stack>, --json",
+      },
+    ],
+  },
+  {
+    title: "Utilities",
+    color: chalk.cyan,
+    commands: [
+      {
+        name: "ui, interactive",
+        desc: "Terminal dashboard to watch and manage your stacks and services",
+        alias: "",
+      },
+      {
+        name: "os",
+        desc: "Start FliskOS, the local desktop app for projects and agents",
+        alias: "--port=4300 --no-open",
+      },
+      {
+        name: "config",
+        desc: "Manage project configuration and regenerate master files",
+        alias: "regenerate, verify, edit",
+      },
+      { name: "doctor", desc: "Check environment readiness", alias: "" },
+      {
+        name: "distribute",
+        desc: "Board, listing kit and channel status for getting an app to users",
+        alias: "board, kit <resource>, status",
+      },
+      { name: "mcp", desc: "Run an MCP server over stdio for coding agents", alias: "" },
+      {
+        name: "mcp check",
+        desc: "Check an MCP server's protocol, local or remote (read-only)",
+        alias: "<url|resource> --call --json",
+      },
+      {
+        name: "connect",
+        desc: "Connect a coding agent: MCP server entry and Flisk skills",
+        alias: "<claude|cursor|codex|gemini> --dry-run",
+      },
+      {
+        name: "runtime",
+        desc: "Inspect packaged engine and template assets",
+        alias: "--check-assets",
+      },
+      { name: "completion", desc: "Generate shell completions", alias: "--install --shell zsh" },
+      { name: "upgrade, update", desc: "Self-update to latest version", alias: "--force --all" },
+      { name: "version, -v", desc: "Display version number", alias: "" },
+      { name: "help", desc: "Show help", alias: "[command]" },
+    ],
+  },
+];
+
+/** Every command name and alias that the help table lists. */
+export function listedCommandNames(): string[] {
+  return COMMAND_GROUPS.flatMap((group) =>
+    group.commands.flatMap((command) => command.name.split(",").map((name) => name.trim())),
+  );
+}
+
+function formatCommand(
+  name: string,
+  desc: string,
+  alias: string,
+  color: (text: string) => string,
+): string {
+  const nameFormatted = color(name.padEnd(20));
+  const descFormatted = chalk.white(desc);
+  const aliasFormatted = alias ? chalk.gray(` ${alias}`) : "";
+  return `  ${nameFormatted} ${descFormatted}${aliasFormatted}`;
+}
+
+function formatOption(flag: string, desc: string): string {
+  return `  ${chalk.cyan(flag.padEnd(20))} ${chalk.white(desc)}`;
+}
+
+function printOptions(options: ReadonlyArray<readonly [string, string]>): void {
+  for (const [flag, desc] of options) {
+    console.log(formatOption(flag, desc));
+  }
+}
+
+/** Help for the one-command demo flow, so `flisk demo --help` lists the flags it reads (#4487). */
+export function showDemoHelp(): void {
+  console.log(FLISK_BANNER);
+  console.log(
+    chalk.gray(
+      "\n  Clone a starter, install its dependencies, boot the stack and open the frontend in your browser.\n",
+    ),
+  );
+  console.log(chalk.gray("  The CLI is installed globally if it is not on your PATH yet.\n"));
+  console.log(chalk.gray("  Modes: a Docker/Tilt stack by default; without Docker (or with"));
+  console.log(chalk.gray("  --no-docker) the small two-service demo runs as local processes.\n"));
+  console.log(
+    chalk.gray("  Writes ~/.flisk/flisk-demo by default, or the --project <dir> folder instead.\n"),
+  );
+  console.log(chalk.gray("  Delete that folder to remove the demo: rm -rf ~/.flisk/flisk-demo\n"));
+  console.log(chalk.gray("  Usage: flisk demo [options]\n"));
+  console.log(chalk.bold.yellow("  Options:"));
+  printOptions([
+    ["--project <dir>", "Clone the demo into this directory"],
+    ["--template <name>", "Name the starter to run (same as flisk <name>)"],
+    ["--keep", "Keep the cloned directory after the demo"],
+    ["--reset", "Remove demo folders and their host dependencies, then exit"],
+    ["--no-docker", "Run the demo as local processes"],
+    ["-y, --yes", "Skip confirmation prompts"],
+    ["--verbose", "Show the error details that commands hide"],
+    ["-h, --help", "Show this help"],
+    ["-v, --version", "Display version number"],
+  ]);
+  console.log();
+  console.log(chalk.gray(`  For every command: ${chalk.cyan("flisk --help")}`));
+  console.log(chalk.gray(`  GitHub: ${chalk.cyan("https://github.com/flisk-sh/flisk")}`));
+  console.log();
+}
+
+export function showHelp(): void {
+  console.log(FLISK_BANNER);
+
+  console.log(
+    chalk.gray(
+      "\n  Local development inner loop; Flisk does not replace Helm for cluster deployments.\n",
+    ),
+  );
+  console.log(chalk.bold.white("  Project → Phase → Stack → Resource\n"));
+
+  console.log(chalk.gray("  Usage: flisk [command] [options]\n"));
+
+  console.log(chalk.bold.yellow("  Global Options:"));
+  printOptions([
+    ["-v, --version", "Display version number"],
+    ["--verbose", "Show the error details that commands hide"],
+    ["-h, --help", "Show help"],
+  ]);
+  console.log();
+
+  for (const group of COMMAND_GROUPS) {
+    console.log(group.color.bold(`  ${group.title}`));
+    console.log(group.color(`  ${"─".repeat(50)}`));
+
+    for (const cmd of group.commands) {
+      console.log(formatCommand(cmd.name, cmd.desc, cmd.alias, group.color));
+    }
+
+    console.log();
+  }
+  console.log(chalk.bold.yellow("  Quick start:"));
+  console.log(chalk.gray(`  ${"─".repeat(50)}`));
+  console.log(
+    chalk.white(`
+  ${chalk.cyan("0.")} Or pick a stack:            ${chalk.green("flisk create")}
+  ${chalk.cyan("1.")} Initialize project:        ${chalk.green("flisk project")}
+  ${chalk.cyan("2.")} Create a resource:         ${chalk.green("flisk resource my-api --type backend")}
+  ${chalk.cyan("3.")} Assign to stack:           ${chalk.green("flisk stack my-stack")}
+  ${chalk.cyan("4.")} Start development:         ${chalk.green("flisk up my-stack")}
+  `),
+  );
+  console.log(chalk.bold.yellow("  Examples:"));
+  console.log(chalk.gray(`  ${"─".repeat(50)}`));
+  console.log(
+    chalk.white(`
+  ${chalk.cyan("$")} flisk project                       # Create master configs
+  ${chalk.cyan("$")} flisk resource api --type backend   # Create a backend service
+  ${chalk.cyan("$")} flisk resource app --type frontend  # Create a frontend app
+  ${chalk.cyan("$")} flisk resource bot --type agent     # Create an AI agent (sessions survive flisk down)
+  ${chalk.cyan("$")} flisk stacks --services             # List stacks with their resources
+  ${chalk.cyan("$")} flisk up my-stack                   # Start a stack
+  ${chalk.cyan("$")} flisk networks                      # Show service URLs
+  ${chalk.cyan("$")} flisk doctor                        # Check your environment
+  ${chalk.cyan("$")} flisk upgrade                       # Self-update
+  ${chalk.cyan("$")} flisk upgrade --all                 # Update all Flisk installs on PATH
+  `),
+  );
+  console.log(chalk.gray(`  ${"═".repeat(50)}`));
+  console.log(chalk.gray(`  For more help: ${chalk.cyan("flisk help [command]")}`));
+  console.log(chalk.gray(`  GitHub: ${chalk.cyan("https://github.com/flisk-sh/flisk")}`));
+  console.log();
+}

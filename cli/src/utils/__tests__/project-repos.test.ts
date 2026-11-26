@@ -1,0 +1,826 @@
+import { execFileSync } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { FliskError } from "../errors.js";
+import {
+  checkProjectRepos,
+  classifyRepoDestination,
+  cloneMissingRepos,
+  cloneRepo,
+  planRepoClones,
+  selectConfiguredRepos,
+  validateRepoBranch,
+  validateRepoDir,
+  validateRepoList,
+  validateRepoUrl,
+} from "../project-repos.js";
+
+/** Stands in for `git clone`: creates the destination directory that is the last argument. */
+const createCloneDestination = async (args: string[]): Promise<string> => {
+  mkdirSync(args[args.length - 1] as string, { recursive: true });
+  return "";
+};
+
+/** A clone runner that creates every temp destination except `<marker>.flisk-clone-*`, which fails with `message`. */
+const cloneRunner = (marker: string, message: string) =>
+  vi.fn().mockImplementation(async (args: string[]) => {
+    const tempPath = args[args.length - 1] as string;
+    if (tempPath.includes(`${marker}.flisk-clone-`)) {
+      throw new Error(message);
+    }
+    mkdirSync(tempPath, { recursive: true });
+    return "";
+  });
+
+/** Finds leftover temporary clone folders under a project root. */
+const findCloneTempDirs = (dir: string): string[] => {
+  const found: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name.includes(".flisk-clone-")) found.push(path);
+      found.push(...findCloneTempDirs(path));
+    }
+  }
+  return found;
+};
+
+describe("project-repos utility", () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(realpathSync(tmpdir()), "flisk-repos-test-"));
+  });
+
+  afterEach(() => {
+    try {
+      rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  });
+
+  describe("validateRepoUrl", () => {
+    it("accepts valid SSH, HTTPS, file, and local path URLs", () => {
+      expect(validateRepoUrl("git@github.com:flisk-sh/flisk.git").valid).toBe(true);
+      expect(validateRepoUrl("https://github.com/flisk-sh/flisk.git").valid).toBe(true);
+      expect(validateRepoUrl("ssh://git@github.com/flisk-sh/flisk.git").valid).toBe(true);
+      expect(validateRepoUrl("file:///tmp/bare-repo.git").valid).toBe(true);
+      expect(validateRepoUrl("/local/bare-repo.git").valid).toBe(true);
+      expect(validateRepoUrl("./local/bare-repo.git").valid).toBe(true);
+    });
+
+    it("rejects empty URL", () => {
+      const res = validateRepoUrl("");
+      expect(res.valid).toBe(false);
+      expect(res.reason).toContain("cannot be empty");
+    });
+
+    it("rejects URLs starting with hyphen to prevent option injection", () => {
+      expect(validateRepoUrl("--upload-pack=evil").valid).toBe(false);
+      expect(validateRepoUrl("-oProxyCommand=evil").valid).toBe(false);
+    });
+
+    it("rejects URLs with dangerous characters or shell metacharacters", () => {
+      expect(validateRepoUrl("https://github.com/repo;rm -rf /").valid).toBe(false);
+      expect(validateRepoUrl("https://github.com/repo\nevil").valid).toBe(false);
+      expect(validateRepoUrl("https://github.com/repo`evil`").valid).toBe(false);
+      expect(validateRepoUrl("https://github.com/repo$evil").valid).toBe(false);
+      expect(validateRepoUrl("https://github.com/repo|evil").valid).toBe(false);
+      expect(validateRepoUrl("https://github.com/repo&evil").valid).toBe(false);
+    });
+  });
+
+  describe("validateRepoBranch", () => {
+    it("accepts valid branch names", () => {
+      expect(validateRepoBranch("main").valid).toBe(true);
+      expect(validateRepoBranch("feature/auth-v2").valid).toBe(true);
+      expect(validateRepoBranch("release-1.0.0").valid).toBe(true);
+      expect(validateRepoBranch(undefined).valid).toBe(true);
+    });
+
+    it("rejects branches starting with dash", () => {
+      const res = validateRepoBranch("--upload-pack=evil");
+      expect(res.valid).toBe(false);
+      expect(res.reason).toContain("cannot start with a dash");
+    });
+
+    it("rejects dangerous or control characters in branch", () => {
+      expect(validateRepoBranch("branch;rm -rf /").valid).toBe(false);
+      expect(validateRepoBranch("branch`evil`").valid).toBe(false);
+      expect(validateRepoBranch("branch$evil").valid).toBe(false);
+    });
+  });
+
+  describe("validateRepoDir", () => {
+    it("accepts safe relative project paths", () => {
+      const res = validateRepoDir("services/shop/orders-api", tempDir);
+      expect(res.valid).toBe(true);
+      expect(res.targetPath).toBe(resolve(tempDir, "services/shop/orders-api"));
+    });
+
+    it("rejects empty directory", () => {
+      expect(validateRepoDir("", tempDir).valid).toBe(false);
+      expect(validateRepoDir("   ", tempDir).valid).toBe(false);
+    });
+
+    it("rejects absolute paths", () => {
+      const res = validateRepoDir("/etc/passwd", tempDir);
+      expect(res.valid).toBe(false);
+      expect(res.reason).toContain("Absolute destination path rejected");
+    });
+
+    it("rejects directory traversal", () => {
+      expect(validateRepoDir("../outside", tempDir).valid).toBe(false);
+      expect(validateRepoDir("services/../../outside", tempDir).valid).toBe(false);
+      expect(validateRepoDir("services/../..", tempDir).valid).toBe(false);
+    });
+
+    it("rejects reserved directories", () => {
+      expect(validateRepoDir(".git", tempDir).valid).toBe(false);
+      expect(validateRepoDir(".flisk", tempDir).valid).toBe(false);
+      expect(validateRepoDir("node_modules", tempDir).valid).toBe(false);
+      expect(validateRepoDir("services/.git/child", tempDir).valid).toBe(false);
+      expect(validateRepoDir("services/node_modules/child", tempDir).valid).toBe(false);
+    });
+
+    it("rejects symlinks that escape the project root", () => {
+      const outsideDir = mkdtempSync(join(realpathSync(tmpdir()), "flisk-outside-"));
+      const symlinkPath = join(tempDir, "escaped-link");
+      symlinkSync(outsideDir, symlinkPath);
+
+      const res = validateRepoDir("escaped-link/service", tempDir);
+      expect(res.valid).toBe(false);
+      expect(res.reason).toContain("escaping project root");
+
+      rmSync(outsideDir, { recursive: true, force: true });
+    });
+  });
+
+  describe("validateRepoList", () => {
+    it("passes with valid distinct repos", () => {
+      const res = validateRepoList(
+        [
+          { url: "https://github.com/acme/orders.git", dir: "services/orders" },
+          { url: "https://github.com/acme/billing.git", dir: "services/billing" },
+        ],
+        tempDir,
+      );
+      expect(res.valid).toBe(true);
+    });
+
+    it("rejects duplicate destination directories", () => {
+      const res = validateRepoList(
+        [
+          { url: "https://github.com/acme/orders.git", dir: "services/orders" },
+          { url: "https://github.com/acme/orders-fork.git", dir: "services/orders" },
+        ],
+        tempDir,
+      );
+      expect(res.valid).toBe(false);
+      expect(res.reason).toContain("Duplicate destination directory");
+    });
+
+    it("rejects nested conflicting directories", () => {
+      const res = validateRepoList(
+        [
+          { url: "https://github.com/acme/shop.git", dir: "services/shop" },
+          { url: "https://github.com/acme/orders.git", dir: "services/shop/orders" },
+        ],
+        tempDir,
+      );
+      expect(res.valid).toBe(false);
+      expect(res.reason).toContain("Conflicting nested target directories");
+    });
+  });
+
+  describe("classifyRepoDestination", () => {
+    it("reports missing when the destination does not exist", () => {
+      expect(classifyRepoDestination(join(tempDir, "services/gone"))).toBe("missing");
+    });
+
+    it("reports cloned when the destination holds a .git entry", () => {
+      const dir = join(tempDir, "services/app");
+      mkdirSync(join(dir, ".git"), { recursive: true });
+      expect(classifyRepoDestination(dir)).toBe("cloned");
+    });
+
+    it("reports cloned when .git is a file, as in a worktree or submodule", () => {
+      const dir = join(tempDir, "services/worktree");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, ".git"), "gitdir: ../elsewhere\n");
+      expect(classifyRepoDestination(dir)).toBe("cloned");
+    });
+
+    it("reports not a git repo for a folder that clone would keep untouched", () => {
+      const dir = join(tempDir, "services/plain");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "README.md"), "not a checkout\n");
+      expect(classifyRepoDestination(dir)).toBe("not a git repo");
+    });
+  });
+
+  describe("selectConfiguredRepos", () => {
+    const repos = [
+      { url: "https://github.com/acme/orders.git", dir: "services/orders" },
+      { url: "https://github.com/acme/billing.git", dir: "services/billing" },
+      { url: "https://github.com/acme/search.git", dir: "services/search" },
+    ];
+
+    it("returns every configured repository when no dirs are given", () => {
+      expect(selectConfiguredRepos(repos, [])).toEqual(repos);
+    });
+
+    it("returns only the named entries, in configuration order", () => {
+      expect(selectConfiguredRepos(repos, ["services/search", "services/orders"])).toEqual([
+        repos[0],
+        repos[2],
+      ]);
+    });
+
+    it("throws a FliskError that names the valid dirs for an unknown dir", () => {
+      const error = (() => {
+        try {
+          selectConfiguredRepos(repos, ["nope"]);
+          return undefined;
+        } catch (caught) {
+          return caught as FliskError;
+        }
+      })();
+
+      expect(error).toBeInstanceOf(FliskError);
+      expect(error?.exitCode).toBe(1);
+      expect(error?.message).toContain("nope");
+      expect(error?.message).toContain("services/orders");
+      expect(error?.message).toContain("services/billing");
+      expect(error?.message).toContain("services/search");
+      expect(error?.suggestions.join("\n")).toContain("flisk repos list");
+    });
+
+    it("collects every unknown dir into one error", () => {
+      expect(() => selectConfiguredRepos(repos, ["nope", "also-nope"])).toThrow(
+        /nope.*also-nope|also-nope.*nope/,
+      );
+    });
+
+    it("fails a named dir even when no repositories are configured", () => {
+      const error = (() => {
+        try {
+          selectConfiguredRepos([], ["nope"]);
+          return undefined;
+        } catch (caught) {
+          return caught as FliskError;
+        }
+      })();
+
+      expect(error).toBeInstanceOf(FliskError);
+      expect(error?.suggestions.join("\n")).toContain(".flisk/project.json");
+    });
+  });
+
+  describe("cloneRepo and cloneMissingRepos with mock runner", () => {
+    it("skips cloning if target directory already exists", async () => {
+      const targetDir = join(tempDir, "services/orders");
+      mkdirSync(targetDir, { recursive: true });
+
+      const runner = vi.fn();
+      const res = await cloneRepo(
+        { url: "https://github.com/acme/orders.git", dir: "services/orders" },
+        tempDir,
+        runner,
+      );
+
+      expect(res.cloned).toBe(false);
+      expect(res.skipped).toBe(true);
+      expect(res.reason).toContain("already exists");
+      expect(runner).not.toHaveBeenCalled();
+    });
+
+    it("invokes runner with structured git arguments and branch when missing", async () => {
+      const runner = vi.fn().mockImplementation(createCloneDestination);
+      const res = await cloneRepo(
+        { url: "https://github.com/acme/orders.git", dir: "services/orders", branch: "develop" },
+        tempDir,
+        runner,
+      );
+
+      expect(res.cloned).toBe(true);
+      expect(res.skipped).toBe(false);
+      expect(runner).toHaveBeenCalledTimes(1);
+      const [args] = runner.mock.calls[0];
+      expect(args.slice(0, 6)).toEqual([
+        "clone",
+        "--quiet",
+        "--branch",
+        "develop",
+        "--",
+        "https://github.com/acme/orders.git",
+      ]);
+      expect(args[6]).toMatch(/services[\\/]orders\.flisk-clone-/);
+      expect(runner.mock.calls[0]?.[1]).toEqual({ cwd: tempDir });
+    });
+
+    it("cleans up the temporary clone on failure and throws FliskError", async () => {
+      const targetDir = join(tempDir, "services/failed-repo");
+      const runner = vi.fn().mockImplementation(async (args: string[]) => {
+        const tempPath = args[args.length - 1] as string;
+        mkdirSync(tempPath, { recursive: true });
+        writeFileSync(join(tempPath, "partial.tmp"), "corrupt");
+        throw new Error("fatal: remote branch not found");
+      });
+
+      await expect(
+        cloneRepo(
+          { url: "https://github.com/acme/failed.git", dir: "services/failed-repo" },
+          tempDir,
+          runner,
+        ),
+      ).rejects.toThrow(FliskError);
+
+      expect(existsSync(targetDir)).toBe(false);
+      expect(existsSync(join(tempDir, "services"))).toBe(false);
+    });
+
+    it("removes parent directories created by a failed clone", async () => {
+      const parentDir = join(tempDir, "ext");
+      const runner = vi.fn().mockRejectedValue(new Error("fatal: repository not found"));
+
+      const error = await cloneRepo(
+        { url: "https://github.com/acme/does-not-exist.git", dir: "ext/x" },
+        tempDir,
+        runner,
+      ).catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(FliskError);
+      expect((error as FliskError).message).toContain(
+        'Failed to clone repository "https://github.com/acme/does-not-exist.git" into "ext/x"',
+      );
+      expect(existsSync(parentDir)).toBe(false);
+    });
+
+    it("keeps a parent directory that existed before a failed clone", async () => {
+      const parentDir = join(tempDir, "ext");
+      mkdirSync(parentDir, { recursive: true });
+      writeFileSync(join(parentDir, "keep.txt"), "keep");
+      const runner = vi.fn().mockRejectedValue(new Error("fatal: authentication failed"));
+
+      await expect(
+        cloneRepo({ url: "https://github.com/acme/private.git", dir: "ext/x" }, tempDir, runner),
+      ).rejects.toThrow(/Failed to clone repository/);
+
+      expect(existsSync(parentDir)).toBe(true);
+      expect(existsSync(join(parentDir, "keep.txt"))).toBe(true);
+    });
+
+    it("removes all newly-created nested parent directories on failure", async () => {
+      const runner = vi.fn().mockRejectedValue(new Error("fatal: repository not found"));
+
+      await expect(
+        cloneRepo(
+          { url: "https://github.com/acme/does-not-exist.git", dir: "a/b/c/x" },
+          tempDir,
+          runner,
+        ),
+      ).rejects.toThrow(FliskError);
+
+      expect(existsSync(join(tempDir, "a"))).toBe(false);
+      expect(existsSync(join(tempDir, "a/b/c"))).toBe(false);
+    });
+
+    it("keeps the outermost existing ancestor when nested parents are created and a clone fails", async () => {
+      mkdirSync(join(tempDir, "a"), { recursive: true });
+      writeFileSync(join(tempDir, "a", "keep.txt"), "keep");
+      const runner = vi.fn().mockRejectedValue(new Error("fatal: repository not found"));
+
+      await expect(
+        cloneRepo(
+          { url: "https://github.com/acme/does-not-exist.git", dir: "a/b/c/x" },
+          tempDir,
+          runner,
+        ),
+      ).rejects.toThrow(FliskError);
+
+      expect(existsSync(join(tempDir, "a", "keep.txt"))).toBe(true);
+      expect(existsSync(join(tempDir, "a/b"))).toBe(false);
+    });
+
+    it("records a failure per repository and still removes parents created by failed attempts", async () => {
+      const runner = vi.fn().mockRejectedValue(new Error("fatal: repository not found"));
+
+      const results = await cloneMissingRepos(
+        tempDir,
+        [
+          { url: "https://github.com/acme/does-not-exist.git", dir: "ext/a" },
+          { url: "https://github.com/acme/also-missing.git", dir: "ext/b" },
+        ],
+        runner,
+      );
+
+      expect(results).toHaveLength(2);
+      expect(results[0]?.failed).toBe(true);
+      expect(results[0]?.reason).toContain("repository not found");
+      expect(results[1]?.failed).toBe(true);
+      expect(existsSync(join(tempDir, "ext"))).toBe(false);
+    });
+
+    it("keeps successful clones and their parent folder when a later clone fails", async () => {
+      const runner = vi.fn().mockImplementation(async (args: string[]) => {
+        const tempPath = args[args.length - 1] as string;
+        if (tempPath.includes("a.flisk-clone-")) {
+          mkdirSync(tempPath, { recursive: true });
+          return "";
+        }
+        throw new Error("fatal: repository not found");
+      });
+
+      const results = await cloneMissingRepos(
+        tempDir,
+        [
+          { url: "https://github.com/acme/present.git", dir: "ext/a" },
+          { url: "https://github.com/acme/missing.git", dir: "ext/b" },
+        ],
+        runner,
+      );
+
+      expect(results).toHaveLength(2);
+      expect(results[0]?.cloned).toBe(true);
+      expect(results[1]?.failed).toBe(true);
+      expect(results[1]?.reason).toContain("Failed to clone repository");
+      expect(existsSync(join(tempDir, "ext/a"))).toBe(true);
+      expect(existsSync(join(tempDir, "ext"))).toBe(true);
+    });
+
+    it("continues cloning the remaining repositories after one fails", async () => {
+      const runner = cloneRunner("orders", "fatal: could not resolve host");
+
+      const results = await cloneMissingRepos(
+        tempDir,
+        [
+          { url: "https://unreachable.invalid/acme/orders.git", dir: "services/orders" },
+          { url: "https://github.com/acme/billing.git", dir: "services/billing" },
+        ],
+        runner,
+      );
+
+      expect(results).toHaveLength(2);
+      expect(results[0]?.cloned).toBe(false);
+      expect(results[0]?.skipped).toBe(false);
+      expect(results[0]?.failed).toBe(true);
+      expect(results[0]?.reason).toContain("could not resolve host");
+      expect(results[1]?.cloned).toBe(true);
+      expect(results[1]?.failed).toBe(false);
+      expect(runner).toHaveBeenCalledTimes(2);
+      expect(existsSync(join(tempDir, "services/billing"))).toBe(true);
+      expect(existsSync(join(tempDir, "services/orders"))).toBe(false);
+    });
+
+    it("returns one result per repository across cloned, skipped and failed outcomes", async () => {
+      mkdirSync(join(tempDir, "services/existing"), { recursive: true });
+      const runner = cloneRunner("bad", "fatal: repository not found");
+
+      const results = await cloneMissingRepos(
+        tempDir,
+        [
+          { url: "https://github.com/acme/existing.git", dir: "services/existing" },
+          { url: "https://github.com/acme/bad.git", dir: "services/bad" },
+          { url: "https://github.com/acme/new.git", dir: "services/new" },
+        ],
+        runner,
+      );
+
+      expect(results).toHaveLength(3);
+      expect(results[0]?.skipped).toBe(true);
+      expect(results[1]?.failed).toBe(true);
+      expect(results[2]?.cloned).toBe(true);
+      expect(runner).toHaveBeenCalledTimes(2);
+    });
+
+    it("throws FliskError when the destination exists as a file", async () => {
+      const targetFile = join(tempDir, "services/file-repo");
+      mkdirSync(join(tempDir, "services"), { recursive: true });
+      writeFileSync(targetFile, "not a folder");
+      const runner = vi.fn();
+
+      await expect(
+        cloneRepo(
+          { url: "https://github.com/acme/file.git", dir: "services/file-repo" },
+          tempDir,
+          runner,
+        ),
+      ).rejects.toThrow(/exists and is not a directory/);
+      expect(runner).not.toHaveBeenCalled();
+    });
+
+    it("redacts credentials from clone failure messages", async () => {
+      const runner = vi
+        .fn()
+        .mockRejectedValue(new Error("fatal: could not read https://user:secret@host/acme/x.git"));
+
+      const error = await cloneRepo(
+        { url: "https://user:secret@github.com/acme/x.git", dir: "services/x" },
+        tempDir,
+        runner,
+      ).catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(FliskError);
+      expect((error as FliskError).message).not.toContain("secret");
+      expect((error as FliskError).message).toContain("***@github.com");
+    });
+
+    it("clones multiple missing repos via cloneMissingRepos", async () => {
+      const runner = vi.fn().mockImplementation(createCloneDestination);
+      const results = await cloneMissingRepos(
+        tempDir,
+        [
+          { url: "https://github.com/acme/orders.git", dir: "services/orders" },
+          { url: "https://github.com/acme/billing.git", dir: "services/billing" },
+        ],
+        runner,
+      );
+
+      expect(results).toHaveLength(2);
+      expect(results[0]?.cloned).toBe(true);
+      expect(results[1]?.cloned).toBe(true);
+      expect(runner).toHaveBeenCalledTimes(2);
+    });
+
+    it("clones six repos at most four at a time and returns results in config order", async () => {
+      const repos = Array.from({ length: 6 }, (_, index) => ({
+        url: `https://github.com/acme/repo-${index}.git`,
+        dir: `services/repo-${index}`,
+      }));
+      let active = 0;
+      let maxActive = 0;
+      const runner = vi.fn().mockImplementation(async (args: string[]) => {
+        const tempPath = args[args.length - 1] as string;
+        active++;
+        maxActive = Math.max(maxActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        mkdirSync(tempPath, { recursive: true });
+        active--;
+        return "";
+      });
+
+      const results = await cloneMissingRepos(tempDir, repos, runner);
+
+      expect(results.map((result) => result.dir)).toEqual(repos.map((repo) => repo.dir));
+      expect(results.every((result) => result.cloned)).toBe(true);
+      expect(runner).toHaveBeenCalledTimes(6);
+      expect(maxActive).toBe(4);
+    });
+
+    it("lets in-flight clones finish and cleans temp folders when one of six clones fails", async () => {
+      const repos = Array.from({ length: 6 }, (_, index) => ({
+        url: `https://github.com/acme/repo-${index}.git`,
+        dir: `services/repo-${index}`,
+      }));
+      let active = 0;
+      let completed = 0;
+      const runner = vi.fn().mockImplementation(async (args: string[]) => {
+        const tempPath = args[args.length - 1] as string;
+        const failedIndex = tempPath.match(/repo-(\d+)\.flisk-clone-/)?.[1];
+        active++;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        mkdirSync(tempPath, { recursive: true });
+        if (failedIndex === "4") {
+          writeFileSync(join(tempPath, "partial.tmp"), "corrupt");
+          active--;
+          completed++;
+          throw new Error("fatal: remote branch not found");
+        }
+        active--;
+        completed++;
+        return "";
+      });
+
+      const results = await cloneMissingRepos(tempDir, repos, runner);
+
+      expect(results.map((result) => result.dir)).toEqual(repos.map((repo) => repo.dir));
+      expect(results.filter((result) => result.cloned)).toHaveLength(5);
+      expect(results[4]?.failed).toBe(true);
+      expect(results[4]?.reason).toContain("services/repo-4");
+      expect(completed).toBe(6);
+      expect(active).toBe(0);
+      expect(findCloneTempDirs(tempDir)).toEqual([]);
+      expect(existsSync(join(tempDir, "services/repo-4"))).toBe(false);
+    });
+  });
+
+  describe("read-only clone plan", () => {
+    const repos = [
+      { url: "https://github.com/acme/orders.git", dir: "services/orders", branch: "develop" },
+      { url: "https://github.com/acme/present.git", dir: "services/present" },
+    ];
+
+    it("lists missing and present repos with branches without creating folders", () => {
+      mkdirSync(join(tempDir, "services/present"), { recursive: true });
+
+      const plan = planRepoClones(tempDir, repos);
+
+      expect(plan).toEqual([
+        {
+          url: repos[0]?.url,
+          dir: repos[0]?.dir,
+          branch: "develop",
+          action: "clone",
+        },
+        {
+          url: repos[1]?.url,
+          dir: repos[1]?.dir,
+          action: "keep",
+          reason: "destination directory already exists",
+        },
+      ]);
+      expect(existsSync(join(tempDir, "services/orders"))).toBe(false);
+    });
+
+    it("agrees with a real clone about which repositories it clones", async () => {
+      mkdirSync(join(tempDir, "services/present"), { recursive: true });
+      const planned = planRepoClones(tempDir, repos).map((entry) => ({
+        dir: entry.dir,
+        cloned: entry.action === "clone",
+      }));
+      const runner = vi.fn().mockImplementation(createCloneDestination);
+
+      const results = await cloneMissingRepos(tempDir, repos, runner);
+
+      expect(results.map((result) => ({ dir: result.dir, cloned: result.cloned }))).toEqual(
+        planned,
+      );
+    });
+
+    it("rejects an invalid destination the same way a real clone does", () => {
+      expect(() =>
+        planRepoClones(tempDir, [{ url: "https://github.com/acme/x.git", dir: "../escape" }]),
+      ).toThrow(FliskError);
+    });
+  });
+
+  describe("checkProjectRepos (doctor integration)", () => {
+    it("returns skipped when no repos configured", async () => {
+      const res = await checkProjectRepos(tempDir, []);
+      expect(res.didPass).toBe(true);
+      expect(res.isSkipped).toBe(true);
+    });
+
+    it("reports failure when a declared repository is missing", async () => {
+      const res = await checkProjectRepos(tempDir, [
+        { url: "https://github.com/acme/missing.git", dir: "services/missing" },
+      ]);
+      expect(res.didPass).toBe(false);
+      expect(res.message).toContain("1 service repository missing");
+      expect(res.fix).toContain("flisk repos clone");
+    });
+
+    it("reports failure when target directory is not a git repository", async () => {
+      const targetDir = join(tempDir, "services/not-git");
+      mkdirSync(targetDir, { recursive: true });
+
+      const runner = vi.fn().mockRejectedValue(new Error("not a git repository"));
+      const res = await checkProjectRepos(
+        tempDir,
+        [{ url: "https://github.com/acme/repo.git", dir: "services/not-git" }],
+        runner,
+      );
+
+      expect(res.didPass).toBe(false);
+      expect(res.message).toContain("not a Git repository");
+    });
+
+    it("reports warning when on different branch than configured", async () => {
+      const targetDir = join(tempDir, "services/branch-repo");
+      mkdirSync(targetDir, { recursive: true });
+
+      const runner = vi.fn().mockImplementation(async (args: string[]) => {
+        if (args.includes("--show-toplevel")) return `${targetDir}\n`;
+        if (args.includes("HEAD")) return "feature-x\n";
+        if (args.includes("--porcelain")) return "";
+        return "";
+      });
+
+      const res = await checkProjectRepos(
+        tempDir,
+        [{ url: "https://github.com/acme/repo.git", dir: "services/branch-repo", branch: "main" }],
+        runner,
+      );
+
+      expect(res.didPass).toBe(false);
+      expect(res.isWarning).toBe(true);
+      expect(res.message).toContain('is on branch "feature-x", expected "main"');
+    });
+
+    it("reports warning when there are uncommitted changes", async () => {
+      const targetDir = join(tempDir, "services/dirty-repo");
+      mkdirSync(targetDir, { recursive: true });
+
+      const runner = vi.fn().mockImplementation(async (args: string[]) => {
+        if (args.includes("--show-toplevel")) return `${targetDir}\n`;
+        if (args.includes("HEAD")) return "main\n";
+        if (args.includes("--porcelain")) return " M file.ts\n";
+        return "";
+      });
+
+      const res = await checkProjectRepos(
+        tempDir,
+        [{ url: "https://github.com/acme/repo.git", dir: "services/dirty-repo", branch: "main" }],
+        runner,
+      );
+
+      expect(res.didPass).toBe(false);
+      expect(res.isWarning).toBe(true);
+      expect(res.message).toContain("has local uncommitted changes");
+    });
+
+    it("passes when repository is clean and on configured branch", async () => {
+      const targetDir = join(tempDir, "services/clean-repo");
+      mkdirSync(targetDir, { recursive: true });
+
+      const runner = vi.fn().mockImplementation(async (args: string[]) => {
+        if (args.includes("--show-toplevel")) return `${targetDir}\n`;
+        if (args.includes("HEAD")) return "main\n";
+        if (args.includes("--porcelain")) return "";
+        return "";
+      });
+
+      const res = await checkProjectRepos(
+        tempDir,
+        [{ url: "https://github.com/acme/repo.git", dir: "services/clean-repo", branch: "main" }],
+        runner,
+      );
+
+      expect(res.didPass).toBe(true);
+      expect(res.message).toContain("clean");
+    });
+  });
+
+  describe("real offline bare repository cloning", () => {
+    it("clones a real bare Git repository fixture into target destination", async () => {
+      const bareRepoDir = join(tempDir, "bare-source.git");
+      const workDir = join(tempDir, "init-source");
+      const projectDir = join(tempDir, "hub-project");
+
+      // 1. Create a bare git repo fixture
+      execFileSync("git", ["init", "--bare", bareRepoDir]);
+
+      // 2. Populate it with an initial commit
+      execFileSync("git", ["clone", bareRepoDir, workDir]);
+      writeFileSync(join(workDir, "service.json"), JSON.stringify({ appName: "orders-api" }));
+      execFileSync("git", ["-C", workDir, "config", "user.name", "Test User"]);
+      execFileSync("git", ["-C", workDir, "config", "user.email", "test@example.com"]);
+      execFileSync("git", ["-C", workDir, "add", "service.json"]);
+      execFileSync("git", ["-C", workDir, "commit", "-m", "init orders"]);
+      execFileSync("git", ["-C", workDir, "push", "origin", "HEAD:main"]);
+
+      // 3. Setup project root
+      mkdirSync(join(projectDir, ".flisk"), { recursive: true });
+      writeFileSync(
+        join(projectDir, ".flisk", "project.json"),
+        JSON.stringify({
+          version: "1.0",
+          project: { name: "hub", version: "0.1.0" },
+          phases: {
+            pre_alpha: { enabledStacks: ["shop"] },
+            alpha: { enabledStacks: ["shop"] },
+            beta: { enabledStacks: ["shop"] },
+            out_of_scope: { enabledStacks: [] },
+          },
+          optional_infra: {
+            monitoring: false,
+            elk: false,
+            debezium: false,
+            golden_image: false,
+            verdaccio: false,
+          },
+          discovery: { paths: ["services/*/*"] },
+          repos: [{ url: bareRepoDir, dir: "services/orders-api", branch: "main" }],
+        }),
+      );
+
+      // 4. Run cloneMissingRepos
+      const results = await cloneMissingRepos(projectDir);
+      expect(results).toHaveLength(1);
+      expect(results[0]?.cloned).toBe(true);
+      expect(results[0]?.skipped).toBe(false);
+
+      const clonedServiceJson = join(projectDir, "services/orders-api/service.json");
+      expect(existsSync(clonedServiceJson)).toBe(true);
+
+      // 5. Run a second time to verify idempotency
+      const secondRun = await cloneMissingRepos(projectDir);
+      expect(secondRun).toHaveLength(1);
+      expect(secondRun[0]?.cloned).toBe(false);
+      expect(secondRun[0]?.skipped).toBe(true);
+    });
+  });
+});

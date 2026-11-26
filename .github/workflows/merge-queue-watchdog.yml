@@ -1,0 +1,43 @@
+# Ejects a merge queue head that is stuck, so the entries behind it stop waiting (#5044). On 2026-11-21 one stale pull
+# request held 80 PRs at the head of the main merge queue for 4.5 hours: the queue builds one entry at a time and every
+# merge to main rebuilt its batch from zero, so nothing merged. The head is ejected when its batches have failed twice
+# or it has held the head for over 60 minutes (scripts/merge-queue-watchdog.mjs), and the script comments the failing
+# run on the pull request. The sibling bot stalled-merge-queue.yml covers the opposite case: entries that never got a
+# batch at all. Runs on the default branch only; no pull request code.
+name: 🤖 BOT | CI | Merge queue watchdog
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: merge-queue-watchdog
+  # A scheduled run is never cut off between dequeueing the head and commenting on its pull request.
+  cancel-in-progress: false
+
+jobs:
+  watchdog:
+    name: Eject a stuck merge queue head
+    # Scheduled runs always use the default branch; a manual run from another branch would execute that branch's script
+    # with the write token, so it is skipped.
+    if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read # list merge_group runs
+      pull-requests: write # dequeue through GraphQL
+      issues: write # comment on the ejected pull request
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Eject a stuck head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: node scripts/merge-queue-watchdog.mjs --repo "$REPO"

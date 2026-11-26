@@ -1,0 +1,138 @@
+# Runs the flisk up warm and cold start benchmark on the restaurant example nightly on the latest main and
+# after each release (not on every push: a run takes about an hour), then publishes an HTML report to
+# GitHub Pages. Manual runs measure but do not publish.
+#
+# The job builds the CLI from the commit being tested (not the published npm package), so the numbers
+# say what main does. Results are for a clean GitHub-hosted runner; they are not comparable with the
+# macOS numbers in docs/benchmarks/results.
+#
+# The measurement cases live in tests/e2e/scale/benchmarks (suite.json, run.sh): B1 generates the project,
+# B2 runs the cold and warm starts, B3 builds the report. This workflow only builds the CLI, installs Tilt, and
+# publishes; publishing is gated on the trigger below.
+name: 🌙 NIGHTLY | Perf | Benchmarks report
+
+on:
+  schedule:
+    # GitHub starts daily scheduled runs about 7-10 h after their cron time (#3911), so this
+    # cron is set 8 h early and the run really starts around 02:30 UTC.
+    - cron: "30 18 * * *" # nightly, on the latest main
+  # Measure each release right after it is published. Read-only token, no secrets, main branch only.
+  workflow_run: # zizmor: ignore[dangerous-triggers]
+    workflows: ["🏷️ RELEASE | Package | Binaries and npm package"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      cold_runs:
+        description: "Cold runs (full rebuild, slow)"
+        type: string
+        default: "1"
+      warm_runs:
+        description: "Warm runs"
+        type: string
+        default: "1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: benchmarks
+  cancel-in-progress: false
+
+jobs:
+  measure:
+    name: ⏱️ Measure flisk up on the restaurant example
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 120
+    outputs:
+      commit: ${{ steps.meta.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - id: meta
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: flisk-sh/flisk-restaurant-example
+          path: restaurant
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.23.5
+      - uses: ./.github/actions/setup-bun # zizmor: ignore[self-repository] composite action resolves from this commit
+
+      - name: Build the CLI from this commit
+        run: | # zizmor: ignore[github-env] adds a fixed directory under RUNNER_TEMP; no input from the triggering run reaches it
+          bun install --frozen-lockfile --ignore-scripts
+          (cd cli && npm run build)
+          chmod +x cli/bin/flisk.js
+          # The package's bin entry is flisk.js; expose it as `flisk`, the name every later step runs.
+          mkdir -p "$RUNNER_TEMP/flisk-bin"
+          ln -sf "$GITHUB_WORKSPACE/cli/bin/flisk.js" "$RUNNER_TEMP/flisk-bin/flisk"
+          echo "$RUNNER_TEMP/flisk-bin" >> "$GITHUB_PATH"
+
+      - name: Install Tilt
+        uses: ./.github/actions/setup-tilt # zizmor: ignore[self-repository] composite action resolves from this commit
+
+      - name: Machine
+        run: |
+          echo "cpus: $(nproc)"; free -h; df -h / | tail -1
+          docker version --format 'docker {{.Server.Version}}'
+          flisk --version; tilt version | head -1
+
+      - name: Generate the restaurant project (B1)
+        env:
+          FLISK_EXTENSION_SOURCE: ${{ github.workspace }}
+        run: tests/e2e/scale/benchmarks/run.sh B1
+
+      - name: Cold and warm starts (B2)
+        env:
+          FLISK_EXTENSION_SOURCE: ${{ github.workspace }}
+          COLD_RUNS: ${{ inputs.cold_runs || '1' }}
+          WARM_RUNS: ${{ inputs.warm_runs || '1' }}
+        run: tests/e2e/scale/benchmarks/run.sh B2
+
+      - name: Build the report (B3)
+        env:
+          COMMIT: ${{ steps.meta.outputs.commit }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: tests/e2e/scale/benchmarks/run.sh B3
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: benchmark-report
+          path: ${{ runner.temp }}/site
+          retention-days: 1
+          if-no-files-found: warn
+
+      - name: Stop the project
+        if: always()
+        run: tests/e2e/scale/benchmarks/run.sh cleanup
+
+  publish:
+    name: 🌐 Publish the report to GitHub Pages
+    needs: measure
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_run'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: benchmark-report
+          path: site
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

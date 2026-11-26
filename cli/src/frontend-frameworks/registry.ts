@@ -1,0 +1,116 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import { FliskError } from "../utils/errors.js";
+import { suggestClosest } from "../utils/suggestions.js";
+import { litFrontendProvider } from "./lit.js";
+import { nextFrontendProvider } from "./next.js";
+import { preactFrontendProvider } from "./preact.js";
+import { qwikFrontendProvider } from "./qwik.js";
+import { reactFrontendProvider } from "./react.js";
+import { solidFrontendProvider } from "./solid.js";
+import { svelteFrontendProvider } from "./svelte.js";
+import { tanstackRouterFrontendProvider } from "./tanstack-router.js";
+import type { FrontendFrameworkProvider } from "./types.js";
+import { vanillaFrontendProvider } from "./vanilla.js";
+import { vueFrontendProvider } from "./vue.js";
+
+export const DEFAULT_FRONTEND_FRAMEWORK = "react";
+
+export const FRONTEND_FRAMEWORKS: Record<string, FrontendFrameworkProvider> = {
+  react: reactFrontendProvider,
+  vue: vueFrontendProvider,
+  svelte: svelteFrontendProvider,
+  preact: preactFrontendProvider,
+  lit: litFrontendProvider,
+  solid: solidFrontendProvider,
+  qwik: qwikFrontendProvider,
+  vanilla: vanillaFrontendProvider,
+  "tanstack-router": tanstackRouterFrontendProvider,
+  next: nextFrontendProvider,
+};
+
+// Meta-frameworks that are not registered providers. They are never scaffolded as Vite SPA providers; they go through
+// `flisk resource <name> --type bring-your-own` instead. Next.js is a registered `server` provider, so it is not listed here.
+export const META_FRAMEWORK_IDS = [
+  "nuxt",
+  "sveltekit",
+  "astro",
+  "angular",
+  "remix",
+  "tanstack-start",
+] as const;
+
+// Providers that have passed the resource-types/frontend e2e suite (one leg per framework, see tests/e2e/axes.json).
+export const VERIFIED_FRONTEND_FRAMEWORKS: readonly string[] = [
+  "react",
+  "vue",
+  "svelte",
+  "preact",
+  "lit",
+  "solid",
+  "qwik",
+  "vanilla",
+  "tanstack-router",
+];
+
+export interface FrontendFrameworkInventoryEntry {
+  id: string;
+  label: string;
+  kind: "vite-spa" | "server";
+  verified: boolean;
+  command: string;
+}
+
+export function listFrontendFrameworks(): FrontendFrameworkInventoryEntry[] {
+  return Object.entries(FRONTEND_FRAMEWORKS).map(([id, provider]) => ({
+    id,
+    label: provider.label,
+    kind: provider.kind ?? "vite-spa",
+    verified: VERIFIED_FRONTEND_FRAMEWORKS.includes(id),
+    command: `flisk resource <name> --type frontend --framework ${id}`,
+  }));
+}
+
+export function getFrontendFramework(
+  frameworkId?: string,
+  resourceName?: string,
+): FrontendFrameworkProvider {
+  const id = (frameworkId ?? DEFAULT_FRONTEND_FRAMEWORK).trim().toLowerCase();
+  const provider = Object.hasOwn(FRONTEND_FRAMEWORKS, id) ? FRONTEND_FRAMEWORKS[id] : undefined;
+
+  if (!provider) {
+    const supportedIds = Object.keys(FRONTEND_FRAMEWORKS).join(", ");
+    const closest = suggestClosest(id, Object.keys(FRONTEND_FRAMEWORKS));
+    const isMeta = (META_FRAMEWORK_IDS as readonly string[]).includes(id);
+    const byo = `flisk resource ${resourceName ?? "<name>"} --type bring-your-own`;
+    throw new FliskError(
+      `${isMeta ? `"${frameworkId}" is not a Vite SPA provider` : `Unknown frontend framework "${frameworkId}"`}. Supported frameworks: ${supportedIds}.`,
+      [
+        ...(closest ? [`Did you mean "${closest}"?`] : []),
+        `Use one of: ${supportedIds}`,
+        `Omit --framework to use ${DEFAULT_FRONTEND_FRAMEWORK}`,
+        ...(isMeta ? [`Create the app with ${id}'s own CLI, then register it: ${byo}`] : []),
+      ],
+    );
+  }
+
+  return provider;
+}
+
+export function resolveFrontendFramework(
+  resourceType: string,
+  frameworkId?: string,
+  resourceName?: string,
+): FrontendFrameworkProvider | undefined {
+  if (resourceType !== "frontend") {
+    // Backends take their own framework ids (see backend-frameworks/registry.ts).
+    if (frameworkId !== undefined && resourceType !== "backend") {
+      throw new FliskError("--framework can only be used with --type frontend or --type backend.", [
+        "Add --type frontend or --type backend, or drop --framework for this resource type",
+      ]);
+    }
+    return undefined;
+  }
+
+  return getFrontendFramework(frameworkId, resourceName);
+}

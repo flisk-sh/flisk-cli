@@ -1,0 +1,12 @@
+# One-shot migration job: dbmate applies db/migrations to Flisk's Postgres and exits 0.
+FROM ghcr.io/amacneil/dbmate:2@sha256:fb4fe7cabfe98cf864d63ce083867f3c303a8c1a022fcd69081439425706e909
+COPY db /db
+RUN addgroup -g 1000 app && adduser -u 1000 -G app -D -H app
+USER app
+# Flisk's DATABASE_URL carries a Prisma-style ?schema=public that non-Prisma drivers reject, so strip it.
+# Flisk's Postgres has SSL off, so ask the driver not to try it.
+# --wait retries until Postgres accepts connections; --no-dump-schema keeps the job read-only on disk.
+# One-shot job: it has no server to probe and exits when the migration finishes, so the image disables the inherited check.
+HEALTHCHECK NONE
+ENTRYPOINT ["/bin/sh", "-c"]
+CMD ["dbmate --url \"${DATABASE_URL%%\\?*}?sslmode=disable\" --migrations-dir /db/migrations --no-dump-schema --wait up"]

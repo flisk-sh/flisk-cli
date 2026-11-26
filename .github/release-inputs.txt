@@ -1,0 +1,17 @@
+# The one list of release input paths (#3095): what can change the shipped package.
+# The "changes" job of release-binaries.yml turns it into the paths-filter rules with
+# `node scripts/release/release-inputs.mjs --emit-filters`, and the publish gate
+# scripts/check-release-candidate.mjs reads it to decide whether a changed file is a release input.
+# One pattern per line: an exact path, or a directory prefix ending in "/**". Blank lines and
+# lines starting with "#" are ignored. This file lists itself, so changing the rules needs a new
+# release candidate like any other release input change.
+.github/workflows/release-binaries.yml
+.github/release-inputs.txt
+package.json
+bun.lock
+cli/**
+scripts/release-binaries.sh
+scripts/release/**
+tests/e2e/platforms/container-image/**
+.github/workflows/publish-cli-image.yml
+runtime/**

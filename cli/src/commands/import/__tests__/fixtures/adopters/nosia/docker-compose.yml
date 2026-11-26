@@ -1,0 +1,109 @@
+# Trimmed for Flisk importer tests from dilolabs/nosia's docker-compose.yml (MIT),
+# the Compose file the Flisk setup in dilolabs/nosia#386 was generated from.
+# Kept: all five services, the command and depends_on conditions, the string
+# healthcheck, the Caddyfile bind, the models mapping and the named volumes.
+# Dropped: duplicated model-tuning env keys that map identically to the kept ones.
+
+services:
+  reverse-proxy:
+    image: caddy:latest
+    depends_on:
+      - web
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - NOSIA_URL=${NOSIA_URL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy-config:/config
+      - caddy-data:/data
+
+  db-migrate:
+    image: dilolabs/nosia:latest
+    command: bundle exec rails db:prepare
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - EMBEDDING_DIMENSIONS=${EMBEDDING_DIMENSIONS}
+      - SECRET_KEY_BASE=${SECRET_KEY_BASE}
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+    restart: "no"
+
+  web:
+    image: dilolabs/nosia:latest
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - SECRET_KEY_BASE=${SECRET_KEY_BASE}
+      - AI_BASE_URL=${AI_BASE_URL}
+      - AI_API_KEY=${AI_API_KEY}
+      - LLM_MODEL=${LLM_MODEL}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL}
+    models:
+      - llm
+      - embedding
+    volumes:
+      - rails-storage:/rails/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/up"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+    restart: on-failure:5
+
+  postgres-db:
+    image: pgvector/pgvector:pg16
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - postgres-db-data:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    restart: on-failure:5
+
+  solidq:
+    image: dilolabs/nosia:latest
+    command: bundle exec rake solid_queue:start
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - SECRET_KEY_BASE=${SECRET_KEY_BASE}
+      - AI_BASE_URL=${AI_BASE_URL}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL}
+      - EMBEDDING_DIMENSIONS=${EMBEDDING_DIMENSIONS}
+    models:
+      - llm
+      - embedding
+    volumes:
+      - rails-storage:/rails/storage
+    depends_on:
+      postgres-db:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    restart: on-failure:5
+
+models:
+  llm:
+    model: ${LLM_MODEL}
+  embedding:
+    model: ${EMBEDDING_MODEL}
+
+volumes:
+  caddy-config:
+  caddy-data:
+  postgres-db-data:
+  rails-storage:

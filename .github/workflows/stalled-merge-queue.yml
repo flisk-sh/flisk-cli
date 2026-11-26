@@ -1,0 +1,43 @@
+# Wakes the merge queue when GitHub stalls it with entries but no batch building them. On 2026-11-22 the entry at
+# position 1 left the queue for a merge conflict as the batch ahead of it merged, and GitHub never started a batch for
+# the next entry: 48 PRs sat QUEUED with no headCommit for six hours while main was green (#5105). GitHub's cron is
+# best-effort (the */15 schedule ran every 4-6 hours that day), so besides the schedule this also runs when a batch
+# starts (merge_group) and when a PR leaves the queue (dequeued), the moments a stall can begin.
+# The detector is the shared flisk-sh/.github workflow stalled-merge-queue.yml; the logic and its tests live there.
+# Pin the workflow and scripts_ref to the same commit. No pull request code runs.
+name: 🤖 BOT | CI | Unstall merge queue
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+  merge_group:
+    branches:
+      - main
+  pull_request:
+    types:
+      - dequeued
+    branches:
+      - main
+
+permissions: {}
+
+# check-ci-inventory wants a group here; it must differ from the group inside the shared workflow.
+# Each merge_group entry has its own ref, so a queue entry never replaces another one; every other event shares one group.
+concurrency:
+  group: stalled-merge-queue-caller-${{ github.event_name == 'merge_group' && github.ref || 'shared' }}
+  # Only a PR event is superseded. A scheduled or merge_group run is never cut off between dequeueing and enqueueing a PR.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  unstall:
+    # a fork's PR gets a read-only token, and the schedule covers it
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      actions: read # list merge_group runs
+      pull-requests: write # dequeue/enqueue via GraphQL, comment on the head PR
+      issues: write # comment on the head PR
+    uses: flisk-sh/.github/.github/workflows/stalled-merge-queue.yml@28a7fad96298d2f1f22ca839b208324e8841cdee # v1, merged after the v1 tag (flisk-sh/.github#32)
+    with:
+      scripts_ref: 28a7fad96298d2f1f22ca839b208324e8841cdee

@@ -1,0 +1,398 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureExit, parseEnvelope, runCommandInProcess } from "../../test-support/index.js";
+import { promptConfirm } from "../../utils/prompt.js";
+import {
+  EJECTED_CONTENT,
+  ejectCommand,
+  TILT_UP_COMMAND,
+  TILTFILE_RELATIVE_PATH,
+} from "../eject.js";
+
+vi.mock("../../utils/prompt.js", () => ({
+  promptConfirm: vi.fn(),
+}));
+
+const originalCwd = process.cwd();
+const repoRoot = join(import.meta.dirname, "..", "..", "..", "..");
+
+describe("flisk eject", () => {
+  let tempDir: string;
+
+  const pinProjectVersion = () => {
+    const projectJsonPath = join(tempDir, ".flisk", "project.json");
+    const project = JSON.parse(readFileSync(projectJsonPath, "utf-8")) as Record<string, unknown>;
+
+    writeFileSync(
+      projectJsonPath,
+      JSON.stringify({
+        ...project,
+        pinnedFliskVersion: "999.999.999",
+      }),
+    );
+  };
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "flisk-eject-test-"));
+    mkdirSync(join(tempDir, ".flisk"), { recursive: true });
+    writeFileSync(
+      join(tempDir, ".flisk", "project.json"),
+      JSON.stringify({
+        version: "1.0.0",
+        project: { name: "test", version: "1.0.0" },
+        phases: Object.fromEntries(
+          ["pre_alpha", "alpha", "beta", "out_of_scope"].map((name) => [
+            name,
+            { name, description: "", enabledStacks: [] },
+          ]),
+        ),
+        optional_infra: {
+          monitoring: false,
+          elk: false,
+          debezium: false,
+          golden_image: false,
+          verdaccio: false,
+        },
+        discovery: { paths: ["services/**"] },
+      }),
+    );
+    mkdirSync(join(tempDir, ".flisk", ".flisk-out"), { recursive: true });
+    writeFileSync(join(tempDir, ".flisk", ".flisk-out", "Tiltfile"), "# generated\n");
+    writeFileSync(join(tempDir, ".flisk", ".flisk-out", "docker-compose.yml"), "services: {}\n");
+    process.chdir(tempDir);
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("lists kept and created files in dry-run without writing", async () => {
+    writeFileSync(join(tempDir, "Tiltfile"), "# user-owned\n");
+    const output: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+
+    try {
+      await ejectCommand.parseAsync(["node", "flisk", "--dry-run"], { from: "node" });
+    } finally {
+      console.log = originalLog;
+    }
+
+    const dryRunOutput = output.join("\n");
+    expect(dryRunOutput).toContain("Generated files, left where they are (git-ignored):");
+    expect(dryRunOutput).toContain(join(".flisk", ".flisk-out", "Tiltfile"));
+    expect(dryRunOutput).toContain(
+      "Root Tiltfile, left where it is (not generated, not git-ignored):\n  Tiltfile\nFiles written:",
+    );
+    expect(dryRunOutput).toContain("Files written:\n  EJECTED.md");
+    expect(existsSync(join(tempDir, "EJECTED.md"))).toBe(false);
+  });
+
+  it("lists no identity paths in --dry-run --json when the shipped discovery runtime is vendored (#4259)", async () => {
+    // Mirror what `flisk config regenerate`/`flisk up` vendor into .flisk-out/flisk-cli-ext.
+    const vendoredDiscovery = join(tempDir, ".flisk", ".flisk-out", "flisk-cli-ext", "discovery");
+    mkdirSync(vendoredDiscovery, { recursive: true });
+    cpSync(join(repoRoot, "runtime", "discovery"), vendoredDiscovery, { recursive: true });
+
+    const result = await runCommandInProcess(ejectCommand, ["--dry-run", "--json"], tempDir);
+    expect(result.status).toBeUndefined();
+    const generatedFiles = parseEnvelope(result.stdout).data.generatedFiles as string[];
+    expect(generatedFiles.length).toBeGreaterThan(0);
+    expect(generatedFiles.some((file) => /identity/i.test(file))).toBe(false);
+    expect(generatedFiles).toContain(
+      join(
+        ".flisk",
+        ".flisk-out",
+        "flisk-cli-ext",
+        "discovery",
+        "services",
+        "platform",
+        "synthetic-monitor",
+        "service.yaml",
+      ),
+    );
+  });
+
+  it("writes EJECTED.md and prints a tilt command that points at the real Tiltfile", async () => {
+    const output: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+
+    try {
+      await ejectCommand.parseAsync(["node", "flisk", "--yes"], { from: "node" });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(readFileSync(join(tempDir, "EJECTED.md"), "utf-8")).toBe(EJECTED_CONTENT);
+    expect(output).toEqual([
+      "Wrote EJECTED.md. Nothing was copied, moved or generated.",
+      "Generated files stay in .flisk/.flisk-out/ (git-ignored) and still need Flisk inputs.",
+      "Run from the project root: tilt up -f .flisk/.flisk-out/Tiltfile -- --focus=<stack>",
+      "Replace <stack> with a stack name under services/, or omit --focus to use the Tiltfile's default phase.",
+      "Read EJECTED.md",
+    ]);
+    // `flisk up` passes this exact file to Tilt; there is no Tiltfile at the project root.
+    expect(TILTFILE_RELATIVE_PATH).toBe(".flisk/.flisk-out/Tiltfile");
+    expect(TILT_UP_COMMAND).toContain("-f .flisk/.flisk-out/Tiltfile");
+    expect(existsSync(join(tempDir, "Tiltfile"))).toBe(false);
+  });
+
+  it("writes only EJECTED.md and does not claim files it did not create", async () => {
+    const before = readdirSync(tempDir, { recursive: true }).map(String).sort();
+    const originalLog = console.log;
+    console.log = () => {};
+    try {
+      await ejectCommand.parseAsync(["node", "flisk", "--yes"], { from: "node" });
+    } finally {
+      console.log = originalLog;
+    }
+    const after = readdirSync(tempDir, { recursive: true }).map(String).sort();
+    expect(after.filter((p) => !before.includes(p))).toEqual(["EJECTED.md"]);
+
+    expect(EJECTED_CONTENT).not.toMatch(/^Keep:/m);
+    expect(EJECTED_CONTENT).not.toContain("compose files Flisk wrote");
+    expect(EJECTED_CONTENT).toContain("written by Tilt when it runs");
+    // The per-service .autogenerated/ files are neither claimed to be git-ignored outright (older
+    // projects track them) nor to be always committed (`flisk project` ignores them, #3815) (#3888).
+    expect(EJECTED_CONTENT).not.toContain("git-ignored too");
+    expect(EJECTED_CONTENT).not.toContain("meant to be committed");
+    expect(EJECTED_CONTENT).toMatch(
+      /\.autogenerated\/` \(Compose[\s\S]*depends on your `\.gitignore`/,
+    );
+    expect(EJECTED_CONTENT).toContain("services/**/.autogenerated/");
+    expect(EJECTED_CONTENT).toContain("`service.json` files");
+    expect(EJECTED_CONTENT).toContain("`flisk config regenerate`");
+    expect(EJECTED_CONTENT).toContain("no Tiltfile at the project root");
+  });
+
+  it("leaves an existing EJECTED.md alone and says so", async () => {
+    writeFileSync(join(tempDir, "EJECTED.md"), "mine\n");
+    const output: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+    try {
+      await ejectCommand.parseAsync(["node", "flisk", "--yes"], { from: "node" });
+    } finally {
+      console.log = originalLog;
+    }
+    expect(readFileSync(join(tempDir, "EJECTED.md"), "utf-8")).toBe("mine\n");
+    expect(output[0]).toContain("EJECTED.md already exists and was left unchanged");
+  });
+
+  it("requires a Flisk project", async () => {
+    rmSync(join(tempDir, ".flisk", "project.json"));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { expectExit } = captureExit();
+    try {
+      await expect(
+        ejectCommand.parseAsync(["node", "flisk", "--dry-run"], { from: "node" }),
+      ).rejects.toThrow("process.exit");
+      const output = error.mock.calls.flat().join("\n");
+      expect(output).toContain("Could not find project root (no .flisk/project.json found)");
+      expect(output).toContain("Run this from within a Flisk project");
+      expect(output).toContain("Run `flisk project --yes` to initialize a new project");
+      expectExit(1);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("fails with an informative error when generated Tilt files are missing", async () => {
+    rmSync(join(tempDir, ".flisk", ".flisk-out", "Tiltfile"));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { expectExit } = captureExit();
+    try {
+      await expect(
+        ejectCommand.parseAsync(["node", "flisk", "--yes"], { from: "node" }),
+      ).rejects.toThrow("process.exit");
+      const output = error.mock.calls.flat().join("\n");
+      // Other generated files are still there, so the message names the missing Tiltfile.
+      expect(output).toContain(
+        "The generated Tiltfile (.flisk/.flisk-out/Tiltfile) is missing. Run `flisk config regenerate` (or `flisk up` for Tilt-backed services), then `flisk eject`.",
+      );
+      // The fix is regenerate, not `flisk project --yes` (already run when the starter was cloned),
+      // and never `flisk eject`, the command that just failed (#4451).
+      expect(output).toContain("flisk config regenerate");
+      expect(output).not.toContain("flisk project --yes");
+      expect(output).not.toContain("→ flisk eject");
+      expectExit(1);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("points at config regenerate in a fresh clone with no .flisk/.flisk-out (#4451)", async () => {
+    rmSync(join(tempDir, ".flisk", ".flisk-out"), { recursive: true, force: true });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { expectExit } = captureExit();
+    try {
+      await expect(
+        ejectCommand.parseAsync(["node", "flisk", "--dry-run"], { from: "node" }),
+      ).rejects.toThrow("process.exit");
+      const output = error.mock.calls.flat().join("\n");
+      expect(output).toContain("Generated Tilt files are not created yet.");
+      expect(output).toContain("flisk config regenerate");
+      expect(output).toContain("flisk up");
+      expect(output).not.toContain("flisk project --yes");
+      expectExit(1);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("aborts eject and writes nothing when user declines confirmation", async () => {
+    vi.mocked(promptConfirm).mockResolvedValue(false);
+    const output: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+    try {
+      await ejectCommand.parseAsync(["node", "flisk"], { from: "node" });
+    } finally {
+      console.log = originalLog;
+    }
+    expect(existsSync(join(tempDir, "EJECTED.md"))).toBe(false);
+  });
+
+  it("proceeds with eject when user accepts confirmation prompt without --yes flag", async () => {
+    vi.mocked(promptConfirm).mockResolvedValue(true);
+    const output: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+    try {
+      await ejectCommand.parseAsync(["node", "flisk"], { from: "node" });
+    } finally {
+      console.log = originalLog;
+    }
+    expect(existsSync(join(tempDir, "EJECTED.md"))).toBe(true);
+    expect(output).toContain("Wrote EJECTED.md. Nothing was copied, moved or generated.");
+  });
+
+  it("prints (none) for files written in dry run when EJECTED.md already exists", async () => {
+    writeFileSync(join(tempDir, "EJECTED.md"), "already exists\n");
+    const output: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+    try {
+      await ejectCommand.parseAsync(["node", "flisk", "--dry-run"], { from: "node" });
+    } finally {
+      console.log = originalLog;
+    }
+    const text = output.join("\n");
+    expect(text).toContain("Files written:\n  (none)");
+  });
+
+  it("omits root Tiltfile section in dry run when root Tiltfile is absent", async () => {
+    const output: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+    try {
+      await ejectCommand.parseAsync(["node", "flisk", "--dry-run"], { from: "node" });
+    } finally {
+      console.log = originalLog;
+    }
+    const text = output.join("\n");
+    expect(text).not.toContain("Root Tiltfile, left where it is");
+  });
+
+  it("rejects eject when the CLI does not match pinnedFliskVersion", async () => {
+    pinProjectVersion();
+
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { expectExit } = captureExit();
+
+    try {
+      await expect(
+        ejectCommand.parseAsync(["node", "flisk", "--yes"], { from: "node" }),
+      ).rejects.toThrow("process.exit");
+
+      const output = error.mock.calls.flat().join("\n");
+
+      expect(output).toContain("does not match pinnedFliskVersion 999.999.999");
+      expect(output).toContain("npm install -g @flisk-sh/flisk@999.999.999");
+      expect(existsSync(join(tempDir, "EJECTED.md"))).toBe(false);
+
+      expectExit(1);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("allows eject to continue with --ignore-version", async () => {
+    pinProjectVersion();
+
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const output: string[] = [];
+    const originalLog = console.log;
+
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+
+    try {
+      await ejectCommand.parseAsync(["node", "flisk", "--dry-run", "--ignore-version"], {
+        from: "node",
+      });
+
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining("--ignore-version set"));
+      expect(output.join("\n")).toContain("Generated files");
+      expect(existsSync(join(tempDir, "EJECTED.md"))).toBe(false);
+    } finally {
+      console.log = originalLog;
+      warning.mockRestore();
+    }
+  });
+
+  it("emits a valid JSON error envelope when the version pin does not match", async () => {
+    pinProjectVersion();
+
+    const result = await runCommandInProcess(ejectCommand, ["--json"], tempDir);
+
+    expect(result.status).toBe(1);
+
+    expect(parseEnvelope(result.stdout)).toMatchObject({
+      schemaVersion: 1,
+      data: null,
+      errors: [
+        {
+          message: expect.stringContaining("does not match pinnedFliskVersion 999.999.999"),
+        },
+      ],
+    });
+
+    expect(existsSync(join(tempDir, "EJECTED.md"))).toBe(false);
+  });
+
+  it("points at moving a blocking file when .flisk/.flisk-out is a regular file", async () => {
+    const outPath = join(tempDir, ".flisk", ".flisk-out");
+    rmSync(outPath, { recursive: true, force: true });
+    writeFileSync(outPath, "blocking");
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { expectExit } = captureExit();
+    try {
+      await expect(
+        ejectCommand.parseAsync(["node", "flisk", "--dry-run"], { from: "node" }),
+      ).rejects.toThrow("process.exit");
+      const output = error.mock.calls.flat().join("\n");
+      expect(output).toContain("A file is blocking the generated output directory");
+      expect(output).toContain("flisk config regenerate");
+      expect(output).not.toContain("flisk project --yes");
+      expectExit(1);
+    } finally {
+      error.mockRestore();
+      rmSync(outPath, { force: true });
+    }
+  });
+});

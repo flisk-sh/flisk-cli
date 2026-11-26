@@ -1,0 +1,82 @@
+# Flisk for agencies and multi-client teams: honest FAQ
+
+Questions a team lead usually asks before moving client projects onto a new tool. Each answer says what is supported, what is not, and what is not written down yet. Anything marked **Gap** has an open issue; if your question is not here, [ask us](https://github.com/flisk-sh/flisk/issues/new?template=adoption-question.yml).
+
+## Do we need Kubernetes to run Flisk?
+
+No. Flisk runs your services on Docker with Tilt, or as local processes (ordinary programs) when a service declares a `command`, without a cluster. It does not deploy anything and writes no Kubernetes manifests. If you test Kubernetes itself (operators, CRDs, Helm charts), keep a local cluster for that: see [Flisk vs kind and minikube](compare/local-kubernetes.md) and [Flisk and Helm](with-helm.md).
+
+## How do I run database migrations?
+
+In a migrator resource that runs once before the API starts. `flisk resource orders-api --type backend --stack shop --feature prisma` creates `orders-api` and `orders-api-migrator`, and `dependsOn` orders them: Postgres, then the migrator, then the API ([example](service-json.md#example-postgres-then-a-migrator-then-an-api)). For a tool Flisk does not scaffold (dbmate, Flyway, Alembic), run it as a [one-shot job](byo.md#one-shot-jobs-migrations-seeders). Migrating at container start is the escape hatch, and `flisk doctor` warns about it ([scope](scope.md)). Resetting and seeding the database is in [local data](data.md).
+
+## How do AI agents use Flisk?
+
+Two ways. Your coding agent (Claude Code, Cursor, Codex, Gemini CLI) drives Flisk through `flisk mcp`, which gives it the commands as tools: scaffold services, start the stack, read logs, check the generated files. `flisk connect <host>` sets that up; see [Flisk for agents](agents/flisk-for-agents.md). And an app can run its own agents as `agent` resources, with health and readiness routes and sessions that survive restarts; see [Running AI agents in Flisk](agents/ai-agents.md).
+
+## How do we remove Flisk later?
+
+`flisk eject` hands the generated Tilt files over so the stack runs without Flisk, and [Leaving Flisk](leaving-flisk.md) lists what to delete from the repository. Uninstalling the CLI itself is one line per install method: [npm](install/npm.md), [Bun](install/bun.md), [Homebrew, Scoop or the binary](install/binary.md).
+
+Command pairs that look alike (`flisk init` and `flisk project`, `flisk up` and `tilt up`, and others) are explained in [Flisk commands compared](commands-compared.md).
+
+## Will it run our stacks (Java, .NET, PHP, Node, Python)?
+
+- **Generated for you:** Bun/TypeScript (the default, with Hono, Express, Fastify, NestJS and others), Python, Go and Rust. See [backend language providers](backend-language-providers.md).
+- **Anything else (Java, .NET, PHP, Ruby, ...):** use a [bring-your-own resource](byo.md). You give Flisk a Dockerfile or an image and a port; Flisk adds the Traefik route, health check, ordering and Tilt watching. It does not generate application code or live-update rules for your language, so the reload loop is whatever your Dockerfile does.
+- Built-in generators are TypeScript-first. See [known limits](compare-honest.md#known-limits).
+
+## Can we try it without changing the client's repository?
+
+**Partly answered; the Gap is a mode with no Flisk files in the repository.** In a repository that already had a `package.json`, `Tiltfile`, `.tiltignore`, `docker-compose.yml` and `Dockerfile`, `flisk project --yes` left them byte-for-byte unchanged, appended four lines to `.gitignore`, and added `.flisk/project.json`, `services/platform/database-management/docker-compose.yml` and `shared-platform-engineering/docker-templates/`. [Gradual adoption](gradual-adoption.md) has the full list, what to commit and how to take it out again; the [adoption guide](adopt-flisk.md) says to run `git status` and read what changed. There is still no documented mode that keeps all Flisk files outside the repository ([#504](https://github.com/flisk-sh/flisk/issues/504)).
+
+## What if the project stops being maintained?
+
+- There are two maintainers from two companies ([MAINTAINERS.md](project/MAINTAINERS.md)); the project has no foundation or funding commitment. Governance is in [GOVERNANCE.md](project/GOVERNANCE.md).
+- Core is MIT, so you can fork it.
+- **Answered in part:** [Leaving Flisk](leaving-flisk.md) says what `flisk eject` does (it only writes an `EJECTED.md` note), which generated files exist and what they need from Flisk, and what you lose. [Gradual adoption](gradual-adoption.md#taking-it-out-again) lists what to delete. There is still no command that produces plain Compose; moving to Compose or Helm is manual, and your `service.json` files are Flisk-specific.
+
+## Licence: can we use it on client projects?
+
+Core is MIT and needs no key. Premium is optional and adds Verdaccio, DDD scaffolding and Sablier idle stop. See the [licence matrix](FEATURES.md#license-matrix) and the [licence boundary](project/GOVERNANCE.md#license-boundary-and-donation-scope). Check it against your client contracts yourself; this page is not legal advice.
+
+## Windows machines
+
+Ubuntu on WSL2 with Docker Desktop is supported ([WSL2 guide](wsl2.md)). Native Windows can inspect the CLI, but `flisk up` needs Linux, Docker and Tilt.
+
+## Corporate proxy, VPN, private registry, custom CA
+
+**Not documented.** We have not tested `flisk up` behind an HTTP proxy, a TLS-intercepting proxy, or against a private npm/Maven/PyPI registry, and the docs do not describe how to pass proxy settings or extra CA certificates into the generated images. Do not assume it works; try it on one service first and tell us what breaks ([#506](https://github.com/flisk-sh/flisk/issues/506)).
+
+## We already have docker-compose files
+
+**Gap.** There is no Compose import. Use a bring-your-own resource per service (Dockerfile or `--image`). Adding Flisk did not modify an existing `docker-compose.yml` ([gradual adoption](gradual-adoption.md)), but running both at the same time was not tested. [Compare honestly](compare-honest.md): for 2 to 3 services you already wrote, Compose is a better fit than Flisk, and you can keep both during a pilot ([#507](https://github.com/flisk-sh/flisk/issues/507)).
+
+## Ports and running two stacks at once
+
+Flisk asks for ingress ports 80 and 443 first, so routed URLs carry no port. If they are taken, or on Linux and WSL2 where a non-root user cannot check them, Flisk picks the next free ports from bounded ranges (ingress 8080 to 8180, HTTPS 8443 to 8543, Postgres 15432 to 15532, read from `host-port-plan.ts`) and prints them in `flisk up` and `flisk networks`. With the defaults, each project needs one Postgres port from 15432 to 15532, so that range of 101 ports caps the number of projects at 101, fewer if other programs already use ports in it. HTTP and HTTPS use 80 and 443 first and take a port from their own ranges (101 ports each) only when 80 or 443 is not usable, which is the case on Linux and WSL2 for non-root users. The next project fails with `No available host port in <range> for <service>`, see [Troubleshooting](troubleshooting.md). The ranges cannot be changed; set `FLISK_HTTP_PORT`, `FLISK_HTTPS_PORT` or `FLISK_POSTGRES_PORT` to give a project fixed ports. A project with a fixed port takes none from that range. The limit comes from the port planner, checked with a stubbed port probe in `host-port-plan.test.ts`; running that many projects with real containers is **not tested**, and what a machine can sustain is **not measured** (see the next answer) ([#509](https://github.com/flisk-sh/flisk/issues/509)).
+
+## RAM and CPU on a 16 GB machine
+
+**Not measured.** The only published numbers are the [claims registry](claims.md) entries (a 14-service warm start and a 100-service CI fixture); neither describes memory use on a developer machine. The [pilot scorecard](pilot-scorecard.md) records memory and CPU for your own stack, and has one example record for a single scaffolded service (not a benchmark). Treat sizing as unknown until you measure your own stack ([#508](https://github.com/flisk-sh/flisk/issues/508)).
+
+## Onboarding a new developer, and showing it to the client
+
+The [adoption guide](adopt-flisk.md) is the one-page path: `flisk doctor`, `flisk up --dry-run`, `flisk up`. `flisk doctor` is designed to replace a setup wiki; that is a design goal, not a measured result. Messages it prints, and others you may meet, are in [Troubleshooting](troubleshooting.md).
+
+## CI
+
+`flisk config verify` checks that generated project files match `.flisk/project.json` and runs in CI ([`e2e-examples.yml`](../.github/workflows/e2e-examples.yml)). The [quickstart workflow](../.github/workflows/e2e-journeys.yml) runs a real `flisk up` on a GitHub-hosted runner, so it works on one. The [scope page](scope.md#local-only-or-also-staging-and-ci) says what CI is and is not for. A copy-paste workflow for your own repository is in [Running Flisk in CI](ci.md); its `flisk up` job has not been run on GitHub.
+
+## Where are the other answers?
+
+- Which repo holds the Flisk project, and who reviews shared files: [layout and ownership](layout.md).
+- Is it for staging or production, and what differs from production: [scope](scope.md).
+- Where Postgres data lives and how to reset, seed or snapshot it: [local data](data.md).
+- Pinning a version for a team, and what is versioned: [upgrading](upgrading.md).
+- What Flisk sends over the network, where secrets live and which images it pulls: [security](security.md).
+- What to measure and how to report a pilot: [pilot scorecard](pilot-scorecard.md).
+
+## Support and response time
+
+Questions are public issues; we aim to reply within one working day. There is no paid support contract. Premium is a feature key, not an SLA. What the history actually shows, who maintains the project and what premium covers are in [SUPPORT.md](../.github/SUPPORT.md).

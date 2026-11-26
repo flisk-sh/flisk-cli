@@ -1,0 +1,14 @@
+{
+  "$schema": "https://flisk.sh/schema.service.json",
+  "schemaVersion": 1,
+  "appName": "orders-api",
+  "appType": "backend",
+  "stack": "shop",
+  "port": 4000,
+  "featuresEnabled": ["nats"],
+  "params": {
+    "NATS_URL": "nats://flisk_example_nats:4222"
+  },
+  "healthCheckPath": "/health",
+  "dependsOn": []
+}

@@ -1,0 +1,163 @@
+# Copyright (c) 2026 Flisk Landscape contributors
+# SPDX-License-Identifier: MIT
+"""
+Golden layer set: one image per distinct stage, no duplicate images.
+
+l3-migrator used to install the same Prisma as l3-backend, so every project got
+two images with identical layers under different names. Migrators now build on
+l3-backend, and the old name resolves to it.
+
+Executes the real Starlark through Tilt's interpreter (`tilt alpha tiltfile-result`).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+pytestmark = [
+    pytest.mark.generator,
+    pytest.mark.skipif(shutil.which("tilt") is None, reason="tilt CLI not installed"),
+]
+
+DOCKER_DIR = Path(__file__).resolve().parents[2] / "runtime" / "engine" / "topologies" / "platform" / "docker"
+RESULT_MARKER = "Error in fail: RESULT"
+
+
+def run_starlark(tmp_path: Path, body: str) -> dict:
+    """Run `body` in a Tiltfile; `body` must assign a dict to `r`. `@DOCKER` is the engine docker dir."""
+    tiltfile = tmp_path / "Tiltfile"
+    # Forward slashes keep Windows paths from being parsed as Starlark escape sequences (\g, \U, ...).
+    tiltfile.write_text(body.replace("@DOCKER", str(DOCKER_DIR).replace("\\", "/")) + "\nfail('RESULT' + encode_json(r))\n")
+    proc = subprocess.run(
+        ["tilt", "alpha", "tiltfile-result", "-f", str(tiltfile)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=tmp_path,
+        env={**os.environ, "FLISK_PROJECT_ROOT": str(tmp_path)},
+        timeout=180,
+    )
+    output = proc.stdout + proc.stderr
+    assert RESULT_MARKER in output, output[-3000:]
+    return json.loads(output.split(RESULT_MARKER, 1)[1].strip())
+
+
+@pytest.fixture
+def golden(tmp_path):
+    return run_starlark(
+        tmp_path,
+        "load('@DOCKER/build/golden_image_dockerfile.star', 'generate_golden_dockerfile')\n"
+        "load('@DOCKER/build/golden_image_constants.star', 'GOLDEN_LAYERS', 'get_layer_reference')\n"
+        "load('@DOCKER/layers/prisma/constants.star', 'DEFAULT_GOLDEN_L3_MIGRATOR_IMAGE')\n"
+        "r = {\n"
+        "  'df': generate_golden_dockerfile(),\n"
+        "  'layers': {k: GOLDEN_LAYERS[k] for k in GOLDEN_LAYERS},\n"
+        "  'migrator_ref': get_layer_reference('l3-migrator'),\n"
+        "  'backend_ref': get_layer_reference('l3-backend'),\n"
+        "  'prisma_backend_ref': get_layer_reference('l3-backend-prisma'),\n"
+        "  'prisma_l3_migrator': DEFAULT_GOLDEN_L3_MIGRATOR_IMAGE,\n"
+        "}\n",
+    )
+
+
+def test_no_separate_l3_migrator_image_is_built(golden):
+    assert "l3-migrator" not in golden["layers"]
+    assert "AS l3_migrator_golden" not in golden["df"]
+
+
+def test_migrator_runtime_does_not_copy_unreadable_root_global_install(golden):
+    # /root is 0700, so the bun user cannot read a global install copied from l3-backend.
+    stage = golden["df"].split("AS l4_migrator_golden", 1)[1].split("\nFROM ", 1)[0]
+    assert "COPY --from=l3_backend_golden" not in stage
+
+
+def test_old_l3_migrator_name_resolves_to_l3_backend(golden):
+    assert golden["migrator_ref"] == golden["backend_ref"]
+    assert golden["prisma_l3_migrator"] == golden["backend_ref"]
+
+
+def test_legacy_l3_migrator_image_is_listed_for_removal(tmp_path, golden):
+    legacy_dir = tmp_path / "legacy"
+    legacy_dir.mkdir()
+    r = run_starlark(
+        legacy_dir,
+        "load('@DOCKER/build/golden_image_constants.star', 'LEGACY_GOLDEN_IMAGES')\n"
+        "r = {'legacy': LEGACY_GOLDEN_IMAGES}\n",
+    )
+    assert r["legacy"] == [golden["backend_ref"].replace("-l3-backend:", "-l3-migrator:")]
+
+
+def test_every_layer_target_and_copy_source_is_a_defined_stage(golden):
+    stages = set(re.findall(r"^FROM \S+ AS (\S+)", golden["df"], re.M))
+    for key, layer in golden["layers"].items():
+        assert layer["target"] in stages, f"{key} targets missing stage {layer['target']}"
+    for source in re.findall(r"^COPY --from=(\S+)", golden["df"], re.M):
+        assert source in stages, f"COPY --from={source} has no matching stage"
+
+
+def test_every_layer_builds_a_distinct_stage(golden):
+    targets = [layer["target"] for layer in golden["layers"].values()]
+    assert len(targets) == len(set(targets))
+
+
+def test_golden_dockerfile_is_the_same_for_every_project(tmp_path):
+    """
+    The hash that names a golden image is the hash of this Dockerfile, so two projects with different names must
+    generate the same text. Otherwise no prebuilt image from a registry (FLISK_GOLDEN_REGISTRY) could match another project.
+    """
+    texts = []
+    for name in ("alpha-shop", "beta-clinic"):
+        project = tmp_path / name
+        (project / ".flisk").mkdir(parents=True)
+        (project / ".flisk" / "project.json").write_text(json.dumps({"project": {"name": name}}))
+        texts.append(
+            run_starlark(
+                project,
+                "load('@DOCKER/build/golden_image_dockerfile.star', 'generate_golden_dockerfile')\n"
+                "r = {'df': generate_golden_dockerfile()}\n",
+            )["df"]
+        )
+    assert texts[0] == texts[1]
+    assert "alpha-shop" not in texts[0] and "beta-clinic" not in texts[0]
+
+
+def test_l3_backend_does_not_install_a_global_prisma(golden):
+    # The `development` stage of every Prisma service descends from l3-backend. A global Prisma CLI there sat next to
+    # the pinned copy in the service's own node_modules, so the engines shipped twice (flisk#3709).
+    stage = golden["df"].split("AS l3_backend_golden", 1)[1].split("\nFROM ", 1)[0]
+    assert "bun add -g" not in stage
+    assert "bunx prisma --version" not in stage
+
+
+def test_prisma_backend_has_its_own_prisma_free_golden_stage(golden):
+    # flisk#3833 option 1: the base image selected for services with prisma/ is a separate layer, but neither
+    # backend layer reintroduces the global install that flisk#3709 removed.
+    assert golden["prisma_backend_ref"] == "flisk-project-l3-backend-prisma:latest"
+    assert golden["prisma_backend_ref"] != golden["backend_ref"]
+    stage = golden["df"].split("AS l3_backend_prisma_golden", 1)[1].split("\nFROM ", 1)[0]
+    assert 'LABEL layer="l3-backend-prisma"' in stage
+    assert "bun add -g" not in stage
+    assert "bunx prisma --version" not in stage
+
+
+def test_migrator_tools_live_once_in_the_golden_migrator_layer(golden):
+    # migrate.sh needs nc (database wait) and jq + curl (Infisical). curl and bash come from l1; jq and nc are installed once
+    # here instead of in every migrator image. No postgres client: migrate.sh never runs psql (flisk#3709).
+    stage = golden["df"].split("AS l4_migrator_golden", 1)[1].split("\nFROM ", 1)[0]
+    apk = [line for line in stage.splitlines() if "apk add" in line]
+    assert len(apk) == 1, apk
+    for tool in ("jq", "netcat-openbsd"):
+        assert tool in apk[0]
+    assert "postgresql" not in apk[0]
+    users = [line.strip() for line in stage.splitlines() if line.strip().startswith("USER ")]
+    assert users and users[-1] == "USER bun", users
+    assert stage.index("apk add") < stage.rindex("USER bun"), "tools install before the final USER bun"
+    assert "curl" in golden["df"].split("AS l2_golden", 1)[0], "curl must stay in l1 for the Infisical fetch"

@@ -1,0 +1,847 @@
+name: 🏷️ RELEASE | Package | Binaries and npm package
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "package.json"
+      - "cli/package.json"
+
+permissions:
+  contents: read
+
+# Queue releases instead of running them side by side: two runs for the same
+# version upload the same assets and one fails with "already exists".
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('release-smoke-{0}', github.event.pull_request.number) || 'release' }}
+  cancel-in-progress: false
+
+jobs:
+  changes:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      release: ${{ steps.filter.outputs.release }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      # The single list of release inputs lives in .github/release-inputs.txt (#3095); the publish gate
+      # (scripts/check-release-candidate.mjs) reads the same file. Emit it as the paths-filter rules file.
+      - name: Build the release filter from .github/release-inputs.txt
+        run: node scripts/release/release-inputs.mjs --emit-filters > "$RUNNER_TEMP/release-filters.yml"
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
+        id: filter
+        with:
+          filters: ${{ runner.temp }}/release-filters.yml
+
+  build:
+    needs: changes
+    # Pushes to main and manual runs build; a pull request builds only when release inputs changed.
+    # The merge of the automatic version-bump PR touches package.json, but it carries no new code:
+    # releasing it would find its own version already on npm and publish an empty next version,
+    # whose bump PR would start the next release, and so on. Skip it (skipping build skips smoke and publish).
+    if: >-
+      (github.event_name != 'pull_request' || needs.changes.outputs.release == 'true')
+      && !(github.event_name == 'push'
+      && startsWith(github.event.head_commit.message, 'Release ')
+      && contains(github.event.head_commit.message, '(automatic version bump)'))
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      bumped: ${{ steps.version.outputs.bumped }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # The compiled binaries are byte-identical only for one Bun version; .bun-version is that pin. Bump it on purpose.
+      - uses: ./.github/actions/setup-bun # zizmor: ignore[self-repository] composite action resolves from this commit
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 24.22.3
+          package-manager-cache: false
+
+      - run: bun install --frozen-lockfile --ignore-scripts
+        working-directory: cli
+
+      # The Linux compiled-binary project-generation smoke test runs flisk doctor,
+      # which requires Tilt and the Flisk host ports to be available.
+      - name: Install Tilt for the Linux release binary smoke test
+        uses: ./.github/actions/setup-tilt # zizmor: ignore[self-repository] composite action resolves from this commit
+
+      - name: Free required host ports for the Linux release binary smoke test
+        uses: ./.github/actions/free-postgres-port # zizmor: ignore[self-repository] composite action resolves from this commit
+        with:
+          ports: "80 443 5432"
+
+      # Choose the release version before the binary build so candidate assets,
+      # the smoke job, and the npm package all use one version.
+      - name: Pick an unreleased version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          current=$(node -p "require('./package.json').version")
+          # main is protected, so the bot's version-bump push is usually rejected and package.json
+          # lags behind. Start from the newest published version instead of counting up from it.
+          latest=$(npm view "@flisk-sh/flisk" version 2>/dev/null || true)
+          version=$(node -e '
+            const [cur, latest] = process.argv.slice(1);
+            const parse = (v) => v.split(".").map(Number);
+            const newer = latest && parse(latest).some((n, i) => n !== parse(cur)[i]
+              && n > parse(cur)[i] && parse(latest).slice(0, i).every((m, j) => m === parse(cur)[j]));
+            console.log(newer ? latest : cur);
+          ' "$current" "$latest")
+          while npm view "@flisk-sh/flisk@${version}" version >/dev/null 2>&1 \
+            || gh release view "v${version}" --repo flisk-sh/releases >/dev/null 2>&1; do
+            version=$(node -p 'const [a, b, c] = process.argv[1].split(".").map(Number); [a, b, c + 1].join(".")' "$version")
+          done
+          # The build reads cli/package.json, so both files must carry the version: a root-only bump once built
+          # release-dist-<old>/ and the upload of release-dist-<new>/ found nothing.
+          cli_current=$(node -p "require('./cli/package.json').version")
+          if [ "$version" = "$current" ] && [ "$version" = "$cli_current" ]; then
+            echo "Releasing ${version}."
+            echo "bumped=false" >> "$GITHUB_OUTPUT"
+          else
+            if [ "$version" = "$current" ]; then
+              echo "::notice::cli/package.json says ${cli_current}, package.json says ${current}; writing ${version} to both."
+            else
+              echo "::notice::${current} is already released; releasing this commit as ${version}."
+            fi
+            node -e '
+              const fs = require("fs");
+              const nextVersion = process.argv[1];
+              for (const file of ["package.json", "cli/package.json"]) {
+                const before = fs.readFileSync(file, "utf8");
+                const after = before.replace(/("version":\s*")[^"]+"/, (_, key) => key + nextVersion + "\"");
+                if (!/"version":\s*"[^"]+"/.test(before)) throw new Error("no version field in " + file);
+                fs.writeFileSync(file, after);
+              }
+              const lockBefore = fs.readFileSync("bun.lock", "utf8");
+              const cliStart = lockBefore.indexOf("\"cli\":");
+              if (cliStart === -1) throw new Error("no cli workspace in bun.lock");
+              const braceStart = lockBefore.indexOf("{", cliStart);
+              if (braceStart === -1) throw new Error("malformed cli workspace in bun.lock");
+              let depth = 1, i = braceStart + 1;
+              for (; i < lockBefore.length && depth > 0; i++) {
+                if (lockBefore[i] === "{") depth++;
+                else if (lockBefore[i] === "}") depth--;
+              }
+              if (depth !== 0) throw new Error("malformed cli workspace in bun.lock");
+              const cliBlock = lockBefore.slice(cliStart, i);
+              const versionRegex = /("version":\s*")[^"]+(")/;
+              if (!versionRegex.test(cliBlock)) throw new Error("no version field in cli workspace in bun.lock");
+              const updatedCliBlock = cliBlock.replace(versionRegex, (_, key, quote) => key + nextVersion + quote);
+              const lockAfter = lockBefore.slice(0, cliStart) + updatedCliBlock + lockBefore.slice(i);
+              fs.writeFileSync("bun.lock", lockAfter);
+            ' "$version"
+            echo "bumped=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Build release candidate
+        run: scripts/release-binaries.sh
+
+      - name: Upload exact release candidate
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: release-dist-${{ steps.version.outputs.version }}
+          path: release-dist-${{ steps.version.outputs.version }}/
+          if-no-files-found: error
+          retention-days: 2
+
+  # The Windows release candidate, checked by tests/e2e/platforms/windows-binary (WB1). It has its own check name: the
+  # e2e-platforms check is reported by e2e-platforms.yml alone, the source build (#1300).
+  windows-binary:
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Download exact release candidate
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: release-dist-${{ needs.build.outputs.version }}
+          path: release-dist
+
+      - name: Verify checksums, version, and bundled runtime layout
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        shell: bash
+        run: tests/e2e/platforms/windows-binary/run.sh WB1
+
+  # The CLI image built from this release candidate (scripts/release/flisk-image.Dockerfile, this runner's platform only) and run
+  # through tests/e2e/platforms/container-image, so a pull request that breaks the image fails here, before publish-image pushes
+  # it. Nothing is pushed. It does not gate publish: the image is published after the release, from its published assets.
+  cli-image:
+    needs: build
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Download exact release candidate
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: release-dist-${{ needs.build.outputs.version }}
+          path: release-dist
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 24.22.3
+          package-manager-cache: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # Exports the Actions cache URL and token so buildx can use type=gha (#3939).
+      - uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
+
+      - name: Build the image into the local Docker (the publish job's build, without the push)
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          FLISK_IMAGE_CACHE_SCOPE: cli-image-preflight
+          FLISK_IMAGE_CACHE_IMPORT: cli-image
+        run: bash scripts/release/push-flisk-image.sh release-dist "$VERSION" --load
+
+      - name: Run tests/e2e/platforms/container-image CI1 CI2 CI3 on it
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: tests/e2e/platforms/container-image/run.sh CI1 CI2 CI3
+
+      - name: Collect diagnostics
+        if: failure()
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: tests/e2e/platforms/container-image/run.sh diagnostics
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: failure()
+        with:
+          name: cli-image-diagnostics
+          path: ${{ runner.temp }}/flisk-e2e/container-image/artifacts
+          if-no-files-found: ignore
+          retention-days: 7
+
+  publish:
+    if: github.event_name != 'pull_request'
+    needs: [build, windows-binary]
+    runs-on: ubuntu-26.04
+    # Up to 45 minutes of that is the wait for a candidate that is still running on this commit (--wait below).
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      attestations: write
+      contents: write
+      id-token: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # Nothing publishes unless a passing release candidate (release-candidate.yml) covers this commit: the exact commit, or
+      # an ancestor when no release input changed since (#1627). Runs are looked up by head SHA, so a green run on an
+      # unrelated commit does not count. See scripts/check-release-candidate.mjs.
+      - name: Require a passing release candidate for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        # --wait: a candidate that is still running on this exact commit is waited for, so build and windows-binary can run
+        # alongside it; one that failed, or none, refuses at once.
+        run: node scripts/check-release-candidate.mjs --sha "$SHA" --repo "$GITHUB_REPOSITORY" --wait 45
+
+      - name: Verify npm package will be built from this commit
+        id: verify-commit
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          CURRENT_SHA="$(git rev-parse HEAD)"
+          echo "publish-commit=$CURRENT_SHA" >> "$GITHUB_OUTPUT"
+          echo "Publishing flisk@$VERSION from commit $CURRENT_SHA"
+
+      # The compiled binaries are byte-identical only for one Bun version; .bun-version is that pin. Bump it on purpose.
+      - uses: ./.github/actions/setup-bun # zizmor: ignore[self-repository] composite action resolves from this commit
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 24.22.3
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - name: Update npm for trusted publishing
+        run: node scripts/install-global.mjs npm@12.2.1 # zizmor: ignore[adhoc-packages] npm CLI is pinned for trusted publishing
+
+      - name: Restore selected release version
+        if: needs.build.outputs.bumped == 'true'
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const nextVersion = process.argv[1];
+            for (const file of ["package.json", "cli/package.json"]) {
+              const before = fs.readFileSync(file, "utf8");
+              const after = before.replace(/("version":\s*")[^"]+"/, (_, key) => key + nextVersion + "\"");
+              if (!/"version":\s*"[^"]+"/.test(before)) throw new Error("no version field in " + file);
+              fs.writeFileSync(file, after);
+            }
+            const lockBefore = fs.readFileSync("bun.lock", "utf8");
+            const cliStart = lockBefore.indexOf("\"cli\":");
+            if (cliStart === -1) throw new Error("no cli workspace in bun.lock");
+            const braceStart = lockBefore.indexOf("{", cliStart);
+            if (braceStart === -1) throw new Error("malformed cli workspace in bun.lock");
+            let depth = 1, i = braceStart + 1;
+            for (; i < lockBefore.length && depth > 0; i++) {
+              if (lockBefore[i] === "{") depth++;
+              else if (lockBefore[i] === "}") depth--;
+            }
+            if (depth !== 0) throw new Error("malformed cli workspace in bun.lock");
+            const cliBlock = lockBefore.slice(cliStart, i);
+            const versionRegex = /("version":\s*")[^"]+(")/;
+            if (!versionRegex.test(cliBlock)) throw new Error("no version field in cli workspace in bun.lock");
+            const updatedCliBlock = cliBlock.replace(versionRegex, (_, key, quote) => key + nextVersion + quote);
+            const lockAfter = lockBefore.slice(0, cliStart) + updatedCliBlock + lockBefore.slice(i);
+            fs.writeFileSync("bun.lock", lockAfter);
+          ' "$VERSION"
+
+      - run: bun install --frozen-lockfile --ignore-scripts
+        working-directory: cli
+
+      - run: npm run build
+
+      - name: Download exact release candidate
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: release-dist-${{ needs.build.outputs.version }}
+          path: release-dist-${{ needs.build.outputs.version }}
+
+      - name: Capture source commit for release notes
+        id: source
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Pack once so both registries receive byte-for-byte identical package contents.
+      - name: Pack npm package
+        id: package
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$PKG_VERSION" != "$VERSION" ]; then
+            echo "::error::Expected package version $VERSION, got $PKG_VERSION"
+            exit 1
+          fi
+          PACK_DIR="$RUNNER_TEMP/flisk-cli-package"
+          mkdir -p "$PACK_DIR"
+          npm pack --pack-destination "$PACK_DIR"
+          TARBALL=$(find "$PACK_DIR" -maxdepth 1 -name '*.tgz' -print -quit)
+          if [ -z "$TARBALL" ]; then
+            echo "::error::npm pack did not produce a tarball"
+            exit 1
+          fi
+          # Extract, add source commit marker, re-pack
+          UNPACK_DIR="$PACK_DIR/unpack"
+          mkdir -p "$UNPACK_DIR"
+          tar -xzf "$TARBALL" -C "$UNPACK_DIR"
+          echo "$SOURCE_COMMIT" > "$UNPACK_DIR/package/.sourceSHA"
+          rm "$TARBALL"
+          tar -czf "$TARBALL" -C "$UNPACK_DIR" package
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: flisk-cli-package-${{ needs.build.outputs.version }}
+          path: ${{ steps.package.outputs.tarball }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish verified binary release
+        run: scripts/release-binaries.sh --publish-only
+        env:
+          GH_TOKEN: ${{ secrets.BINARY_RELEASE_TOKEN }}
+          SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
+
+      # Tell each fixed issue which release carries it. Best effort: a failure here must
+      # never fail the release, so it is allowed to error.
+      - name: Credit fixed issues with this release
+        continue-on-error: true
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+          SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
+        with:
+          retries: 3 # transient GitHub 5xx (scripts/scores/github-script-retries.mjs)
+          script: |
+            const { owner, repo } = context.repo;
+            const version = process.env.VERSION;
+            const head = process.env.SOURCE_COMMIT;
+            const releases = (await github.rest.repos.listReleases({ owner, repo: 'releases', per_page: 5 })).data;
+            const current = releases.find((r) => r.tag_name === `v${version}`);
+            const previous = releases.find((r) => r.tag_name !== `v${version}`);
+            if (!current || !previous) return;
+            const since = previous.published_at.slice(0, 19) + 'Z';
+            const prs = (await github.rest.search.issuesAndPullRequests({
+              q: `repo:${owner}/${repo} is:pr is:merged merged:>=${since}`, sort: 'updated', order: 'desc', per_page: 50,
+            })).data.items;
+            for (const item of prs) {
+              const pr = (await github.rest.pulls.get({ owner, repo, pull_number: item.number })).data;
+              // Only credit PRs whose merge commit is part of this release's source commit.
+              const cmp = await github.rest.repos.compareCommitsWithBasehead({ owner, repo, basehead: `${pr.merge_commit_sha}...${head}` });
+              if (!['ahead', 'identical'].includes(cmp.data.status)) continue;
+              const res = await github.graphql(
+                `query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){
+                   closingIssuesReferences(first:20){nodes{number}}}}}`, { o: owner, r: repo, n: pr.number });
+              for (const { number } of res.repository.pullRequest.closingIssuesReferences.nodes) {
+                const mark = `<!-- flisk:shipped:${number} -->`;
+                const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number: number, per_page: 100 });
+                if (comments.some((c) => c.body && c.body.includes(mark))) continue;
+                await github.rest.issues.createComment({ owner, repo, issue_number: number,
+                  body: `${mark}\nShipped in [v${version}](${current.html_url}) (from #${pr.number}). Update with \`flisk upgrade\`, then tell us if it works for you. 🚀` });
+              }
+            }
+
+      # The root package owns the public flisk bin entry and compiled CLI.
+      # Authentication: npm trusted publishing (OIDC) is the default, so no long-lived token
+      # lives in the repository. NPM_TOKEN stays supported as a fallback for a fork that has no
+      # trusted publisher configured.
+      - name: Publish to npm
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ needs.build.outputs.version }}
+          TARBALL: ${{ steps.package.outputs.tarball }}
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$PKG_VERSION" != "$VERSION" ]; then
+            echo "::error::Expected package version $VERSION, got $PKG_VERSION"
+            exit 1
+          fi
+          if [ -n "$NPM_TOKEN" ]; then
+            echo "Publishing with the NPM_TOKEN secret."
+            export NODE_AUTH_TOKEN="$NPM_TOKEN"
+          else
+            echo "No NPM_TOKEN secret: publishing with npm trusted publishing (OIDC)."
+          fi
+          if npm view "@flisk-sh/flisk@${PKG_VERSION}" version >/dev/null 2>&1; then
+            echo "@flisk-sh/flisk@${PKG_VERSION} is already published, skipping."
+          else
+            npm publish "$TARBALL" --access public --provenance
+          fi
+
+      - name: Verify npm package source commit
+        env:
+          NPM_PACKAGE: "@flisk-sh/flisk"
+          NPM_VERSION: ${{ needs.build.outputs.version }}
+          EXPECTED_COMMIT: ${{ steps.verify-commit.outputs.publish-commit }}
+        run: node scripts/verify-npm-source.mjs --package "$NPM_PACKAGE" --version "$NPM_VERSION" --commit "$EXPECTED_COMMIT"
+
+      # OpenSSF Scorecard's Signed-Releases check looks at the GitHub releases of THIS repository, while the binaries live in
+      # flisk-sh/releases. So this repository gets a release per version that carries the binaries' checksums and a keyless
+      # Sigstore signature of them (the signature is also attached to the binary release in flisk-sh/releases). It runs last and is allowed to fail: npm, the binary release and the version bump are already
+      # done, and nothing here may ever block them.
+      - name: Install cosign
+        continue-on-error: true
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+
+      - name: Sign the checksums and attach them to a release in this repository
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TOKEN: ${{ secrets.BINARY_RELEASE_TOKEN }}
+          VERSION: ${{ needs.build.outputs.version }}
+          SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
+        run: |
+          set -euo pipefail
+          cp "release-dist-${VERSION}/checksums.txt" checksums.txt
+          cosign sign-blob --yes --bundle checksums.txt.sigstore.json checksums.txt
+          # Next to the binaries users download, so they can verify them.
+          GH_TOKEN="$RELEASE_TOKEN" gh release upload "v${VERSION}" --repo flisk-sh/releases --clobber \
+            checksums.txt.sigstore.json || echo "::warning::Could not attach the signature to the flisk-sh/releases release"
+          # And to a release in this repository, which is where Scorecard looks. The body keeps the cosign
+          # verify line first, then the merged pull requests since the previous tag grouped by
+          # conventional-commit type; the script prints at least the checksum paragraph (#3091).
+          node scripts/release-notes.mjs > release-notes.md
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            gh release upload "v${VERSION}" --clobber checksums.txt checksums.txt.sigstore.json
+          else
+            gh release create "v${VERSION}" --draft --latest=false --title "v${VERSION}" \
+              --notes-file release-notes.md \
+              checksums.txt checksums.txt.sigstore.json
+          fi
+
+      # SLSA build provenance for the checksums (a GitHub attestation tied to this workflow run), attached to the release as
+      # checksums.txt.intoto.jsonl. Scorecard's Signed-Releases check needs provenance on the last five releases, so the score
+      # moves gradually: 1.3.205 and 1.3.207 shipped without it and age out of the window after five more releases. Like the signature, it can never block a release.
+      - name: Attest build provenance for the checksums
+        continue-on-error: true
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: checksums.txt
+
+      - name: Attach the provenance to the release in this repository
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TOKEN: ${{ secrets.BINARY_RELEASE_TOKEN }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh attestation download checksums.txt --repo "$GITHUB_REPOSITORY"
+          mv sha256:*.jsonl checksums.txt.intoto.jsonl
+          gh release upload "v${VERSION}" --repo "$GITHUB_REPOSITORY" --clobber checksums.txt.intoto.jsonl
+          # flisk-sh/releases is a repository of its own that Scorecard can score, so the provenance goes next to the binaries too.
+          GH_TOKEN="$RELEASE_TOKEN" gh release upload "v${VERSION}" --repo flisk-sh/releases --clobber \
+            checksums.txt.intoto.jsonl || echo "::warning::Could not attach the provenance to the flisk-sh/releases release"
+
+      # Keep main in step with what was published. A push made with
+      # github.token doesn't trigger workflows, so this can't loop. This runs
+      # last on purpose (2026-10-23, v1.3.207): when the bump push was
+      # rejected, every earlier step had already published, but the signing
+      # steps below it were skipped and the release stayed a draft without
+      # its signature. Bookkeeping can fail without taking the signed
+      # release with it; npm, the binary release and the checksums on this
+      # repository are already out by the time this step starts.
+      - name: Commit the version bump
+        if: needs.build.outputs.bumped == 'true'
+        env:
+          # A PR opened with github.token never starts pull_request workflows, so the required checks would
+          # never report. RELEASE_PAT (a fine-grained PAT or GitHub App token) fixes that.
+          GH_TOKEN: ${{ secrets.RELEASE_PAT || github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          # shellcheck disable=SC2016
+          # The node program is single-quoted on purpose: its backticks and ${} are JavaScript.
+          node -e '
+            const fs = require("fs");
+            const [version, date] = process.argv.slice(1);
+            // The heading must never interpolate an empty or swapped argument (1.4.67 shipped
+            // "## 2026-11-16 (undefined)" when a hand-run bump lost the version argument).
+            if (!/^\d+\.\d+\.\d+$/.test(version ?? "") || !/^\d{4}-\d{2}-\d{2}$/.test(date ?? "")) {
+              throw new Error(`changelog heading needs "<x.y.z>" "<yyyy-mm-dd>", got ${JSON.stringify(process.argv.slice(1))}`);
+            }
+            if (!fs.existsSync("docs/CHANGELOG.md")) process.exit(0);
+            const lines = fs.readFileSync("docs/CHANGELOG.md", "utf8").split("\n");
+            const start = lines.indexOf("## Unreleased");
+            if (start === -1) process.exit(0);
+            let end = lines.findIndex((line, index) => index > start && line.startsWith("## "));
+            if (end === -1) end = lines.length;
+            if (!lines.slice(start + 1, end).some((line) => line.trim())) process.exit(0);
+            lines.splice(start + 1, 0, "", "## " + version + " (" + date + ")");
+            fs.writeFileSync("docs/CHANGELOG.md", lines.join("\n"));
+          ' "$VERSION" "$(date -u +%F)"
+          git add package.json cli/package.json bun.lock
+          if [ -f docs/CHANGELOG.md ]; then git add docs/CHANGELOG.md; fi
+          git commit -m "Release ${VERSION} (automatic version bump)"
+          # main requires checks that a direct push from github.token never reports, so the bump goes
+          # through a pull request that runs them. The commit only changes version fields and the
+          # changelog, so the published artifacts and their checksums are unaffected. The
+          # "release branch protections" ruleset has do_not_enforce_on_create on, so the fresh
+          # release/bump-* branch can be pushed; its required checks gate the merge, not the push.
+          branch="release/bump-${VERSION}"
+          # The checkout keeps no credentials, so push with the token explicitly.
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force "$remote" "HEAD:refs/heads/${branch}"
+          if ! gh pr view "$branch" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$branch" \
+              --title "Release ${VERSION} (automatic version bump)" \
+              --body "$(printf '%s\n\nPublished from commit: %s\n' \
+                "Version bump to ${VERSION}, opened by the release workflow after it published the release to npm and GitHub. Merges once the required checks pass." \
+                "$GITHUB_SHA")"
+          fi
+          gh pr merge "$branch" --repo "$GITHUB_REPOSITORY" --squash --auto --delete-branch || \
+            echo "::warning::Released ${VERSION}, but could not enable auto-merge for the version bump PR ${branch}."
+
+      # With no bump there is no bump PR, so tag-bumped-release never runs and the checksums release stays a draft
+      # with no tag (1.3.206 and 1.4.5 were finished by hand). package.json on this commit already carries the
+      # version, so tag it and publish the draft here. The signing steps are continue-on-error, so publish only a
+      # draft that carries the checksums and their signature; otherwise leave it a draft and fail the step, so the
+      # run shows red and the gap is closed with sign-release.yml (an unsigned public release is what 1.3.207 shipped).
+      - name: Tag the released commit and publish the GitHub release
+        if: needs.build.outputs.bumped == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT || github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          if tag_json=$(gh api "repos/${GITHUB_REPOSITORY}/git/refs/tags/v${VERSION}" 2>/dev/null); then
+            object_type=$(jq -r '.object.type' <<<"$tag_json")
+            object_sha=$(jq -r '.object.sha' <<<"$tag_json")
+            if [ "$object_type" = "tag" ]; then
+              # Annotated tag: the ref points at the tag object, so peel it to the commit it annotates.
+              existing_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${object_sha}" --jq '.object.sha' 2>/dev/null || echo "$object_sha")
+            else
+              existing_sha=$object_sha
+            fi
+            if [ "$existing_sha" != "$GITHUB_SHA" ]; then
+              echo "::warning::Tag v${VERSION} already exists at ${existing_sha}, but this run published ${GITHUB_SHA}. Leaving the tag alone."
+            else
+              echo "Tag v${VERSION} already exists at ${existing_sha}, leaving it alone."
+            fi
+          else
+            gh api "repos/${GITHUB_REPOSITORY}/git/refs" -f ref="refs/tags/v${VERSION}" -f sha="$GITHUB_SHA" >/dev/null
+          fi
+          if ! assets=$(gh release view "v${VERSION}" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null); then
+            echo "::error::No v${VERSION} release on ${GITHUB_REPOSITORY}: the signing step did not create it. Create an empty draft, run sign-release.yml, then publish it (docs/releasing.md#repair-a-half-finished-release)."
+            exit 1
+          fi
+          for required in checksums.txt checksums.txt.sigstore.json; do
+            if ! grep -qx "$required" <<<"$assets"; then
+              echo "::error::v${VERSION} on ${GITHUB_REPOSITORY} has no ${required}; left as a draft. Run sign-release.yml -f version=${VERSION}, then publish it."
+              exit 1
+            fi
+          done
+          # Mark this release Latest only when it is at least as new as the current Latest, so publishing or repairing an
+          # older release never rolls the repository's Latest badge back. Before this, every release passed --latest=false
+          # and the badge stayed on v1.4.0 while npm was on 1.4.33.
+          current=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name' 2>/dev/null || echo v0.0.0)
+          if [ "$(printf '%s\n%s\n' "${current#v}" "$VERSION" | sort -V | tail -n1)" = "$VERSION" ]; then latest=true; else latest=false; fi
+          gh release edit "v${VERSION}" --repo "$GITHUB_REPOSITORY" --tag "v${VERSION}" --draft=false --latest="$latest"
+
+  # The npm package exactly as users get it, in a job that never saw the build: wait for the registry,
+  # `npm i -g` the published version, run `flisk --version`, and check `cli/dist-bundle` records the released
+  # commit (#3090). A tarball that misses the build (1.4.30 shipped three commits short, #3054) turns this
+  # job red minutes after publish and the last step opens an issue, instead of being found by users a day later.
+  post-publish-smoke:
+    needs: [build, publish]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-26.04
+    # wait-for-npm-version.sh polls up to 15 minutes for the registry; the install and checks take about a minute.
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      issues: write # the last step files an issue when the published package fails
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 24.22.3
+          package-manager-cache: false
+
+      # Waits until the registry serves the version, then `npm i -g` it with one retry and prints flisk --version.
+      - uses: ./.github/actions/install-flisk # zizmor: ignore[self-repository] composite action resolves from this commit
+        with:
+          version: ${{ needs.build.outputs.version }}
+
+      - name: Check the installed CLI reports this version and was built from this commit
+        env:
+          NPM_VERSION: ${{ needs.build.outputs.version }}
+          EXPECTED_COMMIT: ${{ github.sha }}
+        run: node scripts/post-publish-smoke.mjs
+
+      - name: File an issue for the failed post-publish smoke
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NPM_VERSION: ${{ needs.build.outputs.version }}
+          EXPECTED_COMMIT: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node scripts/report-post-publish-failure.mjs --run-url "$RUN_URL"
+
+  publish-github-packages:
+    name: Publish npm package to GitHub Packages
+    needs: [build, publish]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: flisk-cli-package-${{ needs.build.outputs.version }}
+          path: package
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 24.22.3
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@flisk-sh"
+          package-manager-cache: false
+
+      # This job holds only package write access and never checks out or executes repository code.
+      # If it fails, rerunning this job downloads the same tarball retained from the successful publish job.
+      - name: Publish to GitHub Packages
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+          PACKAGE_DIR: package
+        run: | # zizmor: ignore[use-trusted-publishing] GitHub Packages does not support npm trusted publishing; authenticate with the repository GITHUB_TOKEN
+          TARBALL=$(find "$PACKAGE_DIR" -maxdepth 1 -name '*.tgz' -print -quit)
+          if [ -z "$TARBALL" ] || [ ! -f "$TARBALL" ]; then
+            echo "::error::Expected package tarball was not downloaded"
+            exit 1
+          fi
+          # npm reads a relative "dir/file.tgz" as a GitHub shorthand and tries to clone it, so the
+          # tarball path has to be absolute.
+          TARBALL="$PWD/$TARBALL"
+          if npm view "@flisk-sh/flisk@${VERSION}" version --registry=https://npm.pkg.github.com >/dev/null 2>&1; then
+            echo "@flisk-sh/flisk@${VERSION} is already published to GitHub Packages, skipping."
+          else
+            npm publish "$TARBALL" --registry=https://npm.pkg.github.com
+          fi
+
+  # The MCP Registry listing runs as a reusable workflow called from here, so it always fires even when this run
+  # was started by GITHUB_TOKEN (which blocks workflow_run triggers). publish-mcp-registry.yml keeps its
+  # workflow_run trigger for re-runs and repairs, and its workflow_dispatch trigger for manual use (#3938, #3980).
+  publish-mcp-registry:
+    name: MCP Registry listing
+    needs: [build, publish]
+    if: github.event_name != 'pull_request'
+    permissions:
+      actions: read
+      contents: read
+      id-token: write  # forwarded to the callee for cosign OIDC / registry publisher login
+    uses: ./.github/workflows/publish-mcp-registry.yml # zizmor: ignore[self-repository] reusable workflow resolves from this commit
+    with:
+      version: ${{ needs.build.outputs.version }}
+
+  # The CLI image (ghcr.io/flisk-sh/flisk and docker.io/alexdykyi/flisk, <version> and latest), built from the binary release that
+  # publish just made, signed and smoke-tested by publish-cli-image.yml. It runs after npm and the binaries are out, in a job of
+  # its own, so it can never block them; a failed image is repaired with publish-cli-image.yml -f version=<version>.
+  publish-image:
+    needs: [build, publish]
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    uses: ./.github/workflows/publish-cli-image.yml # zizmor: ignore[self-repository] reusable workflow resolves from this commit
+    with:
+      version: ${{ needs.build.outputs.version }}
+    secrets:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  # The version bump lands on main as a squash commit after publish, so the tag for this release can only point at it
+  # once that commit exists. The sign step above leaves the GitHub release as a draft; this job tags the merged bump
+  # commit and publishes the draft, so the tag and the package.json on it always carry the same version.
+  tag-bumped-release:
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '(automatic version bump)')
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.RELEASE_PAT || github.token }}
+    steps:
+      - name: Check out the merged version bump
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      # The bump merges as a squash commit on whatever main holds by then, so it can carry changes that were never in
+      # the npm package (1.4.30 shipped without #3024, #3025 and #3028 while its tag included them, #3054). The bump
+      # PR body names the published commit; tag that content plus the version files, not the bump commit, whenever
+      # the two differ. With no recorded commit (a bump opened by hand) the bump commit is tagged as before.
+      - name: Tag the published content and publish the GitHub release
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          # The checkout keeps no credentials, so push with the token explicitly (same as the version bump step).
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          body=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" --jq '.[0].body // ""' 2>/dev/null || true)
+          published=$(sed -n 's/^Published from commit: \([0-9a-f]\{40\}\)[[:space:]]*$/\1/p' <<<"$body" | head -1)
+          target=$GITHUB_SHA
+          if [ -n "$published" ]; then
+            git fetch --no-tags --depth=1 "$remote" "$published"
+            result=$(node scripts/release-tag-target.mjs --published "$published" --bump "$GITHUB_SHA")
+            target=$(jq -r '.target' <<<"$result")
+            if [ "$(jq -r '.drift' <<<"$result")" = "true" ]; then
+              extra=$(jq -r '.extra | length' <<<"$result")
+              echo "::warning::The bump commit ${GITHUB_SHA} has ${extra} files that were not in the published package. v${VERSION} is tagged on ${target} (published commit ${published} plus the version files)."
+              {
+                echo "### v${VERSION} tag target"
+                echo "Published commit: \`${published}\`. Bump commit: \`${GITHUB_SHA}\`. Tag target: \`${target}\`."
+                echo "Files in the bump commit that are not in the tag:"
+                jq -r '.extra[]' <<<"$result" | sed 's/^/- /'
+              } >>"$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            echo "::warning::The bump PR for ${GITHUB_SHA} does not name the published commit, so v${VERSION} is tagged on the bump commit and may include changes that are not in the npm package."
+          fi
+          # An existing tag that points somewhere else stays alone and warns, instead of silently diverging.
+          if tag_json=$(gh api "repos/${GITHUB_REPOSITORY}/git/refs/tags/v${VERSION}" 2>/dev/null); then
+            object_type=$(jq -r '.object.type' <<<"$tag_json")
+            object_sha=$(jq -r '.object.sha' <<<"$tag_json")
+            if [ "$object_type" = "tag" ]; then
+              # Annotated tag: the ref points at the tag object, so peel it to the commit it annotates.
+              existing_sha=$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${object_sha}" --jq '.object.sha' 2>/dev/null || echo "$object_sha")
+            else
+              existing_sha=$object_sha
+            fi
+            if [ "$existing_sha" != "$target" ]; then
+              echo "::warning::Tag v${VERSION} already exists at ${existing_sha}, but this run would tag ${target}. Leaving the tag alone."
+            else
+              echo "Tag v${VERSION} already exists at ${existing_sha}, leaving it alone."
+            fi
+          else
+            git tag "v${VERSION}" "$target"
+            git push "$remote" "refs/tags/v${VERSION}"
+          fi
+          # Mark this release Latest only when it is at least as new as the current Latest, so publishing or repairing an
+          # older release never rolls the repository's Latest badge back. Before this, every release passed --latest=false
+          # and the badge stayed on v1.4.0 while npm was on 1.4.33.
+          current=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name' 2>/dev/null || echo v0.0.0)
+          if [ "$(printf '%s\n%s\n' "${current#v}" "$VERSION" | sort -V | tail -n1)" = "$VERSION" ]; then latest=true; else latest=false; fi
+          if gh release view "v${VERSION}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "v${VERSION}" --repo "$GITHUB_REPOSITORY" --draft=false --latest="$latest"
+          else
+            gh release create "v${VERSION}" --repo "$GITHUB_REPOSITORY" --latest="$latest" --title "v${VERSION}" \
+              --notes "flisk ${VERSION}. Binaries: https://github.com/flisk-sh/releases/releases/tag/v${VERSION} (all releases: https://github.com/flisk-sh/releases)"
+          fi
+
+  # Post this version on Toolradar once its changelog entry is on main and its release is public. The script skips the post
+  # when this week's slot is used and turns every failure into a warning, so it cannot touch a release.
+  post-toolradar:
+    needs: tag-bumped-release
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 24.22.3
+          package-manager-cache: false
+
+      - name: Post the release on Toolradar
+        env:
+          TOOLRADAR_API_KEY: ${{ secrets.TOOLRADAR_API_KEY }}
+        run: node scripts/post-toolradar-update.mjs
+
+      - name: Post the release in the Discord releases channel
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DISCORD_RELEASES_CHANNEL_ID: "1569404328081358938"
+        run: node scripts/post-discord-release.mjs

@@ -1,0 +1,420 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import { randomBytes } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { writeTextFileAtomic } from "./atomic-write.js";
+import {
+  checkoutDatabaseSuffix,
+  checkoutScopedDatabaseUrl,
+  databaseNameFromUrl,
+} from "./database-name.js";
+import { FliskError } from "./errors.js";
+
+export interface EnvVariable {
+  name: string;
+  description: string;
+  required: boolean;
+  default?: string;
+  example?: string;
+  /** Written by `completeEnvFile` when a project's .env lacks it (a generated value, or the default). */
+  complete?: boolean;
+}
+
+/**
+ * The keys that exist only for the shared PostgreSQL. A project that does not use it does not need them (#3200).
+ * DATABASE_URL is built from the generated DB_PASSWORD, so it goes with it. JWT_SECRET is not listed: every Compose entry
+ * requires it, so it is always kept.
+ */
+const SHARED_DATABASE_KEY_NAMES: readonly string[] = ["DB_PASSWORD", "DATABASE_URL"];
+
+/** Verdaccio is a paid, off-by-default service; its URLs must not appear in a free project's .env (#3711). */
+const VERDACCIO_KEY_NAMES: readonly string[] = ["VERDACCIO_URL_DOCKER", "VERDACCIO_URL"];
+
+export interface EnvKeyOptions {
+  /** False for a project that does not use the shared PostgreSQL: DB_PASSWORD and DATABASE_URL are then neither added nor required. */
+  databaseKeys?: boolean;
+  /** True only when the project asks for the paid Verdaccio service: its two URLs are otherwise not written or required. */
+  verdaccio?: boolean;
+  /** Checkout whose `DATABASE_URL` database name carries a suffix in a linked git worktree (#4698). */
+  projectRoot?: string;
+}
+
+function keysFor(options?: EnvKeyOptions): EnvVariable[] {
+  return REQUIRED_ENV_VARS.filter(
+    (variable) =>
+      (options?.databaseKeys !== false || !SHARED_DATABASE_KEY_NAMES.includes(variable.name)) &&
+      (options?.verdaccio === true || !VERDACCIO_KEY_NAMES.includes(variable.name)),
+  );
+}
+
+const REQUIRED_ENV_VARS: EnvVariable[] = [
+  {
+    name: "VERDACCIO_URL_DOCKER",
+    description: "Docker-internal URL of the private npm registry (Verdaccio, a paid feature)",
+    // Verdaccio is a premium, off-by-default service, so a free project must not need its URL.
+    required: false,
+    default: "http://verdaccio:4873",
+    example: "http://verdaccio:4873",
+  },
+  {
+    name: "VERDACCIO_URL",
+    description: "Local URL of the private npm registry (Verdaccio, a paid feature)",
+    required: false,
+    default: "http://localhost:4873",
+  },
+  {
+    name: "TILT_ENV",
+    description: "Tilt environment name",
+    required: true,
+    default: "dev",
+    example: "dev",
+    complete: true,
+  },
+  {
+    name: "DATABASE_URL",
+    description: "PostgreSQL connection string (uses the generated DB_PASSWORD below)",
+    required: false,
+    // Built from DB_PASSWORD in generateEnvFile(); there is no shared literal password.
+  },
+  {
+    name: "DB_PASSWORD",
+    description: "PostgreSQL superuser password (docker-compose POSTGRES_PASSWORD)",
+    required: true,
+    // No static default: a shared password across every generated project is a
+    // credential leak waiting to happen. generateEnvFile() fills this one in with
+    // a fresh random value per project instead.
+    example: "postgres",
+    complete: true,
+  },
+  {
+    name: "JWT_SECRET",
+    description:
+      "Secret that signs local-jwt tokens (generated once per project; never shared between projects)",
+    // Not required for `flisk doctor`: `flisk up` adds it to an older project's .env before starting anything.
+    required: false,
+    complete: true,
+  },
+];
+
+const generateDbPassword = (): string => randomBytes(16).toString("hex");
+const generateJwtSecret = (): string => randomBytes(32).toString("hex");
+
+/**
+ * The keys `completeEnvFile` keeps complete in the project `.env`. An env file that replaces the
+ * project `.env` for a run (`flisk up --env-file`) carries the same keys, so it is read from here
+ * instead of from a second list.
+ */
+export const COMPLETED_ENV_VARS: string[] = REQUIRED_ENV_VARS.filter((v) => v.complete).map(
+  (v) => v.name,
+);
+
+function generatedValue(name: string, password: string, projectRoot?: string): string {
+  if (name === "DB_PASSWORD") return password;
+  if (name === "JWT_SECRET") return generateJwtSecret();
+  if (name === "DATABASE_URL") {
+    const database = `app_dev${checkoutDatabaseSuffix(projectRoot)}`;
+    return `postgresql://postgres:${password}@postgres:5432/${database}`;
+  }
+  return REQUIRED_ENV_VARS.find((v) => v.name === name)?.default ?? "";
+}
+
+function parseEnvValue(raw: string): string {
+  const value = raw.trim();
+  const quote = value[0];
+
+  if (quote === '"' || quote === "'") {
+    let escaped = false;
+    for (let index = 1; index < value.length; index += 1) {
+      const char = value[index];
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === quote) {
+        const quoted = value.slice(1, index);
+        if (quote === '"') {
+          const escapes: Record<string, string> = {
+            n: "\n",
+            r: "\r",
+            t: "\t",
+            '"': '"',
+            "\\": "\\",
+            $: "$",
+          };
+          return quoted.replace(
+            /\\([nrt"\\$])/g,
+            (_match, escapedChar: string) => escapes[escapedChar] ?? escapedChar,
+          );
+        }
+        return quoted.replace(/\\'/g, "'");
+      }
+    }
+    return value;
+  }
+
+  const commentIndex = raw.search(/\s#/);
+  return (commentIndex === -1 ? raw : raw.slice(0, commentIndex)).trim();
+}
+
+/** Parses the Compose-compatible subset used by Flisk for project environment files. */
+export function parseEnv(content: string): Map<string, string> {
+  const result = new Map<string, string>();
+  const normalized = content.startsWith("\uFEFF") ? content.slice(1) : content;
+  for (const rawLine of normalized.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const assignment = line.startsWith("export ") ? line.slice("export ".length).trim() : line;
+    const equals = assignment.indexOf("=");
+    if (equals <= 0) continue;
+    const name = assignment.slice(0, equals).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) continue;
+    result.set(name, parseEnvValue(assignment.slice(equals + 1)));
+  }
+  return result;
+}
+
+function describe(envVar: EnvVariable): string[] {
+  const lines = [`# ${envVar.description}`];
+  if (envVar.required) lines.push("# Required (the value below is a working default)");
+  if (envVar.example) lines.push(`# Example: ${envVar.example}`);
+  return lines;
+}
+
+export function generateEnvFile(options?: EnvKeyOptions): string {
+  const password = generateDbPassword();
+  const lines: string[] = [
+    "# 🔧 Flisk Environment Configuration",
+    "# Generated by `flisk project`. The defaults work as-is; edit only to change them.",
+    options?.databaseKeys === false
+      ? "# Keep this file out of git: it holds a generated JWT secret."
+      : "# Keep this file out of git: it holds a generated database password and JWT secret.",
+    "#",
+    "# After editing, run: flisk config regenerate && flisk up",
+    "",
+  ];
+
+  for (const envVar of keysFor(options)) {
+    lines.push(...describe(envVar));
+    lines.push(`${envVar.name}=${generatedValue(envVar.name, password, options?.projectRoot)}`);
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
+/** The password a postgres-style URL carries, or undefined when there is none or it is a variable reference. */
+function urlPassword(url: string): string | undefined {
+  const match = url.match(/^[a-z][a-z0-9+.-]*:\/\/[^:/@\s]+:([^@\s]*)@/i);
+  if (!match || match[1].includes("$")) return undefined;
+  return match[1];
+}
+
+export function validateEnvFile(
+  projectRoot: string,
+  options?: EnvKeyOptions,
+): {
+  missing: string[];
+  invalid: string[];
+  warnings: string[];
+} {
+  const envPath = join(projectRoot, ".env");
+  const result = {
+    missing: [] as string[],
+    invalid: [] as string[],
+    warnings: [] as string[],
+  };
+
+  if (!existsSync(envPath)) {
+    return {
+      missing: keysFor(options)
+        .filter((v) => v.required)
+        .map((v) => v.name),
+      invalid: [],
+      warnings: [".env file not found - will be auto-generated"],
+    };
+  }
+
+  const env = parseEnv(readFileSync(envPath, "utf-8"));
+
+  for (const envVar of keysFor(options)) {
+    if (envVar.required && !env.has(envVar.name)) {
+      result.missing.push(envVar.name);
+    }
+
+    if (env.has(envVar.name) && !(env.get(envVar.name) ?? "").trim()) {
+      result.invalid.push(`${envVar.name} is set but empty`);
+    }
+  }
+
+  const databaseUrl = env.get("DATABASE_URL");
+  const dbPassword = env.get("DB_PASSWORD");
+  if (databaseUrl && dbPassword) {
+    const inUrl = urlPassword(databaseUrl);
+    if (inUrl !== undefined && inUrl !== dbPassword) {
+      result.warnings.push(
+        "DATABASE_URL carries a different password than DB_PASSWORD; the database container uses DB_PASSWORD",
+      );
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Replaces the value in one parsed assignment while preserving its prefix, inline comment, and line ending.
+ * The caller only uses this for assignments whose parsed value is empty or whitespace.
+ */
+function replaceEmptyEnvValue(line: string, name: string, value: string): string {
+  const parsed = parseEnv(line);
+  if (!parsed.has(name)) return line;
+
+  const equalsIndex = line.indexOf("=");
+  if (equalsIndex < 0) return line;
+  const rawValue = line.slice(equalsIndex + 1);
+  const commentIndex = rawValue.search(/\s#/);
+  const comment = commentIndex < 0 ? "" : rawValue.slice(commentIndex);
+  return line.slice(0, equalsIndex + 1) + value + comment;
+}
+
+/**
+ * Appends missing keys a newer CLI expects and fills empty generated keys in place.
+ * Non-empty values are not changed. Creates the file when it is missing.
+ *
+ * @returns the names that were added or filled in, empty when the file was already complete
+ */
+export function completeEnvFile(projectRoot: string, options?: EnvKeyOptions): string[] {
+  const envPath = join(projectRoot, ".env");
+
+  if (!existsSync(envPath)) {
+    writeFileSync(envPath, generateEnvFile({ ...options, projectRoot }), { mode: 0o600 });
+    return keysFor(options).map((v) => v.name);
+  }
+
+  const existing = readFileSync(envPath, "utf-8");
+  const env = parseEnv(existing);
+  const toComplete = keysFor(options).filter((v) => {
+    if (!v.complete) return false;
+    if (!env.has(v.name)) return true;
+    return !(env.get(v.name) ?? "").trim();
+  });
+  if (toComplete.length === 0) return [];
+
+  const toAdd = toComplete.filter((v) => !env.has(v.name));
+  const toRepair = toComplete.filter((v) => env.has(v.name));
+
+  // Anything generated from the password must use the project's existing non-empty value.
+  const existingPassword = env.get("DB_PASSWORD");
+  const password = existingPassword?.trim() ? existingPassword : generateDbPassword();
+  const lines = existing.split(/(\r\n|\n|\r)/);
+
+  for (const envVar of toRepair) {
+    let lineIndex = -1;
+    for (let index = 0; index < lines.length; index += 2) {
+      if (parseEnv(lines[index]).has(envVar.name)) lineIndex = index;
+    }
+    if (lineIndex < 0) {
+      throw new FliskError(`Could not locate empty .env assignment for ${envVar.name}`, [
+        `Set ${envVar.name}=<value> in .env by hand`,
+      ]);
+    }
+    lines[lineIndex] = replaceEmptyEnvValue(
+      lines[lineIndex],
+      envVar.name,
+      generatedValue(envVar.name, password, projectRoot),
+    );
+  }
+
+  let updated = lines.join("");
+  if (toAdd.length > 0) {
+    const addedLines = [
+      "",
+      "# Added by Flisk: keys this version expects. Existing values above were not changed.",
+      "",
+    ];
+    for (const envVar of toAdd) {
+      addedLines.push(...describe(envVar));
+      addedLines.push(`${envVar.name}=${generatedValue(envVar.name, password, projectRoot)}`);
+      addedLines.push("");
+    }
+
+    const separator = updated.endsWith("\n") || updated.endsWith("\r") ? "" : "\n";
+    updated += separator + addedLines.join("\n");
+  }
+
+  writeTextFileAtomic(envPath, updated);
+  return toComplete.map((v) => v.name);
+}
+
+/**
+ * A linked worktree often starts from a copy of the main checkout's `.env`. Flisk-generated `DATABASE_URL` values must
+ * follow the worktree's database even though `completeEnvFile` never overwrites an existing value (#4698). A URL to
+ * another host or another database is the project author's choice and is left alone.
+ *
+ * @returns true when the file was changed
+ */
+export function scopeCheckoutEnvFile(projectRoot: string): boolean {
+  const suffix = checkoutDatabaseSuffix(projectRoot);
+  if (!suffix) return false;
+  const envPath = join(projectRoot, ".env");
+  if (!existsSync(envPath)) return false;
+
+  const existing = readFileSync(envPath, "utf-8");
+  const url = parseEnv(existing).get("DATABASE_URL");
+  const generatedUrl =
+    url && /^postgres(?:ql)?:\/\/[^@/]+@postgres:5432\/app_dev(?:[?#]|$)/.test(url);
+  if (!url || !generatedUrl || databaseNameFromUrl(url).endsWith(suffix)) return false;
+
+  const lines = existing.split(/(\r\n|\n|\r)/);
+  for (let index = 0; index < lines.length; index += 2) {
+    if (parseEnv(lines[index]).has("DATABASE_URL")) {
+      lines[index] = replaceEmptyEnvValue(
+        lines[index],
+        "DATABASE_URL",
+        checkoutScopedDatabaseUrl(url, projectRoot),
+      );
+      writeTextFileAtomic(envPath, lines.join(""));
+      return true;
+    }
+  }
+  return false;
+}
+
+export function ensureEnvFile(projectRoot: string, options?: EnvKeyOptions): boolean {
+  const envPath = join(projectRoot, ".env");
+
+  if (!existsSync(envPath)) {
+    writeFileSync(envPath, generateEnvFile({ ...options, projectRoot }), { mode: 0o600 });
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Rewrites a freshly generated project `.env` with the keys the finished project needs. `flisk project --yes` creates the
+ * file before `flisk create` adds the resources, so at that point a local-processes project still looks like an empty one
+ * (#3711). `flisk create` calls this once the resources exist. Values already in the file are kept for keys that remain,
+ * so a generated secret is not rotated; keys the project does not need are left out.
+ */
+export function regenerateEnvFile(projectRoot: string, options?: EnvKeyOptions): string[] {
+  const envPath = join(projectRoot, ".env");
+  const existing = existsSync(envPath) ? parseEnv(readFileSync(envPath, "utf-8")) : new Map();
+  const names = keysFor(options).map((variable) => variable.name);
+  const content = generateEnvFile(options)
+    .split("\n")
+    .map((line) => {
+      const equals = line.indexOf("=");
+      if (equals <= 0) return line;
+      const name = line.slice(0, equals);
+      const value = existing.get(name);
+      return value?.trim() ? `${name}=${value}` : line;
+    })
+    .join("\n");
+  writeTextFileAtomic(envPath, content);
+  return names;
+}

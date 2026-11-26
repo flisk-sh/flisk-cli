@@ -1,0 +1,50 @@
+{
+  "$schema": "https://flisk.sh/schema.service.json",
+  "schemaVersion": 1,
+  "appName": "lychee-api",
+  "appType": "bring-your-own",
+  "stack": "lychee",
+  "port": 8000,
+  "healthCheckPath": "/up",
+  "healthCheck": {
+    "command": ["curl", "-f", "http://localhost:8000/up"],
+    "interval": 10,
+    "timeout": 5,
+    "retries": 5,
+    "startPeriod": 30
+  },
+  "image": "ghcr.io/lycheeorg/lychee:latest",
+  "dependsOn": [
+    {
+      "name": "lychee-db",
+      "condition": "service_healthy"
+    }
+  ],
+  "env": {
+    "PGID": "${PGID:-1000}",
+    "PUID": "${PUID:-1000}"
+  },
+  "restart": "unless-stopped",
+  "container": {
+    "capAdd": ["CHOWN", "SETGID", "SETUID", "DAC_OVERRIDE", "NET_BIND_SERVICE"],
+    "capDrop": ["ALL"],
+    "securityOpt": ["no-new-privileges:true", "seccomp:unconfined"],
+    "tmpfs": ["/tmp:noexec,nosuid,nodev,size=100m"],
+    "cpus": 2,
+    "memory": "2G",
+    "networkAliases": ["lychee_api"]
+  },
+  "envFile": ["../../../.env"],
+  "extraPorts": [
+    {
+      "port": 8000,
+      "publish": "${APP_PORT:-8000}"
+    }
+  ],
+  "volumes": [
+    {
+      "source": "../../../lychee/uploads",
+      "target": "/app/public/uploads"
+    }
+  ]
+}

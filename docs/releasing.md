@@ -1,0 +1,352 @@
+# Release operations
+
+The ops checklist for cutting a Flisk CLI release, repairing one that only half finished, and the settings behind the pipeline. Background — npm authentication, candidate lessons, the publish gate in detail — lives in the [operator runbook](operator-runbook.md#cutting-a-release); this page is what you run.
+
+## Table of contents
+
+1. [What a release publishes](#what-a-release-publishes)
+2. [The pipeline at a glance](#the-pipeline-at-a-glance)
+3. [Cutting a release](#cutting-a-release)
+4. [Where to look](#where-to-look) and [verify a release](#verify-a-release)
+5. [Repair a half-finished release](#repair-a-half-finished-release)
+6. [Backfill GitHub Packages](#backfill-github-packages)
+7. [Unscoped npm package (flisk)](#unscoped-npm-package-flisk)
+8. [Troubleshooting](#troubleshooting)
+9. [The merge queue](#the-merge-queue)
+10. [Settings and secrets](#settings-and-secrets)
+11. [Building binaries by hand](#building-binaries-by-hand)
+
+## What a release publishes
+
+| Channel | Name | Consumers | Produced by |
+| --- | --- | --- | --- |
+| Public npm | `@flisk-sh/flisk` | `npm i -g`, `flisk upgrade` | `publish` job (OIDC) |
+| Binary release | [`flisk-sh/releases`](https://github.com/flisk-sh/releases/releases) tag `v<version>` | `install.sh`, winget-style installers, checksums | `publish` job (`scripts/release-binaries.sh --publish-only`) |
+| GitHub Packages | `@flisk-sh/flisk` on `npm.pkg.github.com` | environments that require GitHub-hosted packages ([setup](github-packages.md)) | `publish-github-packages` job |
+| Checksums release | `flisk-sh/flisk` tag `v<version>` | OpenSSF Scorecard Signed-Releases; signature verification | `publish` job (cosign sign + attestation) |
+
+The version is picked by the workflow, not by a file: the highest of `package.json` and the latest npm version, plus one for every version already on npm or on `flisk-sh/releases`. `package.json` on `main` can lag; the workflow bumps it back through a PR.
+
+CI pins its Node versions so a runner image update cannot change a result, and pins them to patched releases, because a pin never takes a security fix by itself. Jobs use `22.23.5` (the Node 22 LTS line), except the two published-package jobs in `ci.yml`, which use `22.12.0`, the lowest version `engines.node` in `cli/package.json` allows. `release-candidate.yml`, `release-binaries.yml`, `publish-flisk-import.yml` and `publish-existing-npm-to-github-packages.yml` use `24.22.3`: the binaries are built and published on it (npm trusted publishing needs the npm 11 that Node 24 bundles), so the candidate tests on the same Node. When Node ships a security release (nodejs.org/en/blog/vulnerability), move the patched pins to the new patch versions: change every `node-version:` with that value under `.github/` and the matching `EXPECTED` entries in `scripts/scores/action-consistency.mjs`. Dependabot does not update `node-version` inputs, so `node-pins.yml` runs `scripts/check-node-pins.mjs` every Monday and fails when a pin is behind the newest release of its line (the `engines.node` floor is exempt).
+
+## The pipeline at a glance
+
+`release-binaries.yml` runs on a push to `main` that touches `package.json` or `cli/package.json`, or on `workflow_dispatch`.
+
+```text
+build ──► windows-binary ──► publish ──► publish-github-packages
+                                   ├─► post-publish-smoke
+                         │
+                    (on the bump-PR merge push to main)
+                    tag-bumped-release: tag vX.Y.Z + publish the checksums draft
+```
+
+`post-publish-smoke` installs `@flisk-sh/flisk@<version>` globally (`npm i -g`), runs `flisk --version`, and checks `cli/dist-bundle` carries the released commit's build marker. When it fails, the run is red and the job files one issue per version (#3090).
+
+The `publish` job, in order:
+
+1. `Require a passing release candidate` — the [publish gate](#cutting-a-release) (`scripts/check-release-candidate.mjs`).
+2. `Publish verified binary release` — binaries to `flisk-sh/releases`.
+3. `Publish to npm` — `@flisk-sh/flisk`, OIDC or `NPM_TOKEN`.
+4. `Sign the checksums` and `Attest build provenance` — the draft checksums release on `flisk-sh/flisk` and the signature on `flisk-sh/releases` (both `continue-on-error`).
+5. `Commit the version bump` — last on purpose: opens `release/bump-<version>` and its PR, and enables auto-merge. Bookkeeping failure never skips the signing steps again (regression seen in 1.3.207).
+6. `Tag the released commit and publish the GitHub release` — only when no bump was needed (`package.json` on `main` already carried the version). There is no bump PR then, so `tag-bumped-release` never runs; this step tags the released commit and publishes the draft instead (1.3.206 and 1.4.5 were finished by hand before it existed).
+
+## Cutting a release
+
+### The short way: one click
+
+Run [**RELEASE | Validation | One click**](https://github.com/flisk-sh/flisk/actions/workflows/release-one-click.yml) (Actions → Run workflow; optionally give a commit). It does steps 2 and 3 for you: it picks the newest `main` commit whose `E2E | Journeys` run passed, creates the next free `release/<version>-rc<n>` branch there, and starts the candidate with `release=true`, which starts the release once the candidate is green. It refuses to start while a release run is queued or in progress. What stays manual is [step 4](#4-merge-the-version-bump-pr): `main` requires an approval on the bump PR, and the workflow does not approve it. The sections below describe each step in detail.
+
+### 0. Preconditions
+
+- npm trusted publisher on `@flisk-sh/flisk` for this repo and `release-binaries.yml` (`npm trust list @flisk-sh/flisk`), or the `NPM_TOKEN` secret set.
+- `BINARY_RELEASE_TOKEN` (write to `flisk-sh/releases`) and optionally `RELEASE_PAT` (opens the bump PR as a user so its checks run).
+- `main` is protected by the **main merge queue** ruleset: the bump PR needs the required checks and approvals before auto-merge lands it. Check open PRs afterwards; approve it.
+
+Checklist before you press anything:
+
+- **Your access:** write access to `flisk-sh/flisk`. Without it the **Run workflow** button does not appear at all (the page looks like the signed-out screenshots below). Sign in first.
+- **A branch to run on:** the candidate and the release run on a `release/<version>-rc<n>` branch, never on `main` (see step 2). Create it first.
+- **Green `main`:** pick the newest `main` commit whose push CI is green, so the candidate does not fail on a bug `main` already fixed.
+- **Settings and secrets:** the two secrets and the npm trust above are normally already set; [Settings and secrets](#settings-and-secrets) says how to check.
+- **Time:** block about 40 minutes (see [why it takes this long](#why-a-release-takes-so-long)). Do not start one you cannot watch to the end: a half-finished release needs [repair](#repair-a-half-finished-release).
+
+### 1. Land the code
+
+Merge what you want to ship. If `cli/src` changed, `cli/dist` must be rebuilt in the same merge or the `📦 Pack CLI and published package smoke test` job fails on `main`:
+
+```bash
+npm --prefix cli run check:dist   # builds, then diffs cli/dist
+git add -f cli/dist && git commit -s -m "Rebuild cli/dist" && git push
+```
+
+`cli/dist` is committed so a source checkout runs without a build step; new files under it need `git add -f` (it is gitignored file-by-file). The npm package ships the CLI once, as `cli/dist-bundle/` (built by `prepack` from `cli/dist`), plus the two `cli/dist/` files of its `main` entry; `scripts/check-npm-package.mjs` rejects a tarball that carries more of `cli/dist/`.
+
+### 2. Release candidate
+
+The publish gate refuses a commit no passing candidate covers. `main` moves every few minutes, so run the candidate on an `rc-*` tag or a `release/*` branch at the commit you are releasing. Never dispatch it on `main`: the `package` job refuses `refs/heads/main` and the whole candidate fails.
+
+```bash
+# either: a release branch at the commit (no local clone needed)
+# a fresh branch per attempt: a retry after a fix on main needs a new name (release/<version>-rc2, ...)
+gh api repos/flisk-sh/flisk/git/refs -f ref=refs/heads/release/<version>-rc<n> -f sha=<commit>
+gh workflow run release-candidate.yml --ref release/<version>-rc<n>
+# or the same, and start the release once it passes (step 3 happens on its own; see below):
+gh workflow run release-candidate.yml --ref release/<version>-rc<n> -f release=true
+# or: an rc tag at the commit
+git tag rc-<version> <commit> && git push origin refs/tags/rc-<version>
+
+gh run watch <candidate-run-id> --exit-status   # ~5 min: 30 jobs, 15 at a time, the longest suites first
+```
+
+Cut the branch from the newest green `main`, not from an older release branch: a fix that landed after the branch was cut (for example #2498, which made `flisk up` print ingress URLs instead of the Tilt UI port) is not in the candidate, and a candidate failure that `main` already fixed costs a full cycle.
+
+**Pressing the button instead of using `gh`:** open [Actions → RELEASE | Validation | Candidate](https://github.com/flisk-sh/flisk/actions/workflows/release-candidate.yml), click **Run workflow** (a button above the runs list, on the right; it is missing when you are signed out or lack write access), choose your `release/<version>-rc<n>` branch under **Use workflow from**, tick **release** if the release should start by itself once the candidate is green, then click the green **Run workflow** button in the dropdown. Refresh the page: your run appears at the top within a few seconds. The same button on [Release | Binaries and npm package](https://github.com/flisk-sh/flisk/actions/workflows/release-binaries.yml) starts step 3.
+
+A passing candidate run is a green check on a `release/<version>-rc<n>` branch in the [RELEASE | Validation | Candidate runs](https://github.com/flisk-sh/flisk/actions/workflows/release-candidate.yml) list (1.4.33 needed four attempts; 1.4.34 and 1.4.35 passed first time):
+
+![Release | Candidate runs list: release/1.4.35-rc1 and release/1.4.34-rc1 green, release/1.4.33-rc1 to rc3 red](assets/releasing/1-candidate-runs.png)
+
+The candidate (`release-candidate.yml`) packs the CLI, then runs the quickstart journey and every release-blocking resource-type suite against that exact tarball. Retry a run whose failures are all the same infrastructure readiness check (Docker Compose on a slow runner); never bypass the gate.
+
+Check the gate for any commit before dispatching:
+
+```bash
+GH_TOKEN="$(gh auth token)" node scripts/check-release-candidate.mjs --sha <commit> --repo flisk-sh/flisk
+```
+
+It accepts an **exact** candidate, or an **ancestor** candidate when no commit since changed a release input. The release inputs are the one list in `.github/release-inputs.txt`, which the `changes` job of `release-binaries.yml` also filters on.
+
+#### What counts as a release input
+
+| Path in `.github/release-inputs.txt` | Why it can change the shipped release |
+| --- | --- |
+| `.github/workflows/release-binaries.yml` | Changes the release workflow itself, including what gets built and published |
+| `.github/release-inputs.txt` | Changes the filter definition; the file lists itself, so editing the rules needs a new candidate too |
+| `package.json` | Holds the version, workspace and `files` list that define the npm tarball |
+| `bun.lock` | Pins the dependency tree used to build and pack the binaries and tarball |
+| `cli/**` | CLI source, generated `dist`, starter templates and Docker templates; `cli/templates` and `cli/shared-platform-engineering/docker-templates` are in the npm `files` list, so a template-only PR such as #3050 really changes the package a user receives |
+| `scripts/release-binaries.sh` | Creates the tarball and release assets |
+| `scripts/release/**` | Release helpers such as tag-target selection and asset checks |
+| `tests/e2e/platforms/container-image/**` | The release-blocking container-image suites that validate the shipped image |
+| `.github/workflows/publish-cli-image.yml` | Publishes the CLI image built from the candidate |
+| `runtime/**` | Packaged engine and extension assets; most runtime paths are in the npm `files` list, excluding test and documentation folders |
+
+An ancestor candidate cannot cover a commit that changes any of these paths. That is why a starter-template-only change ([#3050](https://github.com/flisk-sh/flisk/pull/3050)) made the gate refuse `main`: the template is inside `cli/**` and is packaged into the tarball, even though no CLI runtime code moved. Cut a new candidate after such a change; see the [moving-`main` troubleshooting row](#troubleshooting).
+
+### 3. Dispatch the release
+
+A candidate started with `-f release=true` does this itself once every candidate job has passed (its `dispatch release` job
+runs after `gate`), so a failed candidate starts no release. `publish` still checks the candidate on the same commit
+(`check-release-candidate.mjs --wait 45`), which now waits only the few seconds until the candidate run is marked done.
+It used to start right after the plan, so `build` ran alongside the suites but `publish` then held a runner for minutes
+waiting for them (#3979). Otherwise,
+dispatch it on the candidate's own branch, so it publishes exactly the commit the candidate tested:
+
+```bash
+gh workflow run release-binaries.yml --ref release/<version>-rc<n>
+```
+
+The gate then sees the candidate's exact commit, whatever has merged into `main` meanwhile. Dispatching on `main` works only while `main` is still at the candidate's commit or no release input changed since (the gate above); with several people merging, `main` usually moves during the 30-45 minutes a candidate takes, and every such release input sends you back to step 2 (1.4.24: rc5, rc6 and rc7 passed and were each refused on `main`). The version bump PR still targets `main`. Watch the run. `build`, `windows-binary` and `publish` must be green. Publication happens inside `publish`: by the time it finishes, npm and `flisk-sh/releases` are live even if later steps failed.
+
+A good release run: `build`, `windows-binary`, `publish` and the two follow-up publish jobs are green; `tag-bumped-release` is skipped on a dispatch (it only runs on the bump PR merge):
+
+![Release | Binaries and npm package run for 1.4.34: changes, build, windows-binary, cli-image, publish and the GitHub Packages and image publishes green, tag-bumped-release skipped](assets/releasing/2-release-run.png)
+
+### 4. Merge the version-bump PR
+
+Only when the run bumped the version (`build` printed `<old> is already released; releasing this commit as <version>`). When `main` already carried the version there is no bump PR: the publish job tagged the commit and published the release itself (pipeline step 6), so skip to [verify](#verify-a-release).
+
+The publish job opens `Release <version> (automatic version bump)` from `release/bump-<version>`. `main` requires checks and approvals, so:
+
+```bash
+gh pr list --search "automatic version bump" --state open
+gh pr checks <number> --watch && gh pr review <number> --approve
+```
+
+Auto-merge takes it from there. The merge push triggers `tag-bumped-release`, which tags `v<version>` and publishes the checksums draft. The bump PR body names the published commit (`Published from commit: <sha>`). If the bump commit is that commit plus the version files, it is the tag target. If `main` moved after the publish, the squash commit also carries later merges that are not in the npm package, so the tag goes on a new commit made by `scripts/release-tag-target.mjs`: the published commit with the bump's version files (`package.json`, `cli/package.json`, `bun.lock`, `docs/CHANGELOG.md`). The run then shows a warning and lists the extra files in its summary. That tag is not on `main`'s history; its parent is the published commit (1.4.30 was tagged on the bump commit and shipped without #3024, #3025 and #3028, #3054). It only publishes a draft that already exists; it never creates the release.
+
+The bump PR for 1.4.34 (merged; `bun.lock` and `cli/package.json` only):
+
+![Release 1.4.34 (automatic version bump) pull request, merged](assets/releasing/3-bump-pr.png)
+
+## Why a release takes so long
+
+A release is a chain, and each link waits for the one before it. Real numbers from 1.4.34 (2026-11-04):
+
+| Stage | Time | Why |
+| --- | --- | --- |
+| Release candidate | 6-22 min | Packs the CLI, then boots real stacks for the quickstart and every release-blocking suite on clean runners, 15 at a time. 1.4.34 took 22 min, 1.4.35 only 6 min; the difference is runner queueing. |
+| Release run | ~10 min | `build`, then `windows-binary`, then `publish` (npm, signing, binaries), then GitHub Packages and the image. Each needs the previous one. `publish` also waits for the candidate (at most 45 min), so starting both together saves the binaries' ~2 min. |
+| Bump PR | a few min | `main` requires checks and an approval; auto-merge lands it only after both. |
+| Tag and publish draft | ~5 min | The merge triggers `tag-bumped-release`, which queues behind other runs of the same workflow. |
+
+That is why a release is about 40 minutes end to end and why a red candidate costs a full cycle: it is a gate, not a formality, and nothing publishes without it. Do not re-dispatch while a run is queued or in progress: the workflow picks the next free version, so a second dispatch after `publish` succeeded publishes the *next* version.
+
+## Where to look
+
+Two repositories carry a release per version, and both are linked from each other's notes:
+
+- [`flisk-sh/releases`](https://github.com/flisk-sh/releases/releases): the binaries, `checksums.txt`, signature and provenance. This is what `install.sh` downloads.
+- [`flisk-sh/flisk` releases](https://github.com/flisk-sh/flisk/releases): the signed checksums only, which is what Scorecard reads. Its notes link back to the binaries on `flisk-sh/releases`.
+- The MCP Registry listing: `publish-mcp-registry.yml` starts by itself when the release run completes (it waits up to 15 minutes for npm to serve the version), so it shows as its own run. If `curl "https://registry.modelcontextprotocol.io/v0/servers?search=flisk"` lacks the new version, look at that run, or list it by hand: `gh workflow run publish-mcp-registry.yml -f version=<version>`.
+
+## Verify a release
+
+```bash
+npm view "@flisk-sh/flisk" dist-tags                      # latest = version
+npm view "@flisk-sh/flisk@<version>" dist.tarball
+gh release view "v<version>" --repo flisk-sh/releases \
+  --json assets --jq '.assets[].name'                     # 5 binaries + engine + zip + checksums + sigstore
+gh release view "v<version>" --repo flisk-sh/flisk \
+  --json isDraft,assets --jq '{draft:.isDraft,assets:[.assets[].name]}'   # draft false, checksums.txt + checksums.txt.sigstore.json + checksums.txt.intoto.jsonl
+git ls-remote --tags origin "refs/tags/v<version>"        # tag exists
+git show "v<version>":package.json | grep '"version"'     # version field matches
+```
+
+Signature and provenance (the two checks OpenSSF Scorecard's Signed-Releases reads). Both files live on the `flisk-sh/flisk` release:
+
+```bash
+mkdir -p verify && gh release download "v<version>" --repo flisk-sh/flisk \
+  --pattern checksums.txt --pattern checksums.txt.sigstore.json --dir verify
+cosign verify-blob --bundle verify/checksums.txt.sigstore.json \
+  --certificate-identity-regexp 'https://github.com/flisk-sh/flisk/.github/workflows/(release-binaries|sign-release)\.yml@.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  verify/checksums.txt                                    # signature: Verified OK
+gh attestation verify verify/checksums.txt --repo flisk-sh/flisk   # provenance: only releases built by release-binaries.yml have it
+```
+
+A release without `checksums.txt.intoto.jsonl` has no provenance; that is expected for versions cut before provenance was added. A release without a signature is a gap to close with [sign-release.yml](#repair-a-half-finished-release), not something to fix by hand.
+
+One command runs all of the above except the cosign and attestation checks, and also checks GitHub Packages:
+
+```bash
+scripts/verify-release.sh <version>       # npm, binaries release, checksums release, assets, tag, GitHub Packages
+GITHUB_PACKAGES_TOKEN=<read:packages token> scripts/verify-release.sh <version>   # also reads npm.pkg.github.com
+```
+
+It exits non-zero when a channel is missing, so a maintainer or agent can run it as the last release step. See also the [maintainer checks for GitHub Packages](github-packages.md#maintainer-release-checks).
+
+What a finished release looks like on both repositories (screenshots are 1.4.34 as of 2026-11-04, signed out, so your view may differ slightly):
+
+[`flisk-sh/releases`](https://github.com/flisk-sh/releases/releases): not a draft, marked Latest, with the binaries, engine, zip, checksums and signature:
+
+![flisk-sh/releases v1.4.34 release page](assets/releasing/4-binaries-release.png)
+
+[`flisk-sh/flisk` releases](https://github.com/flisk-sh/flisk/releases): not a draft, with `checksums.txt`, `.sigstore.json` and `.intoto.jsonl`. A **Draft** badge here means step 4 has not finished; see [repair](#repair-a-half-finished-release):
+
+![flisk-sh/flisk v1.4.34 release page with signed checksums](assets/releasing/5-checksums-release.png)
+
+## Repair a half-finished release
+
+`publish` can fail after npm and the binaries are already out (a rejected bump push, a missing secret). The artifacts are live; only bookkeeping is missing. Do not re-dispatch the release — it would skip npm (already published) and pick the **next** version.
+
+| What is missing | Fix |
+| --- | --- |
+| No version-bump PR | Apply the bump on `main` yourself (both `package.json` files and the `cli` entry in `bun.lock`), commit as `Release <version> (automatic version bump)`, push. The message triggers `tag-bumped-release`, which tags and publishes the release. Put `Published from commit: <40-char sha>` (the run's commit) on its own line in the PR body so the tag lands on the published content. Check `git diff` shows the real version before you merge: on a machine where `node` is Bun, `node -e '...' <version>` reads an empty `process.argv[1]` and writes `"version": "undefined"` (1.4.66, #4320), which `tag-bumped-release` then turns into a `vundefined` tag and release. The same hand-run wrote `## 2026-11-16 (undefined)` into `docs/CHANGELOG.md` for 1.4.67: `docs/CHANGELOG.md` is a bump file too, so the Unreleased section needs its `## <version> (<date>)` heading, and `scripts/check-changelog.mjs` in `check:static` fails on any other shape. Edit the files with `sed` or an editor, not a one-line `node -e`. |
+| Draft checksums release never created (sign step did not run) | Create an empty draft first: `gh release create "v<version>" --repo flisk-sh/flisk --draft --latest=false --title "v<version>" --notes "Signed checksums for flisk <version>."`, then run `sign-release.yml` (next row), which uploads the checksums **and** their signature into it, **before** pushing the bump commit. `tag-bumped-release` finds the draft and publishes it. Never upload a bare `checksums.txt`: that is how 1.3.207 ended up unsigned. |
+| No `v<version>` tag | `tag-bumped-release` creates it on the bump push. To do it by hand: `git tag "v<version>" <bump-commit> && git push origin "refs/tags/v<version>"`. |
+| GitHub Packages missing the version | [Backfill](#backfill-github-packages). |
+| Signature (`checksums.txt.sigstore.json`) missing on a published version | Run **Actions → Sign an existing release**, or `gh workflow run sign-release.yml -f version=<version>`. It downloads the published binaries from `flisk-sh/releases`, checks them against `checksums.txt`, signs it keyless, and attaches the signature to the `flisk-sh/releases` release and the `flisk-sh/flisk` release. Do not re-run the `publish` job: it uses the workflow file of the original run. Provenance cannot be added afterwards; it has to come from the run that built the binaries, so that version stays without `checksums.txt.intoto.jsonl`. |
+
+Case studies: 1.4.5 (four dispatches failed the publish gate because the candidate on `release/1.4.5` failed quickstart Q4, a test fault already fixed on `main` by #2498; a candidate on a fresh `release/1.4.6` branch from `main` passed and the release published; `main` already said 1.4.5, so no bump ran and the tag and the draft were finished by hand — the publish job now does that itself; `publish-unscoped-npm` lost its downloaded archive to a later checkout, fixed by checking out first), 1.3.187 (bump push rejected, signing skipped), 1.3.206 (version already in `package.json`, so no bump PR ran — tag and draft published by hand), 1.3.207 (bump push rejected by the `release/*` ruleset at branch creation — ruleset relaxed, bump and tag done by hand; the signing steps had run after the bump step and were skipped, and the hand-made release carried an unsigned `checksums.txt`, which OpenSSF Scorecard flagged. The bump step now runs last, and `sign-release.yml` signs a version after the fact. 1.3.205 on `flisk-sh/releases` was also unsigned).
+
+Both repositories are scored: `flisk-sh/flisk` (checksums, signature, provenance) and `flisk-sh/releases` (the binaries, which have no workflows of their own). Every signing or provenance step has to attach its file to both.
+
+### Why provenance is missing on 1.3.205 and 1.3.207
+
+OpenSSF Scorecard's Signed-Releases check reads the last five releases of `flisk-sh/flisk` and wants a signature **and** provenance on each. A GitHub attestation is bound to the workflow run that created it, so it cannot be added after the fact. 1.3.205 and 1.3.207 were finished by hand (bump and tag) after the signing steps were skipped, so they have a signature (added later with `sign-release.yml`) but no `checksums.txt.intoto.jsonl`. The fix is forward only: every release cut by `release-binaries.yml` since the bump step moved last carries both files, and the two gaps leave the five-release window after five more releases. Do not hand-craft a provenance file to close them.
+
+## Backfill GitHub Packages
+
+To publish an already-released npm version to GitHub Packages without cutting another release:
+
+**Actions → Publish existing npm version to GitHub Packages** → enter the version, or:
+
+```bash
+gh workflow run publish-existing-npm-to-github-packages.yml -f version=<version>
+```
+
+It downloads the exact public npm tarball, publishes it to `npm.pkg.github.com`, then fetches the tarball back from GitHub Packages, checks its sha512 against the npm tarball, and installs that file in a clean prefix to verify. If the package is the first publication, make it public in the package settings and confirm it is linked to `flisk-sh/flisk`.
+
+## Unscoped npm package (flisk)
+
+There is no unscoped `flisk` package, and the release does not try to publish one. npm refuses the name: the 1.4.7 run's `publish-unscoped-npm` job got `E403 Forbidden - PUT https://registry.npmjs.org/flisk - Package name too similar to existing package plist`. npm's name-similarity rule rejects that publish for any account and any token, so claiming the name, a stub package, `npm trust` or an `NPM_TOKEN` cannot fix it; only npm support can grant an exception. Install with `npm i -g @flisk-sh/flisk`. The job was removed after that run; its earlier hint about a `404` was wrong for this name.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `📦 Pack CLI and published package smoke test`: `cli/dist is stale` | `cli/src` changed without rebuilding the committed `cli/dist` | `npm --prefix cli run check:dist`, `git add -f cli/dist`, commit `Rebuild cli/dist`, push |
+| `error: GH013 ... release/bump-*` on the bump push | A ruleset enforced required status checks at branch creation | `do_not_enforce_on_create` must be on for the required-status-checks rule of the `release branch protections` ruleset (`gh api repos/flisk-sh/flisk/rulesets`) |
+| `resource-types / mcp`: `timed out ... mcpres answers /health`, container `Restarting (0)`, log `imported as a module, not listening` | `cli/scripts/bundle.mjs` rewrote `import.meta.url` inside a template string, so the scaffolded server compared its path with `../dist/...` (1.4.23-rc1, #2847). Only the packed package runs the bundle, so PR tests on `dist/` miss it | A real bug, not a timeout: fix the bundler or template on `main`, cut `rc<N+1>`. `pin-module-location.mjs` now substitutes through esbuild `define`, which never touches strings |
+| Publish gate: `No passing Release candidate covers <sha>` | No candidate on that commit, or release inputs changed since the last one (usually: the release was dispatched on `main`, which moved during the candidate) | Dispatch the release on the passing candidate's `release/*` branch (step 3); otherwise push an `rc-*` tag at the commit, let it pass, re-dispatch |
+| Publish gate: `No passing Release candidate covers <sha>` although the candidate on that commit is green | The gate read the candidate runs list in the first minute after the candidate finished, before GitHub listed it as successful (1.4.33: candidate done 15:41:31, gate 15:42:19) | Nothing was published. Check with `node scripts/check-release-candidate.mjs --sha <sha> --repo flisk-sh/flisk`; when it prints `passed`, run `gh run rerun <release run id> --failed`. Do not dispatch a new release |
+| Publish gate: `No passing Release candidate covers <sha>` with reasons `not an ancestor` or `300 changed files, too many to check` while `main` keeps moving (1.4.31 needed rc1 through rc7, [#3055](https://github.com/flisk-sh/flisk/issues/3055)) | The gate prefers an exact-commit candidate. It only falls back to a passing candidate on an ancestor when GitHub's compare API can list every changed file and none is a release input. Once compare returns its 300-file cap, or the candidate is not an ancestor, the gate cannot prove coverage and effectively needs an exact match | Cut a new candidate on `main`'s newest commit and dispatch the release at once from that passing candidate or its `rc-*` tag. If a release is already waiting at the gate, rerun its failed `publish` job after the new candidate is green. Do **not** re-dispatch after `publish` succeeded: that would publish the next version; use [repair a half-finished release](#repair-a-half-finished-release) instead |
+| `Upload exact release candidate`: `No files were found with the provided path: release-dist-<version>/` | `package.json` and `cli/package.json` disagree (1.4.33: root 1.4.33, cli 1.4.32). The version step compared only the root file and took the no-bump path; `release-binaries.sh` reads `cli/package.json` and built `release-dist-1.4.32/` | Fixed in the version step (it bumps when either file differs). If it recurs, set both files to the same version on `main` first |
+| `resource-types / frontend-next` times out (`fe-next route answers 200 through Traefik`) and the container log shows `npm error Cannot read properties of null (reading 'edgesOut')` | npm 10.9.9 in the `node:22` image crashes on vitest 5's optional peers, in the image install and again in the install `next dev` runs at startup | The Next image sets `--legacy-peer-deps` on its installs and `NPM_CONFIG_LEGACY_PEER_DEPS=true` for every npm run. Read `docker-logs-fe-next-*.txt` in the leg's artifact |
+| Publish gate lists `release inputs changed since (cli/**)` | A candidate exists but `cli/**` changed after it | New candidate on the release commit |
+| Candidate `package`: `Release candidates run on a release/* branch or an rc-* tag, not refs/heads/main` | The candidate was dispatched on `main` | Dispatch it on a `release/*` branch or push an `rc-*` tag at the commit ([step 2](#2-release-candidate)) |
+| Candidate quickstart Q4: `entry script '/static/js/main.<hash>.js' is not under /<frontend>/` | The CLI under test printed Tilt UI URLs (`localhost:10350`) in its health list; Q4 loaded Tilt's own React page. Fixed by #2498 | Cut the candidate from a `main` that has #2498 |
+| `Release \| Binaries` red, but npm and both GitHub releases fine except `v<version>` on `flisk-sh/flisk` is a draft with no tag | `main` already had the version, so no bump PR and no `tag-bumped-release` (before the publish job tagged it itself) | `gh api repos/flisk-sh/flisk/git/refs -f ref=refs/tags/v<version> -f sha=<released commit>`, then `gh release edit v<version> --repo flisk-sh/flisk --tag v<version> --draft=false --latest` (leave out `--latest` when repairing an older release, so the Latest badge does not move back) |
+| `npm ERR! code EOTP` | An empty `NPM_TOKEN` was exported; npm tried token auth instead of OIDC | Never export an empty `NODE_AUTH_TOKEN`; the workflow only exports it when the secret exists |
+| Workflow red but npm and `flisk-sh/releases` are live | A post-publication step failed (bump push, signing) | [Repair a half-finished release](#repair-a-half-finished-release) |
+| `publish`: `Verify npm package source commit` fails with `@flisk-sh/flisk@<version> is not visible on the registry after 5 minutes ... HTTP 404` (the window is now 15 minutes, so a version older than 1.4.68 shows the shorter text), and the signing, bump and tag steps are skipped | The registry served the new version later than the 5-minute window (1.4.66: `npm publish` finished 19:53, the check gave up at 19:58, and the version answered 200 soon after; 1.4.67: published 12:37, check gave up 12:42, first 200 about 10 minutes after the publish). `Publish to npm` itself succeeded | Do not re-dispatch (it would publish the next version). Confirm `curl -s -o /dev/null -w '%{http_code}' https://registry.npmjs.org/@flisk-sh%2fflisk/<version>` now prints `200`, then run the [repair](#repair-a-half-finished-release): empty draft, `sign-release.yml`, the bump PR, and the [GitHub Packages backfill](#backfill-github-packages). The version stays without `checksums.txt.intoto.jsonl` |
+| GitHub Packages verify: `bin/flisk: No such file or directory` | Pre-rebrand releases link `bin/flisk`, newer ones link `bin/flisk` | The backfill workflow accepts both names |
+| Tag exists but `package.json` on it is one version behind | Tag pointed at the pre-bump commit | Tags must point at the version-bump commit (`tag-bumped-release` does this; fix by re-tagging the bump commit) |
+| The npm package lacks a fix that the tag and the release notes have | The tag was put on the squash bump commit, which carried merges made after the publish (1.4.30, #3054) | Unpack the tarball and grep `cli/dist-bundle` for the fix. `tag-bumped-release` now tags the published commit plus the version files (`scripts/release-tag-target.mjs`); to correct an old tag run it by hand with `--published <npm gitHead or run sha> --bump <bump commit>` and re-point the tag only if you accept moving a published tag |
+
+## The merge queue
+
+The `main merge queue` ruleset (snapshot: `.github/rulesets/main.json`) builds entries with `grouping_strategy` `ALLGREEN`, `merge_method` `SQUASH`, `max_entries_to_build` 5, `max_entries_to_merge` 5, `min_entries_to_merge` 1, `min_entries_to_merge_wait_minutes` 5 and `check_response_timeout_minutes` 60. Building five entries means a failing head ejects itself while the entries behind it are already testing on top of it; when the queue was serial (`max_entries_to_build` 1) one stale PR held 80 PRs at the head for 4.5 hours (#5044). Change these values in the live ruleset and the snapshot together; the `required-checks-drift` workflow opens an issue when they differ.
+
+Three bots keep the queue moving:
+
+- `stalled-merge-queue.yml`: re-queues or dequeues the head when entries are queued but no batch is building for any of them (#5105).
+- `merge-queue-watchdog.yml`: dequeues the head when its batches have failed twice or it has held the head for over 60 minutes (counted from when it became the head, not from a speculative batch built while entries were ahead of it), and comments the failing run on the pull request (#5044).
+- `cancel-dead-queue-runs.yml`: cancels the runs a dead batch leaves on deleted `gh-readonly-queue/*` refs.
+
+While the queue has entries, do not merge or push to `main` outside it: every direct merge deletes the building batches' `gh-readonly-queue/main/*` refs and restarts the head's checks from zero. Re-queue only a pull request whose branch is current; a PR re-added with checks that ran against an older `main` fails the queue again.
+
+## Settings and secrets
+
+| Name | Where | Used for |
+| --- | --- | --- |
+| `RELEASE_PAT` | repo secret | Bump PR opened as a user so its checks run; fall back is `github.token` |
+| `NPM_TOKEN` | repo secret | Fallback publish for `@flisk-sh/flisk` and `flisk` when OIDC has no trusted publisher; must be absent-or-valid, never empty |
+| `BINARY_RELEASE_TOKEN` | repo secret | Uploads to `flisk-sh/releases` |
+| `TOOLRADAR_API_KEY` | repo secret | Optional. `post-toolradar` posts the release on Toolradar, at most once a week; without it the job does nothing |
+| `main merge queue` ruleset | repository rules | `main`: merge queue, required checks, code coverage floor (values below) |
+| `release branch protections` ruleset | repository rules | `release/*`: PR required, required checks with `do_not_enforce_on_create` on (branch creation must stay pushable) |
+| Actions runner job limit | org Settings → Actions → Runners → GitHub-hosted runners ("All jobs usage"); the plan behind the number is on Settings → Billing | Per-account cap on concurrent jobs, shared by every workflow in every repository of the org (GitHub Free: 20, Pro: 40, Team: 60, Enterprise: 500; [limits](https://docs.github.com/en/actions/reference/limits)). The merge-group e2e matrices spend it: `scripts/scores/ci-parallelism.mjs <run-id>` prints how wide a run actually went (#3968) |
+
+The `main merge queue` ruleset covers `refs/heads/main` only and is readable without admin (`gh api repos/flisk-sh/flisk/rulesets`, the ruleset named `main merge queue`). Its merge-queue parameters, as of 2026-11-22:
+
+| Setting | Value |
+| --- | --- |
+| Merge method | Squash |
+| Grouping strategy | `ALLGREEN` |
+| Maximum pull requests to build | 1 |
+| Maximum pull requests to merge | 1 |
+| Minimum pull requests to merge | 1 |
+| Wait time (`min_entries_to_merge_wait_minutes`) | 5 min |
+| Check response timeout | 60 min |
+| Required status checks | `🧐 PR summary review`, `📋 Summary` (strict policy off) |
+| Pull request reviews | 0 required approvals; threads must resolve, stale reviews dismissed on push |
+| Code scanning | CodeQL: alerts at error level, security alerts high or higher |
+| Other rules | Non-fast-forward only; branch deletion blocked |
+
+With the maximum at 1, every merge to `main` rebuilds the next queued entry's group and restarts its checks (#3948). The approval count was 2 when this page first listed the ruleset (2026-10-23) and reads 0 now; the queue gate is the required checks above.
+
+## Building binaries by hand
+
+The npm entries call `bash scripts/release-binaries.sh ...`, so on Windows run them from Git Bash or Ubuntu on WSL2 with `bash` on `PATH`. Native `cmd.exe` cannot execute `.sh` files; the `bash` prefix makes that requirement explicit instead of hiding it behind a `'scripts' is not recognized` error.
+
+```bash
+scripts/release-binaries.sh                    # build only: release-dist-<version>/
+scripts/release-binaries.sh --publish          # build, create a draft release, verify bytes, publish
+scripts/release-binaries.sh --publish-only     # reuse an existing release-dist-<version>/
+```
+
+Output: `flisk-linux-{amd64,arm64}`, `flisk-darwin-{amd64,arm64}`, `flisk-windows-amd64.exe`, `flisk-cli-engine.tar.gz`, `checksums.txt` (SHA-256). The installer verifies each binary against `checksums.txt`. No versioned binaries ZIP is published; installers download the individual assets.

@@ -1,0 +1,7 @@
+{
+  "appName": "legacy-web",
+  "appType": "bring-your-own",
+  "stack": "tools",
+  "image": "legacy/web:1.2",
+  "schemaVersion": 1
+}

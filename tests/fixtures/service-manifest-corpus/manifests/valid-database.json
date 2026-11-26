@@ -1,0 +1,7 @@
+{
+  "appName": "shared-db",
+  "appType": "database",
+  "stack": "platform",
+  "framework": "postgres",
+  "schemaVersion": 1
+}

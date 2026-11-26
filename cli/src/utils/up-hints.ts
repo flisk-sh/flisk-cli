@@ -1,0 +1,121 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+
+import { conflictPort } from "./port-conflict-fix.js";
+import { getPortSetting } from "./port-owner.js";
+
+const DOCS = "https://github.com/flisk-sh/flisk/blob/main/docs";
+const DEFAULT_TILT_PORT = 10350;
+
+/** Troubleshooting entries the hints point at. Each anchor is a heading in docs/troubleshooting.md. */
+export const UP_HINT_DOCS = {
+  coldStart: `${DOCS}/troubleshooting.md#cold-start-blocked-docker-or-tilt-missing`,
+  unhealthy: `${DOCS}/troubleshooting.md#services-never-turn-healthy-or-are-left-behind`,
+  smoke: `${DOCS}/smoke.md`,
+} as const;
+
+/**
+ * A warning for a CI job that ran plain `flisk up`, or null anywhere else. That command stays attached to stream logs, so
+ * the job would sit there until it times out, with nothing in its log saying why.
+ */
+export function attachedUpInCiWarning(env: NodeJS.ProcessEnv): string | null {
+  if (!env.CI || env.CI === "false" || env.CI === "0") return null;
+  return "This command stays attached and never exits on its own, so a CI job hangs here. Use `flisk up --wait`: it returns once the stack is healthy and leaves it running.";
+}
+
+/** The ways `flisk up` fails after its arguments are accepted, each with its own next step. */
+export type UpFailure =
+  | { kind: "machine" }
+  | { kind: "invalid-tilt-port" }
+  | { kind: "tilt-exited" }
+  | {
+      kind: "services";
+      failed: string[];
+      timedOut?: boolean;
+      stillBuilding?: string[];
+      /** The port this run actually started Tilt on, when known (the demo may move off 10350). */
+      tiltPort?: number;
+    }
+  | { kind: "smoke"; failed: string[]; tiltPort?: number };
+
+/** A log command that works even when the stack is not on the default Tilt port (#3958). */
+function logHint(name: string, tiltPort?: number): string {
+  const port =
+    tiltPort !== undefined && tiltPort !== DEFAULT_TILT_PORT ? ` --port ${tiltPort}` : "";
+  return `See why ${name} failed: flisk logs -s ${name}${port}`;
+}
+
+/**
+ * One or two commands to run next after a failed `flisk up`, plus the troubleshooting page for that failure. Printed
+ * under the error and, with `--json`, carried in the error's `suggestions` field.
+ */
+export function upFailureHints(failure: UpFailure): string[] {
+  switch (failure.kind) {
+    case "machine":
+      return [
+        "Fix the checks above, then run: flisk doctor",
+        `No Docker? Services that each declare a command run as local processes: ${DOCS}/run-without-docker.md`,
+        `Troubleshooting: ${UP_HINT_DOCS.coldStart}`,
+      ];
+    case "invalid-tilt-port":
+      return ["Unset it to use the default port: unset TILT_PORT"];
+    case "tilt-exited":
+      return [
+        "Check Docker, Tilt and the project: flisk doctor",
+        "Rerun with Tilt's own output: flisk up --verbose",
+      ];
+    case "services":
+    case "smoke": {
+      const logs =
+        failure.failed.length > 0 ? [logHint(failure.failed[0] as string, failure.tiltPort)] : [];
+      if (failure.kind === "smoke") {
+        return [...logs, `Smoke checks: ${UP_HINT_DOCS.smoke}`];
+      }
+      if (failure.timedOut) {
+        const timeoutHints: string[] = [];
+        if (failure.stillBuilding && failure.stillBuilding.length > 0) {
+          timeoutHints.push("Run flisk up again to resume with cached image layers: flisk up");
+        }
+        timeoutHints.push("Increase the timeout with: flisk up --wait-timeout <seconds>");
+        return [
+          ...logs,
+          ...timeoutHints,
+          "Check the whole stack: flisk doctor",
+          `Troubleshooting: ${UP_HINT_DOCS.unhealthy}`,
+        ];
+      }
+      return [
+        ...logs,
+        "Check the whole stack: flisk doctor",
+        `Troubleshooting: ${UP_HINT_DOCS.unhealthy}`,
+      ];
+    }
+  }
+}
+
+/**
+ * The next step when a failure is a host port publish refusal: stop whatever holds the port (the other
+ * project's `flisk down`, or `docker stop` on the container the error names), or move this project off
+ * it with its FLISK_*_PORT setting (#4216).
+ */
+export function portConflictHints(failures: ReadonlyArray<{ message?: string }>): string[] {
+  const settings = new Set<string>();
+  let sawConflict = false;
+  for (const failure of failures) {
+    const port = conflictPort(failure.message ?? "");
+    if (port === null) continue;
+    sawConflict = true;
+    const setting = getPortSetting(port);
+    if (setting) settings.add(setting);
+  }
+  if (!sawConflict) return [];
+  const hints = [
+    "Stop the project or container that holds the port: `flisk down` in the other project's folder, or `docker stop` on the container the failure names",
+  ];
+  if (settings.size > 0) {
+    hints.push(
+      `Or move this project off the port: set ${[...settings].join(" or ")} to a free port`,
+    );
+  }
+  return hints;
+}

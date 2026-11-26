@@ -1,0 +1,356 @@
+{
+  "description": "service.json validation corpus: one directory of fixture manifests plus the accept/reject decision every validator must make for each, and the rule table both languages' validators share (#4858). See README.md for the runner matrix and the divergence legend.",
+  "implementations": {
+    "discovery": "runtime/discovery/validation.star validate(manifest) -> issue strings; accept means an empty list",
+    "discoveryManifest": "runtime/discovery/manifest/validation.star validate_manifest(manifest) - a shim over the same validator since #4858",
+    "engine": "runtime/engine/topologies/tilt/manifest/validator.star ManifestValidator.validate(manifest).valid. Recorded only where it returns a verdict: it crashes (Starlark type errors) on some wrongly-typed fields instead of rejecting, so 'engine' is absent for those fixtures.",
+    "schema": "runtime/engine/schemas/service-schema.json via Ajv",
+    "cli": "cli/src/utils/service-manifest.ts validateServiceManifest(manifest) - accept means no errors"
+  },
+  "rules": {
+    "appName": { "minLength": 2, "maxLength": 64 },
+    "appTypes": ["frontend", "backend", "library", "migrator", "sdk", "worker", "infra", "database", "mcp", "bring-your-own", "agent"],
+    "portOptionalAppTypes": ["infra", "database"],
+    "port": {
+      "standard": { "min": 3000, "max": 9999 },
+      "bringYourOwn": { "min": 1, "max": 65535 },
+      "bands": {
+        "frontend": { "min": 3000, "max": 5999 },
+        "backend": { "min": 4000, "max": 5999 },
+        "worker": { "min": 4000, "max": 6999 },
+        "migrator": { "min": 7000, "max": 7999 },
+        "sdk": { "min": 3000, "max": 9999 },
+        "library": { "min": 3000, "max": 9999 }
+      }
+    },
+    "featuresEnabled": ["api-client", "env-config", "api-index", "prisma", "nats", "redis", "infisical", "vitest", "traefik", "websocket", "graphql", "grpc", "vite-node", "maintenance", "ddd"],
+    "replicas": { "min": 1, "max": 10 }
+  },
+  "fixtures": {
+    "valid-backend": {
+      "manifest": "manifests/valid-backend.json",
+      "expect": "accept"
+    },
+    "valid-frontend": {
+      "manifest": "manifests/valid-frontend.json",
+      "expect": "accept"
+    },
+    "valid-bring-your-own": {
+      "manifest": "manifests/valid-bring-your-own.json",
+      "expect": "accept"
+    },
+    "valid-command-service": {
+      "manifest": "manifests/valid-command-service.json",
+      "expect": {
+        "discovery": "reject",
+        "discoveryManifest": "reject",
+        "engine": "reject",
+        "schema": "accept",
+        "cli": "accept",
+        "note": "a command service runs as a local process - the schema and the CLI exempt it from stack/port; the discovery validators predate command services and still require stack and port; the engine requires port unconditionally"
+      }
+    },
+    "valid-database": {
+      "manifest": "manifests/valid-database.json",
+      "expect": {
+        "discovery": "accept",
+        "discoveryManifest": "accept",
+        "engine": "reject",
+        "schema": "accept",
+        "cli": "accept",
+        "note": "a database resource has no port; the engine's port is required unconditionally, so it rejects a manifest the schema explicitly allows"
+      }
+    },
+    "missing-appName": {
+      "manifest": "manifests/missing-appName.json",
+      "expect": "reject"
+    },
+    "appName-not-string": {
+      "manifest": "manifests/appName-not-string.json",
+      "expect": {
+        "discovery": "reject",
+        "discoveryManifest": "reject",
+        "schema": "reject",
+        "cli": "reject",
+        "note": "the engine validator crashes indexing a non-string appName - no verdict recorded"
+      }
+    },
+    "appName-too-short": {
+      "manifest": "manifests/appName-too-short.json",
+      "expect": {
+        "discovery": "reject",
+        "discoveryManifest": "reject",
+        "engine": "reject",
+        "schema": "reject",
+        "cli": "accept",
+        "note": "the CLI's docker-name check has no minimum length; the 2-character floor lives in the schema and the Starlark validators"
+      }
+    },
+    "appName-digit-start": {
+      "manifest": "manifests/appName-digit-start.json",
+      "expect": {
+        "discovery": "accept",
+        "discoveryManifest": "accept",
+        "engine": "reject",
+        "schema": "reject",
+        "cli": "accept",
+        "note": "schema and engine require a leading letter (^[a-z]); discovery only checks the character set, the CLI only checks Docker-name safety"
+      }
+    },
+    "appName-trailing-hyphen": {
+      "manifest": "manifests/appName-trailing-hyphen.json",
+      "expect": {
+        "discovery": "reject",
+        "discoveryManifest": "reject",
+        "engine": "accept",
+        "schema": "reject",
+        "cli": "reject",
+        "note": "the engine's hand-rolled pattern ^[a-z][a-z0-9-]*$ allows a trailing hyphen that the schema's ^[a-z][a-z0-9-]*[a-z0-9]$ rejects"
+      }
+    },
+    "appName-too-long": {
+      "manifest": "manifests/appName-too-long.json",
+      "expect": "reject",
+      "note": "65 characters: every bound rejects it, though they disagree on the maximum (schema/discovery 64, CLI docker-name 59, engine 50)"
+    },
+    "missing-appType": {
+      "manifest": "manifests/missing-appType.json",
+      "expect": "reject"
+    },
+    "appType-unknown": {
+      "manifest": "manifests/appType-unknown.json",
+      "expect": "reject"
+    },
+    "appType-agent": {
+      "manifest": "manifests/appType-agent.json",
+      "expect": {
+        "discovery": "accept",
+        "discoveryManifest": "accept",
+        "engine": "reject",
+        "schema": "accept",
+        "cli": "accept",
+        "note": "the engine's VALID_APP_TYPES list predates the agent resource type; the schema enum and the CLI accept it"
+      }
+    },
+    "appType-infra": {
+      "manifest": "manifests/appType-infra.json",
+      "expect": {
+        "discovery": "accept",
+        "discoveryManifest": "accept",
+        "engine": "accept",
+        "schema": "reject",
+        "cli": "reject",
+        "note": "infra is the engine's internal resource type: the Starlark validators know it, the published schema and the CLI do not"
+      }
+    },
+    "missing-stack": {
+      "manifest": "manifests/missing-stack.json",
+      "expect": "reject"
+    },
+    "missing-schemaVersion": {
+      "manifest": "manifests/missing-schemaVersion.json",
+      "expect": {
+        "discovery": "accept",
+        "discoveryManifest": "accept",
+        "engine": "accept",
+        "schema": "reject",
+        "cli": "reject",
+        "note": "schemaVersion is required by the schema and the CLI; the Starlark validators never look at it"
+      }
+    },
+    "missing-port-backend": {
+      "manifest": "manifests/missing-port-backend.json",
+      "expect": {
+        "discovery": "reject",
+        "discoveryManifest": "reject",
+        "engine": "reject",
+        "schema": "reject",
+        "cli": "accept",
+        "note": "the CLI's validateServiceManifest checks port only when present; the schema's backend conditional (port required, 4000-5999) is enforced by the Ajv step, not this function"
+      }
+    },
+    "missing-port-bring-your-own": {
+      "manifest": "manifests/missing-port-bring-your-own.json",
+      "expect": {
+        "discovery": "reject",
+        "discoveryManifest": "reject",
+        "engine": "reject",
+        "schema": "reject",
+        "cli": "accept",
+        "note": "same shape-only contract as missing-port-backend: the schema requires port for bring-your-own, this function does not"
+      }
+    },
+    "port-not-int": {
+      "manifest": "manifests/port-not-int.json",
+      "expect": {
+        "discovery": "reject",
+        "discoveryManifest": "reject",
+        "schema": "reject",
+        "cli": "reject",
+        "note": "the engine validator crashes comparing a string port to 1024 - no verdict recorded"
+      }
+    },
+    "port-0": {
+      "manifest": "manifests/port-0.json",
+      "expect": "reject"
+    },
+    "port-2999": {
+      "manifest": "manifests/port-2999.json",
+      "expect": {
+        "discovery": "reject",
+        "discoveryManifest": "reject",
+        "engine": "accept",
+        "schema": "reject",
+        "cli": "accept",
+        "note": "below the 3000 floor. The CLI checks only the shared 1-65535 bound; the engine only warns when a port lands outside its band"
+      }
+    },
+    "port-3000": {
+      "manifest": "manifests/port-3000.json",
+      "expect": {
+        "discovery": "reject",
+        "discoveryManifest": "reject",
+        "engine": "accept",
+        "schema": "reject",
+        "cli": "accept",
+        "note": "inside the generic 3000-9999 window but outside the backend band (4000-5999). The engine only warns on band misses; the CLI never checks bands here"
+      }
+    },
+    "port-9999": {
+      "manifest": "manifests/port-9999.json",
+      "expect": {
+        "discovery": "reject",
+        "discoveryManifest": "reject",
+        "engine": "accept",
+        "schema": "reject",
+        "cli": "accept",
+        "note": "inside the generic window, outside the backend band - same split as port-3000"
+      }
+    },
+    "port-10000": {
+      "manifest": "manifests/port-10000.json",
+      "expect": {
+        "discovery": "reject",
+        "discoveryManifest": "reject",
+        "engine": "accept",
+        "schema": "reject",
+        "cli": "accept",
+        "note": "above the 9999 ceiling, still inside the CLI's 1-65535 shape check and the engine's 1024-65535 basic range"
+      }
+    },
+    "bring-your-own-port-80": {
+      "manifest": "manifests/bring-your-own-port-80.json",
+      "expect": {
+        "discovery": "accept",
+        "discoveryManifest": "accept",
+        "engine": "reject",
+        "schema": "accept",
+        "cli": "accept",
+        "note": "an imported Compose app keeps the port its own container listens on (#4637); the engine still rejects ports under 1024 before it looks at the appType"
+      }
+    },
+    "bring-your-own-port-65535": {
+      "manifest": "manifests/bring-your-own-port-65535.json",
+      "expect": "accept"
+    },
+    "bring-your-own-port-65536": {
+      "manifest": "manifests/bring-your-own-port-65536.json",
+      "expect": "reject"
+    },
+    "features-not-list": {
+      "manifest": "manifests/features-not-list.json",
+      "expect": "reject"
+    },
+    "features-unknown": {
+      "manifest": "manifests/features-unknown.json",
+      "expect": {
+        "discovery": "reject",
+        "discoveryManifest": "reject",
+        "engine": "accept",
+        "schema": "reject",
+        "cli": "accept",
+        "note": "discovery whitelists feature names; the schema uses an enum; the CLI checks only that the entries are strings and the engine never checks item values"
+      }
+    },
+    "features-drizzle": {
+      "manifest": "manifests/features-drizzle.json",
+      "expect": {
+        "discovery": "reject",
+        "discoveryManifest": "reject",
+        "engine": "accept",
+        "schema": "accept",
+        "cli": "accept",
+        "note": "drizzle is a real schema feature the discovery whitelist never caught up with - drift in the strict direction"
+      }
+    },
+    "features-vite-node": {
+      "manifest": "manifests/features-vite-node.json",
+      "expect": {
+        "discovery": "accept",
+        "discoveryManifest": "accept",
+        "engine": "accept",
+        "schema": "reject",
+        "cli": "accept",
+        "note": "vite-node is in the discovery whitelist but missing from the schema enum - drift in the permissive direction"
+      }
+    },
+    "dependsOn-not-list": {
+      "manifest": "manifests/dependsOn-not-list.json",
+      "expect": {
+        "discovery": "reject",
+        "discoveryManifest": "reject",
+        "engine": "reject",
+        "schema": "reject",
+        "cli": "accept",
+        "note": "the CLI's dependsOnErrors skips non-arrays, so a string dependsOn is silently kept"
+      }
+    },
+    "replicas-0": {
+      "manifest": "manifests/replicas-0.json",
+      "expect": "reject"
+    },
+    "replicas-6": {
+      "manifest": "manifests/replicas-6.json",
+      "expect": {
+        "discovery": "accept",
+        "discoveryManifest": "accept",
+        "engine": "reject",
+        "schema": "accept",
+        "cli": "accept",
+        "note": "the shared bound is 1-10; the engine's own VALIDATION_THRESHOLDS caps at 5"
+      }
+    },
+    "replicas-not-int": {
+      "manifest": "manifests/replicas-not-int.json",
+      "expect": {
+        "discovery": "reject",
+        "discoveryManifest": "reject",
+        "schema": "reject",
+        "cli": "reject",
+        "note": "the engine validator crashes comparing a string replicas to 1 - no verdict recorded"
+      }
+    },
+    "replicas-frontend-2": {
+      "manifest": "manifests/replicas-frontend-2.json",
+      "expect": {
+        "discovery": "accept",
+        "discoveryManifest": "accept",
+        "engine": "accept",
+        "schema": "accept",
+        "cli": "reject",
+        "note": "the CLI refuses replicas > 1 on a frontend (Compose generates one container); the other validators do not make that distinction"
+      }
+    },
+    "worker-missing-features": {
+      "manifest": "manifests/worker-missing-features.json",
+      "expect": {
+        "discovery": "accept",
+        "discoveryManifest": "accept",
+        "engine": "accept",
+        "schema": "reject",
+        "cli": "accept",
+        "note": "the schema requires featuresEnabled on a worker; nothing else does"
+      }
+    }
+  }
+}

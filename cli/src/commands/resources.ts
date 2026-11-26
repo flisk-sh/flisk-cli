@@ -1,0 +1,214 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import chalk from "chalk";
+import { Command, Option } from "commander";
+import { isResourceCreateType } from "../types/index.js";
+import { attachNoPositionalHint } from "../utils/command-helpers.js";
+import { VALID_RESOURCE_TYPES } from "../utils/constants.js";
+import { createDiscoveryContext } from "../utils/discovery-context.js";
+import { errorFactories, FliskError, requireProjectRoot, runCommand } from "../utils/errors.js";
+import {
+  formatCount,
+  showAllSatisfyCondition,
+  showDetail,
+  showEmptyState,
+  showStep,
+} from "../utils/formatting.js";
+import { createMachineEnvelope, writeMachineError } from "../utils/machine-output.js";
+import { isNativeService } from "../utils/native-service.js";
+import { findProjectRoot } from "../utils/paths.js";
+import { addProjectOption } from "../utils/project-resolution.js";
+import {
+  relativeResourceFolder,
+  relativeResourceManifest,
+} from "../utils/resource-relative-path.js";
+import { applyServiceLocalOverrides } from "../utils/service-local-overrides.js";
+import { skippedServiceFiles, stackExists } from "../utils/services.js";
+import { includes } from "../utils/validation.js";
+
+export interface ListResourcesOptions {
+  verbose?: boolean;
+  stack?: string | boolean;
+  type?: string;
+  noStack?: boolean;
+  ports?: boolean;
+  json?: boolean;
+}
+
+export async function runResourcesList(options: ListResourcesOptions): Promise<void> {
+  const action = async (): Promise<void> => {
+    const projectRoot = options.json ? findProjectRoot() : requireProjectRoot();
+    if (!projectRoot) {
+      writeMachineError(errorFactories.notInProject());
+    }
+
+    if (options.type !== undefined && !includes(VALID_RESOURCE_TYPES, options.type)) {
+      throw new FliskError(`Invalid resource type "${options.type}"`, [
+        options.type === "queue" || options.type === "inference"
+          ? `Resources created with --type ${options.type} are saved as bring-your-own resources: flisk resources --type bring-your-own`
+          : `Valid types: ${VALID_RESOURCE_TYPES.join(", ")}`,
+      ]);
+    }
+
+    const discovery = createDiscoveryContext();
+    if (typeof options.stack === "string" && !stackExists(options.stack, discovery.resources)) {
+      const error = errorFactories.stackNotFound(options.stack, discovery.stackNames);
+      if (options.json) writeMachineError(error);
+      error.exit();
+    }
+    const withoutStackFilter = options.noStack || options.stack === false;
+    const stackName = typeof options.stack === "string" ? options.stack : undefined;
+
+    let resources = discovery.resources;
+
+    if (stackName) {
+      resources = discovery.resourcesByStack.get(stackName) || [];
+      if (resources.length === 0 && !options.json && options.type === undefined) {
+        showEmptyState("stack-services", ` in stack "${stackName}"`);
+        return;
+      }
+    }
+
+    if (withoutStackFilter) {
+      resources = discovery.unassignedResources;
+      if (resources.length === 0 && !options.json && options.type === undefined) {
+        showAllSatisfyCondition("resources", "assigned to a stack");
+        return;
+      }
+    }
+
+    if (options.type !== undefined) {
+      resources = resources.filter(
+        (resource) => (resource.config?.appType ?? resource.type) === options.type,
+      );
+    }
+
+    if (options.json) {
+      const data = resources.map((resource) => ({
+        name: resource.name,
+        stack: resource.stack ?? null,
+        type: resource.config?.appType ?? resource.type ?? "unknown",
+        port: resource.port ?? null,
+        path: relativeResourceFolder(projectRoot, resource.configPath),
+        manifest: relativeResourceManifest(projectRoot, resource.configPath),
+      }));
+      console.log(
+        JSON.stringify(
+          createMachineEnvelope({
+            resources: data,
+            ...skippedServiceFiles(discovery.problems),
+            overrides: applyServiceLocalOverrides(
+              discovery.resources.filter((resource) => isNativeService(resource)),
+            ).overrides,
+          }),
+        ),
+      );
+      return;
+    }
+
+    if (resources.length === 0) {
+      const stackContext = stackName ? ` in stack "${stackName}"` : "";
+      const noStackContext = withoutStackFilter && !stackName ? " without a stack" : "";
+      const typeContext = options.type !== undefined ? ` with type "${options.type}"` : "";
+      const creatable = options.type !== undefined && isResourceCreateType(options.type);
+      showEmptyState(
+        stackName ? "stack-services" : "resources",
+        stackContext + noStackContext + typeContext,
+        creatable ? options.type : undefined,
+      );
+      return;
+    }
+
+    showStep(`Found ${formatCount(resources.length, "resource")}:\n`);
+
+    if (options.verbose || options.ports) {
+      for (const resource of resources) {
+        console.log(chalk.bold(`${resource.name}`));
+
+        if (resource.stack) {
+          console.log(chalk.gray(`  Stack: ${resource.stack}`));
+        } else {
+          console.log(chalk.yellow(`  Stack: (not assigned)`));
+        }
+
+        if (options.verbose) {
+          console.log(chalk.gray(`  Type: ${resource.type || "unknown"}`));
+          if (resource.port) console.log(chalk.gray(`  Port: ${resource.port}`));
+          console.log(chalk.gray(`  Path: ${resource.configPath}`));
+        } else if (options.ports && resource.port) {
+          console.log(chalk.gray(`  Port: ${resource.port}`));
+        }
+
+        console.log();
+      }
+    } else {
+      for (const resource of resources) {
+        const stackInfo = resource.stack
+          ? chalk.gray(` [${resource.stack}]`)
+          : chalk.yellow(" [no stack]");
+        console.log(`  ${resource.name}${stackInfo}`);
+      }
+
+      showDetail("\nRun with --verbose for more details or --ports to see port assignments.", 0);
+    }
+
+    const withoutStackCount =
+      stackName || options.type !== undefined
+        ? resources.filter((r: { stack?: string }) => !r.stack).length
+        : discovery.unassignedResources.length;
+
+    if (withoutStackCount > 0 && !withoutStackFilter && !stackName) {
+      console.log(
+        chalk.yellow(`\n${formatCount(withoutStackCount, "resource")} not assigned to any stack.`),
+      );
+      showDetail('Run "flisk resources --no-stack" to see them, or "flisk stack" to assign them.');
+    }
+  };
+
+  if (options.json) {
+    try {
+      await action();
+    } catch (error) {
+      writeMachineError(error);
+    }
+    return;
+  }
+  await runCommand(action);
+}
+
+// Commander marks every `--no-` option as negated, which would make it share the `stack` key with
+// `--stack <stack>` and conflict with itself. `Option.negate` is a public, typed field (commander
+// typings, ^15), so it is cleared here to give `--no-stack` its own `noStack` key and let
+// `.conflicts("stack")` work. `resources-options.test.ts` pins this coupling: a Commander change
+// that breaks it fails the tests instead of silently dropping the conflict check.
+const noStackOption = new Option("--no-stack", "Show only resources without a stack").conflicts(
+  "stack",
+);
+noStackOption.negate = false;
+
+export const resourcesCommand = addProjectOption(
+  attachNoPositionalHint(new Command("resources")),
+  "resources",
+)
+  .description("List all resources (services) in the project")
+  .option(
+    "-v, --verbose",
+    "Show resource details including the port in text view (JSON output is unchanged)",
+    false,
+  )
+  .option("-s, --stack <stack>", "Filter resources by stack name")
+  .option("-t, --type <type>", "Filter resources by type")
+  .addOption(noStackOption)
+  .option(
+    "--ports",
+    "Short text view with each resource's port (--verbose also includes ports)",
+    false,
+  )
+  .option("--json", "Output a versioned JSON resource report", false)
+  .addHelpText(
+    "after",
+    "\nExamples:\n  flisk resources\n  flisk resources --type database\n  flisk resources --ports",
+  )
+  .action(async (options) => {
+    await runResourcesList(options);
+  });

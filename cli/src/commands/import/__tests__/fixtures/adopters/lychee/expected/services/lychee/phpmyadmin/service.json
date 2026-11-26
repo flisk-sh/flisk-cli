@@ -1,0 +1,28 @@
+{
+  "$schema": "https://flisk.sh/schema.service.json",
+  "schemaVersion": 1,
+  "appName": "phpmyadmin",
+  "appType": "bring-your-own",
+  "stack": "lychee",
+  "port": 80,
+  "healthCheckPath": "/",
+  "image": "phpmyadmin",
+  "dependsOn": [
+    {
+      "name": "lychee-db",
+      "condition": "service_healthy"
+    }
+  ],
+  "env": {
+    "PMA_HOST": "lychee_db",
+    "PMA_PORT": "3306"
+  },
+  "restart": "always",
+  "profiles": ["phpmyadmin"],
+  "extraPorts": [
+    {
+      "port": 80,
+      "publish": "8080"
+    }
+  ]
+}

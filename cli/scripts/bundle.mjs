@@ -1,0 +1,90 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+// Publish-time bundle of the tsc output (dist/ -> dist-bundle/).
+//
+// ink, react and chalk (plus their transitive deps, notably es-toolkit at
+// ~18 MB) are inlined so the npm package does not install them. commander stays external. dist/ itself is committed and untouched; bin/flisk.js
+// prefers dist-bundle/ when it exists (only inside a packed/installed package).
+// The npm package ships dist-bundle/ and not dist/ (only the two files of its "main"
+// entry), so bundled code must not read or import a file under dist/ at runtime.
+
+import { execSync } from "node:child_process";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+import { build } from "esbuild";
+import { pinModuleLocation } from "./pin-module-location.mjs";
+
+const cliDir = join(dirname(fileURLToPath(import.meta.url)), "..");
+const out = join(cliDir, "dist-bundle");
+
+function resolveCommitSha() {
+  if (process.env.FLISK_BUILD_COMMIT?.trim()) {
+    return process.env.FLISK_BUILD_COMMIT.trim();
+  }
+  if (process.env.GITHUB_SHA?.trim()) {
+    return process.env.GITHUB_SHA.trim();
+  }
+  try {
+    const sha = execSync("git rev-parse HEAD", {
+      cwd: cliDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (sha) return sha;
+  } catch {
+    // git not available or not in a git repository
+  }
+  return "unknown";
+}
+
+// Our own modules locate assets relative to import.meta.url/dirname, assuming
+// their original place in dist/ (e.g. dist/generator/ -> cli/templates).
+// Flattened into one file that depth is lost, so pin each module's
+// import.meta.* to where it lived in dist/, relative to the bundle's location.
+// These are only starting points for path arithmetic (cli/templates, the
+// package root); the dist/ directory itself need not exist.
+const keepModuleLocation = {
+  name: "keep-module-location",
+  setup(b) {
+    b.onLoad({ filter: /[\\/]cli[\\/]dist[\\/].*\.js$/ }, (args) => {
+      let code = readFileSync(args.path, "utf8");
+      if (!code.includes("import.meta.")) return null;
+      const rel = relative(join(cliDir, "dist"), args.path).split("\\").join("/");
+      code = pinModuleLocation(code, rel);
+      return { contents: code, loader: "js", resolveDir: dirname(args.path) };
+    });
+  },
+};
+
+rmSync(out, { recursive: true, force: true });
+await build({
+  plugins: [keepModuleLocation],
+  entryPoints: [join(cliDir, "dist", "cli.js")],
+  outdir: out,
+  bundle: true,
+  splitting: true,
+  format: "esm",
+  platform: "node",
+  target: "node22",
+  minify: false,
+  // sigstore (about 1.8 MB) is only used by `flisk upgrade` on the standalone
+  // binary, which `bun build --compile` builds from src/ with sigstore inlined. The
+  // npm package never takes that path (it upgrades through npm), so leaving it
+  // out keeps the packed size under the install-weight ratchet. If it were ever
+  // reached there, the import fails and the upgrade aborts: it never skips the check.
+  external: ["commander", "react-devtools-core", "sigstore"],
+  banner: {
+    js: "import{createRequire as __fliskRequire}from'node:module';const require=__fliskRequire(import.meta.url);",
+  },
+  logLevel: "warning",
+});
+
+const commitSha = resolveCommitSha();
+const buildInfo = {
+  commit: commitSha,
+  commitSha,
+};
+const buildInfoJson = `${JSON.stringify(buildInfo, null, 2)}\n`;
+
+writeFileSync(join(out, "build-info.json"), buildInfoJson, "utf8");

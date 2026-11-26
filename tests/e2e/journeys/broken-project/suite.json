@@ -1,0 +1,31 @@
+{
+  "group": "journeys",
+  "suite": "broken-project",
+  "description": "Failure paths through a real flisk up (#1386): an unhealthy service fails startup per the health policy and its logs name the service (BP3), and an interrupted flisk up is cleaned up by flisk down, after which a second flisk up succeeds (BP4). Bad service.json and missing dependsOn run without Docker in cli/src/commands/__tests__/broken-project.test.ts.",
+  "paths": [
+    "cli/src/commands/up.ts",
+    "cli/src/utils/up-readiness.ts",
+    "cli/src/utils/startup-report.ts",
+    "cli/src/utils/startup-report-format.ts",
+    "cli/src/utils/startup-fixes.ts",
+    "cli/src/utils/startup-logs.ts",
+    "cli/src/utils/service-config-checks.ts",
+    "tests/e2e/lib/**",
+    "tests/e2e/journeys/broken-project/**",
+    ".github/workflows/e2e-journeys.yml"
+  ],
+  "cases": [
+    "BP3",
+    "BP4"
+  ],
+  "triggers": [
+    "pr",
+    "manual"
+  ],
+  "timeoutMinutes": 40,
+  "typicalSeconds": 180,
+  "needsSecrets": [],
+  "checkName": "broken-project-e2e",
+  "install": true,
+  "freePostgres": true
+}

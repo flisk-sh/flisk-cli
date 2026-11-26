@@ -1,0 +1,754 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import * as fs from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+import type { Command } from "commander";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  createTempDir,
+  createTempProject,
+  installFakeContainerTools,
+  runCommandInProcess,
+  runFlisk,
+  validProjectJson,
+} from "../../test-support/index.js";
+import { YES_OPTION_DESCRIPTION } from "../../utils/command-helpers.js";
+import { agentCommand } from "../agent.js";
+import { COMMAND_SPECS } from "../command-specs.generated.js";
+import { configCommand } from "../config.js";
+import { connectCommand } from "../connect.js";
+import { downCommand } from "../down.js";
+import { ejectCommand } from "../eject.js";
+import { networksCommand } from "../networks.js";
+import { projectsCommand } from "../projects.js";
+import { reposCommand } from "../repos.js";
+import { resourceCommand } from "../resource.js";
+import { resourcesCommand } from "../resources.js";
+import { stacksCommand } from "../stacks.js";
+import { statusCommand } from "../status.js";
+import { upCommand } from "../up.js";
+import { upgradeCommand } from "../upgrade.js";
+
+const commandsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+/**
+ * One row per command that prints `--json` and can run in a temp project without Docker, Tilt or prompts.
+ * Each row is checked against the `--json` contract, both in a project and outside one.
+ */
+const JSON_MATRIX: Array<{ command: string[]; project: Parameters<typeof createTempProject>[0] }> =
+  [
+    {
+      command: ["stacks"],
+      project: { stacks: { api: { gateway: { appType: "backend", port: 3100 } } } },
+    },
+    {
+      command: ["resources"],
+      project: { stacks: { api: { gateway: { appType: "backend", port: 3100 } } } },
+    },
+    {
+      command: ["agent", "list"],
+      project: { stacks: { api: { assistant: { appType: "agent", port: 3200 } } } },
+    },
+    { command: ["projects"], project: { resources: { api: { runtime: "node" } } } },
+    {
+      command: ["status"],
+      project: { stacks: { api: { gateway: { appType: "backend", port: 3100 } } } },
+    },
+    {
+      command: ["networks"],
+      project: { stacks: { api: { gateway: { appType: "backend", port: 3100 } } } },
+    },
+    { command: ["config", "verify"], project: {} },
+  ];
+
+const VALID_PROJECT_JSON = validProjectJson({ name: "test", discoveryPaths: ["services/**"] });
+
+/** A valid project with generated Tilt files and one backend, so the commands below reach their plan. */
+const CONFIGURED_PROJECT: Parameters<typeof createTempProject>[0] = {
+  projectJson: VALID_PROJECT_JSON,
+  stacks: { api: { gateway: { appType: "backend", port: 3100 } } },
+  generated: { Tiltfile: "# generated\n", "docker-compose.yml": "services: {}\n" },
+};
+
+/**
+ * One row per command whose `--json` changes the project (or needs an argument), checked against the same contract.
+ * These rows spawn the CLI both in a project and outside one: an in-process `--json` run would leave Commander's kept
+ * option value on a command object that the --dry-run rows below run in-process again.
+ */
+const JSON_SPAWN_MATRIX: Array<{
+  site: string;
+  command: string[];
+  project: Parameters<typeof createTempProject>[0];
+}> = [
+  { site: "eject --json", command: ["eject"], project: CONFIGURED_PROJECT },
+  { site: "stack --json", command: ["stack", "--list"], project: CONFIGURED_PROJECT },
+  {
+    site: "resource --json",
+    command: ["resource", "web", "--type", "backend"],
+    project: CONFIGURED_PROJECT,
+  },
+  {
+    site: "config regenerate --json",
+    command: ["config", "regenerate", "--dry-run"],
+    project: CONFIGURED_PROJECT,
+  },
+  { site: "config migrate --json", command: ["config", "migrate"], project: CONFIGURED_PROJECT },
+  {
+    site: "tool add --json",
+    command: ["tool", "add", "react", "web"],
+    project: CONFIGURED_PROJECT,
+  },
+  {
+    site: "config enable-infra --json",
+    command: ["config", "enable-infra", "monitoring"],
+    project: CONFIGURED_PROJECT,
+  },
+  {
+    site: "config disable-infra --json",
+    command: ["config", "disable-infra", "monitoring"],
+    project: CONFIGURED_PROJECT,
+  },
+];
+
+/**
+ * One row per command that prints a dry-run plan without Docker or Tilt. `expect` is the text the plan prints.
+ * `eject` prints no "Dry run" line; its plan is the list of files it would leave and write.
+ */
+const DRY_RUN_MATRIX: Array<{
+  site: string;
+  command: string[];
+  project: Parameters<typeof createTempProject>[0];
+  expect: string;
+}> = [
+  {
+    site: "resource --dry-run",
+    command: ["resource"],
+    project: CONFIGURED_PROJECT,
+    expect: "Dry run",
+  },
+  {
+    site: "config regenerate --dry-run",
+    command: ["config", "regenerate"],
+    project: CONFIGURED_PROJECT,
+    expect: "Dry run",
+  },
+  {
+    site: "connect --dry-run",
+    command: ["connect"],
+    project: CONFIGURED_PROJECT,
+    expect: "Dry run",
+  },
+  { site: "down --dry-run", command: ["down"], project: CONFIGURED_PROJECT, expect: "Dry run" },
+  {
+    site: "eject --dry-run",
+    command: ["eject"],
+    project: CONFIGURED_PROJECT,
+    expect: "Files written:",
+  },
+  { site: "up --dry-run", command: ["up"], project: CONFIGURED_PROJECT, expect: "Dry run" },
+  {
+    site: "config migrate --dry-run",
+    command: ["config", "migrate"],
+    project: {
+      projectJson: VALID_PROJECT_JSON,
+      resources: { "shop/api": { type: "backend", stack: "core", port: 4100 } },
+    },
+    expect: "Would rewrite: services/shop/api/service.json",
+  },
+  {
+    site: "repos clone --dry-run",
+    command: ["repos", "clone"],
+    project: {
+      projectJson: {
+        ...VALID_PROJECT_JSON,
+        repos: [
+          {
+            url: "https://github.com/acme/orders.git",
+            dir: "services/orders",
+            branch: "main",
+          },
+          { url: "https://github.com/acme/present.git", dir: "services/present" },
+        ],
+      },
+      files: { "services/present/.keep": "" },
+    },
+    expect: "Would clone: https://github.com/acme/orders.git into services/orders (branch: main)",
+  },
+  {
+    site: "config enable-infra --dry-run",
+    command: ["config", "enable-infra"],
+    project: CONFIGURED_PROJECT,
+    expect: "Would enable monitoring.",
+  },
+  {
+    site: "config disable-infra --dry-run",
+    command: ["config", "disable-infra"],
+    project: CONFIGURED_PROJECT,
+    expect: "No change: monitoring is already disabled.",
+  },
+];
+
+/**
+ * One row per command that runs non-interactively with `--yes` in a temp project. Each runs with stdin closed,
+ * so a prompt that ignores `--yes` ends the run with an error instead of hanging.
+ */
+const YES_MATRIX: Array<{
+  site: string;
+  command: string[];
+  project: Parameters<typeof createTempProject>[0];
+}> = [
+  { site: "eject --yes", command: ["eject"], project: CONFIGURED_PROJECT },
+  {
+    site: "stack --yes",
+    command: ["stack", "api", "--resources", "web"],
+    project: {
+      ...CONFIGURED_PROJECT,
+      resources: { web: { appType: "backend", port: 4000 } },
+    },
+  },
+  {
+    site: "resource --yes",
+    command: ["resource", "web", "--type", "backend"],
+    project: CONFIGURED_PROJECT,
+  },
+  { site: "project --yes", command: ["project"], project: CONFIGURED_PROJECT },
+  { site: "tool add --yes", command: ["tool", "add", "react", "web"], project: CONFIGURED_PROJECT },
+];
+
+/**
+ * `agent sessions --json` fails before any request when the session id is missing, so its error envelope runs in a
+ * temp project with no agent process. The `site` names the command the same way the completeness check does.
+ */
+const AGENT_SESSIONS_JSON: {
+  site: string;
+  command: string[];
+  project: Parameters<typeof createTempProject>[0];
+} = {
+  site: "agent sessions --json",
+  command: ["agent", "sessions", "assistant"],
+  project: { stacks: { api: { assistant: { appType: "agent", port: 3200 } } } },
+};
+
+/**
+ * `doctor --json` runs its probes with or without a project and prints one report. Its exit status depends on the
+ * host (a machine without Docker exits 1), so this row checks the envelope only, not the status.
+ */
+const DOCTOR_JSON: { site: string; command: string[] } = {
+  site: "doctor --json",
+  command: ["doctor", "--no-ping"],
+};
+
+/**
+ * `upgrade --json` refuses to run without `--dry-run` so an upgrade cannot execute silently.
+ */
+const UPGRADE_JSON: { site: string; command: string[] } = {
+  site: "upgrade --json",
+  command: ["upgrade"],
+};
+
+/**
+ * Commands and subcommands that register one of the three flags but have no matrix row yet. Each entry says why.
+ * Shrinking this list is the work; a new entry needs a reason.
+ */
+const EXEMPT: Record<string, string> = {
+  "tool add --dry-run":
+    "forwards --dry-run to a spawned flisk resource, which the in-process dry-run rows cannot start; add.test.ts checks the forwarding and resource --dry-run has its own row",
+  "projects --yes":
+    "only confirms --stale --prune, which deletes Docker objects, so a matrix row cannot run it; projects-prune.test.ts covers every prompt path",
+  "create --yes":
+    "creates a new project folder from answers or flags and never runs inside an existing project, so the matrix's project-required rows do not fit; create.test.ts runs it with no terminal and covers the defaults, the flags and the errors",
+  "create --dry-run":
+    "prints the flisk commands it would run and writes nothing, in a folder that is not a project; create.test.ts proves nothing is written",
+  "create --json":
+    "creates a project outside one instead of failing, so the matrix's project-required rows do not fit; create.test.ts covers the dry run, real run and errors, and machine-output-contract.test.ts covers the envelope",
+  "repos clone --json":
+    "a subcommand of repos that clones git repos; repos.test.ts covers the envelope",
+  "repos list --json":
+    "a subcommand of repos that reads the configured repositories and git state without cloning; repos-list.test.ts covers the envelope",
+  "distribute board --json":
+    "a subcommand of distribute; distribute.test.ts covers the envelope with a temp project",
+  "distribute status --json":
+    "a subcommand of distribute that needs a distribution.json; distribute.test.ts covers the envelope and --init",
+  "distribute status --dry-run":
+    "dry-run on distribute status requires --init; distribute.test.ts proves --init --dry-run writes nothing and emits a machine envelope under --json",
+  "distribute kit --json":
+    "a subcommand of distribute; distribute.test.ts covers the envelope with a temp project",
+  "distribute kit --dry-run":
+    "takes a required <resource> argument and prints the kit instead of 'Dry run -' lines only; distribute.test.ts proves it writes nothing",
+  "connect --json":
+    "takes a required <host> argument and works outside a project, so the matrix's argument-less, project-required rows do not fit; connect.test.ts covers the envelope and its error cases",
+  "config explain --json":
+    "takes a required <file> argument, so the matrix's argument-less run cannot exercise it; config-explain.test.ts covers the envelope and its error cases",
+  "doctor --dry-run":
+    "with --fix, prints the Dry run line only when a repair is planned; repairs come from the host's Docker networks and leftover probes, so a temp project may plan none",
+  "doctor --yes":
+    "with --fix, removes unused Docker networks on the host's Docker daemon; a test run would act on that daemon",
+  "down --json":
+    "runs tilt down against the host's Tilt binary and stops any tilt up for the project; needs Tilt and a running stack",
+  "down --yes":
+    "runs tilt down against the host's Tilt binary and stops any tilt up for the project; needs Tilt and a running stack",
+  "export --dry-run":
+    "spawns npx @flisk-sh/flisk-export over the network; export.test.ts checks that it is forwarded",
+  "import --yes": "spawns npx flisk-import over the network",
+  "import --dry-run":
+    "spawns npx flisk-import over the network; import.test.ts checks that it is forwarded",
+  "import --json":
+    "spawns npx flisk-import over the network; import.test.ts covers the envelope with a spawn double",
+  "import tiltfile --yes": "runs flisk-import tiltfile: spawns npx flisk-import over the network",
+  "import tiltfile --dry-run":
+    "runs flisk-import tiltfile; import-tiltfile.test.ts checks that it is forwarded",
+  "import tiltfile --json":
+    "runs flisk-import tiltfile; import-tiltfile.test.ts covers the envelope with a spawn double",
+  "tiltfile --yes":
+    "same importer as import tiltfile --yes: spawns npx flisk-import over the network",
+  "tiltfile --dry-run":
+    "same importer as import tiltfile --dry-run; import-tiltfile.test.ts checks that it is forwarded",
+  "tiltfile --json":
+    "same importer as import tiltfile --json; import-tiltfile.test.ts covers the envelope with a spawn double",
+  "import compose --yes": "same importer as import --yes: spawns npx flisk-import over the network",
+  "import compose --dry-run":
+    "same importer as import --dry-run; import.test.ts checks that it is forwarded",
+  "import compose --json":
+    "same importer as import --json; import.test.ts covers the envelope with a spawn double",
+  "compose --yes": "same importer as import --yes: spawns npx flisk-import over the network",
+  "compose --dry-run":
+    "same importer as import --dry-run; import.test.ts checks that it is forwarded",
+  "compose --json":
+    "same importer as import --json; import.test.ts covers the envelope with a spawn double",
+  "project --json":
+    "creates a project outside one instead of failing, so the outside-project row does not apply; json-scaffold-commands.test.ts covers it",
+  "logs --json":
+    "reads logs through the host's Tilt UI port; needs Tilt, and the output depends on whether a stack is running",
+  "mcp check --json":
+    "takes a required <target> argument (a URL or a resource name) and talks to an MCP server over HTTP, so the matrix's argument-less run cannot exercise it; mcp-check.test.ts covers the envelope against a local fake server",
+  "os --json":
+    "starts the host's fliskos command (or FliskOS.app) and keeps running until it stops, so a matrix run would launch a server; os.test.ts covers the envelope with a stub fliskos and spawn doubles",
+  "restart --json":
+    "restarts a container through the host's Docker, or triggers a resource on the host's Tilt UI port for local-process resources; needs Tilt and a running stack",
+  "run --json":
+    "takes a required <service> and a command after --, and runs it in the service's container or as a local process, so the matrix's argument-less run cannot exercise it; run.test.ts covers the envelope with a local-process service",
+  "runtime --json":
+    "checks the packaged install's bundled assets, so a source checkout reports ok: false; prints {ok, assetRoot, missing, templateErrors}, not the envelope",
+  "up --json": "starts containers through the host's Docker, Compose and Tilt; needs Docker",
+  "upgrade --dry-run":
+    "compares the installed CLI with origin over git on the host, and prints 'Dry run:' rather than 'Dry run -'",
+  "upgrade --yes":
+    "updates the installed CLI checkout, so a test run would rebuild the repo under test",
+  "wait --json":
+    "blocks until services are ready (or the timeout passes) and needs Tilt or a running stack, so a matrix run would wait for a timeout; wait-inprocess.test.ts covers the envelope and exit codes with in-process doubles",
+  "version --json":
+    "prints the version envelope and works outside a project, so the matrix's project-required rows do not fit; version.test.ts covers the envelope",
+  "tool list --json":
+    "lists the static tool catalogue and works outside a project, so the matrix's project-required rows do not fit; tool-add.test.ts covers the envelope",
+  "open --json":
+    "polls for a running frontend on a published port, so a matrix run would wait for timeouts; open.test.ts covers the envelope and its error cases",
+};
+
+interface FlagSite {
+  key: string;
+  flags: string[];
+}
+
+/**
+ * `--json` prints one envelope. Some commands pretty-print it over several lines, so the whole of stdout must parse
+ * as one JSON value rather than one line.
+ */
+function parseOneEnvelope(stdout: string): {
+  schemaVersion: number;
+  data: unknown;
+  errors: unknown[];
+} {
+  const envelope = JSON.parse(stdout) as {
+    schemaVersion: number;
+    data: unknown;
+    errors: unknown[];
+  };
+  expect(Object.keys(envelope).sort()).toEqual(["data", "errors", "schemaVersion"]);
+  return envelope;
+}
+
+/** Walks a Commander command and its subcommands, returning each one that registers a contract flag. */
+function collectFlagSites(command: Command, prefix: string[] = []): FlagSite[] {
+  const name = [...prefix, command.name()].filter(Boolean);
+  const sites: FlagSite[] = [];
+  for (const option of command.options) {
+    if (option.long === "--json" || option.long === "--dry-run" || option.long === "--yes") {
+      sites.push({ key: `${name.join(" ")} ${option.long}`, flags: [option.long] });
+    }
+  }
+  for (const sub of command.commands) {
+    sites.push(...collectFlagSites(sub, name));
+  }
+  return sites;
+}
+
+/** Every file under `dir` as a map of root-relative path to content, so a test can prove nothing was written. */
+function snapshotTree(root: string, dir = root, out: Record<string, string> = {}) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) snapshotTree(root, full, out);
+    else out[path.relative(root, full)] = fs.readFileSync(full, "utf-8");
+  }
+  return out;
+}
+
+/** The `<command> <flag>` sites that have a matrix row. */
+function coveredSites(): Set<string> {
+  return new Set([
+    ...JSON_MATRIX.map((row) => `${row.command.join(" ")} --json`),
+    ...JSON_SPAWN_MATRIX.map((row) => row.site),
+    ...DRY_RUN_MATRIX.map((row) => row.site),
+    ...YES_MATRIX.map((row) => row.site),
+    AGENT_SESSIONS_JSON.site,
+    DOCTOR_JSON.site,
+    UPGRADE_JSON.site,
+  ]);
+}
+
+async function loadAllCommands(): Promise<Command[]> {
+  const files = fs
+    .readdirSync(commandsDir)
+    .filter((file) => file.endsWith(".ts") && !file.includes(".test."));
+  const commands: Command[] = [];
+  for (const file of files) {
+    const mod = (await import(path.join(commandsDir, file))) as Record<string, unknown>;
+    for (const value of Object.values(mod)) {
+      if (value && typeof value === "object" && "options" in value && "commands" in value) {
+        commands.push(value as Command);
+      }
+    }
+  }
+  return commands;
+}
+
+/** The command object that owns each in-project JSON row. `config verify` runs through its `verify` subcommand. */
+const IN_PROCESS_TARGETS: Record<string, { command: Command; args: string[] }> = {
+  stacks: { command: stacksCommand, args: [] },
+  resources: { command: resourcesCommand, args: [] },
+  "agent list": { command: agentCommand, args: ["list"] },
+  projects: { command: projectsCommand, args: [] },
+  status: { command: statusCommand, args: [] },
+  networks: { command: networksCommand, args: [] },
+  "config verify": { command: configCommand, args: ["verify"] },
+};
+
+describe("flag contract: --json", () => {
+  it.each(JSON_MATRIX)(
+    "flisk $command --json prints one envelope in a project",
+    async ({ command, project }) => {
+      // In-project rows run the command object in-process: the envelope is printed by the command itself, so the
+      // child process adds no coverage here. Outside-project rows stay spawns, because they exercise the top-level handler.
+      const root = createTempProject(project);
+      const target = IN_PROCESS_TARGETS[command.join(" ")];
+      const result = await runCommandInProcess(target.command, [...target.args, "--json"], root);
+      expect(result.stderr).not.toMatch(/^\{/m);
+      const envelope = parseOneEnvelope(result.stdout);
+      expect(envelope.schemaVersion).toBe(1);
+      expect(Array.isArray(envelope.errors)).toBe(true);
+    },
+  );
+
+  // `projects` lists running projects outside a project instead of failing; it has its own test below.
+  it.each(JSON_MATRIX.filter(({ command }) => command.join(" ") !== "projects"))(
+    "flisk $command --json outside a project fails with a null-data envelope",
+    ({ command }) => {
+      const result = runFlisk([...command, "--json"], { cwd: createTempDir() });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Could not find project root");
+      expect(result.stderr).not.toMatch(/^\{/m);
+      const envelope = parseOneEnvelope(result.stdout);
+      expect(envelope.data).toBeNull();
+      expect(envelope.errors).toHaveLength(1);
+    },
+  );
+});
+
+describe("flag contract: --json for projects outside a project", () => {
+  it("flisk projects --json outside a project prints one envelope listing running projects", () => {
+    const result = runFlisk(["projects", "--json"], { cwd: createTempDir() });
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain("Could not find project root");
+    const envelope = parseOneEnvelope(result.stdout);
+    expect(envelope.errors).toEqual([]);
+    expect((envelope.data as { projects: unknown }).projects).toEqual(expect.any(Array));
+  });
+});
+
+describe("flag contract: --json for commands that change the project", () => {
+  it.each(JSON_SPAWN_MATRIX)(
+    "flisk $site prints one envelope and no prompt in a project",
+    ({ command, project }) => {
+      const root = createTempProject(project);
+      const result = runFlisk([...command, "--json"], { cwd: root, input: "", timeout: 120_000 });
+      expect(result.status).toBe(0);
+      expect(result.stderr).not.toMatch(/^\{/m);
+      expect(result.stdout).toMatch(/^\{[^\n]*\}\n$/);
+      const envelope = parseOneEnvelope(result.stdout);
+      expect(envelope.errors).toEqual([]);
+      expect(envelope.data).not.toBeNull();
+    },
+    120_000,
+  );
+
+  it.each(JSON_SPAWN_MATRIX)(
+    "flisk $site outside a project fails with a null-data envelope",
+    ({ command }) => {
+      const result = runFlisk([...command, "--json"], { cwd: createTempDir(), input: "" });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Could not find project root");
+      expect(result.stderr).not.toMatch(/^\{/m);
+      const envelope = parseOneEnvelope(result.stdout);
+      expect(envelope.data).toBeNull();
+      expect(envelope.errors).toEqual([expect.objectContaining({ code: "NOT_IN_PROJECT" })]);
+    },
+  );
+});
+
+describe("flag contract: --json for doctor", () => {
+  it(`${DOCTOR_JSON.site} prints one envelope with no project`, () => {
+    const result = runFlisk([...DOCTOR_JSON.command, "--json"], {
+      cwd: createTempDir(),
+      timeout: 60_000,
+    });
+    expect(result.stderr).not.toMatch(/^\{/m);
+    const envelope = parseOneEnvelope(result.stdout);
+    expect(envelope.schemaVersion).toBe(1);
+    expect(Array.isArray(envelope.errors)).toBe(true);
+  }, 60_000);
+});
+
+describe("flag contract: --json for upgrade", () => {
+  it(`${UPGRADE_JSON.site} requires --dry-run and fails with a null-data envelope`, async () => {
+    const dir = createTempDir("flisk-upgrade-json-");
+    try {
+      const result = await runCommandInProcess(upgradeCommand, ["--json"], dir);
+      expect(result.status).toBe(1);
+      expect(result.stderr).not.toMatch(/^\{/m);
+      const envelope = parseOneEnvelope(result.stdout);
+      expect(envelope.schemaVersion).toBe(1);
+      expect(envelope.data).toBeNull();
+      expect(envelope.errors).toEqual([
+        expect.objectContaining({
+          code: "COMMAND_FAILED",
+          message: expect.stringContaining("--dry-run"),
+        }),
+      ]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("flag contract: --json error envelope for agent sessions", () => {
+  // Without --session-id the command lists sessions; nothing listens behind the route here, so it fails.
+  it(`${AGENT_SESSIONS_JSON.site} fails with a null-data envelope when the agent is not running`, async () => {
+    const root = createTempProject(AGENT_SESSIONS_JSON.project);
+    const closed = createServer();
+    await new Promise<void>((resolve) => closed.listen(0, "127.0.0.1", () => resolve()));
+    const { port } = closed.address() as AddressInfo;
+    await new Promise<void>((resolve) => closed.close(() => resolve()));
+    const result = runFlisk([...AGENT_SESSIONS_JSON.command, "--json"], {
+      cwd: root,
+      env: { FLISK_SERVICE_BASE_URL: `http://127.0.0.1:${port}` },
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).not.toMatch(/^\{/m);
+    const envelope = parseOneEnvelope(result.stdout);
+    expect(envelope.schemaVersion).toBe(1);
+    expect(envelope.data).toBeNull();
+    expect(envelope.errors).toEqual([expect.objectContaining({ code: "AGENT_NOT_RUNNING" })]);
+  });
+});
+
+describe("flag contract: completeness", () => {
+  it("every command that registers --json, --dry-run or --yes has a matrix row or an exemption", async () => {
+    const sites = (await loadAllCommands()).flatMap((command) => collectFlagSites(command));
+    expect(sites.length).toBeGreaterThan(0);
+
+    const covered = coveredSites();
+    const missing = sites
+      .map((site) => site.key)
+      .filter((key) => !covered.has(key) && !(key in EXEMPT));
+    expect(missing).toEqual([]);
+  });
+
+  it("does not keep an exemption for a site that now has a matrix row", () => {
+    const covered = coveredSites();
+    expect(Object.keys(EXEMPT).filter((key) => covered.has(key))).toEqual([]);
+  });
+
+  it("flags an exemption that no longer matches a real flag, so the list cannot go stale", async () => {
+    const sites = new Set(
+      (await loadAllCommands())
+        .flatMap((command) => collectFlagSites(command))
+        .map((site) => site.key),
+    );
+    const stale = [...Object.keys(EXEMPT), ...coveredSites()].filter((key) => !sites.has(key));
+    expect(stale).toEqual([]);
+  });
+});
+
+/** The command object and arguments that each dry-run row runs in-process, without `--dry-run` (added below). */
+const DRY_RUN_TARGETS: Record<string, { command: Command; args: string[] }> = {
+  resource: { command: resourceCommand, args: ["preview-api", "--stack", "api", "--yes"] },
+  "config regenerate": { command: configCommand, args: ["regenerate"] },
+  connect: { command: connectCommand, args: ["claude"] },
+  down: { command: downCommand, args: [] },
+  eject: { command: ejectCommand, args: [] },
+  up: { command: upCommand, args: [] },
+  "config migrate": { command: configCommand, args: ["migrate"] },
+  "repos clone": { command: reposCommand, args: ["clone"] },
+  "config enable-infra": { command: configCommand, args: ["enable-infra", "monitoring"] },
+  "config disable-infra": { command: configCommand, args: ["disable-infra", "monitoring"] },
+};
+
+describe("flag contract: --dry-run", () => {
+  // `down --dry-run` runs the machine checks first; stub docker and tilt so it passes without them installed (#2898).
+  let restoreTools = () => {};
+  beforeAll(() => {
+    restoreTools = installFakeContainerTools();
+  });
+  afterAll(() => restoreTools());
+
+  it.each(DRY_RUN_MATRIX)(
+    "flisk $site prints its plan and writes nothing",
+    async ({ command, project, expect: line }) => {
+      const root = createTempProject(project);
+      const before = snapshotTree(root);
+      // The plan is printed by the command itself, so the row runs in-process. Each row is one command object,
+      // so Commander's kept option values cannot leak between rows.
+      const target = DRY_RUN_TARGETS[command.join(" ")];
+      const result = await runCommandInProcess(target.command, [...target.args, "--dry-run"], root);
+      expect(result.status ?? 0).toBe(0);
+      expect(result.stdout).toContain(line);
+      expect(snapshotTree(root)).toEqual(before);
+    },
+  );
+});
+
+describe("flag contract: --yes", () => {
+  it.each(YES_MATRIX)(
+    "flisk $site runs without a prompt when stdin is closed",
+    ({ command, project }) => {
+      const root = createTempProject(project);
+      const result = runFlisk([...command, "--yes"], { cwd: root, input: "", timeout: 60_000 });
+      expect(result.status).toBe(0);
+      expect(`${result.stdout}${result.stderr}`).not.toMatch(/\(y\/n\)|\[y\/N\]/i);
+    },
+  );
+});
+
+function collectCommands(
+  command: Command,
+  prefix: string[] = [],
+): Array<{ name: string; command: Command }> {
+  const pathParts = [...prefix, command.name()].filter(Boolean);
+  const items: Array<{ name: string; command: Command }> = [{ name: pathParts.join(" "), command }];
+  for (const sub of command.commands) {
+    items.push(...collectCommands(sub, pathParts));
+  }
+  return items;
+}
+
+describe("flag contract: -y/--yes and --force convention", () => {
+  it("every command that defines --yes also defines -y", async () => {
+    const allCommands = (await loadAllCommands()).flatMap((cmd) => collectCommands(cmd));
+    const missingShort = allCommands.flatMap(({ name, command }) =>
+      command.options
+        .filter((option) => option.long === "--yes" && option.short !== "-y")
+        .map(() => name),
+    );
+    expect(missingShort).toEqual([]);
+  });
+
+  it("uses the shared YES_OPTION_DESCRIPTION across standard --yes commands", async () => {
+    const allCommands = new Map(
+      (await loadAllCommands())
+        .flatMap((cmd) => collectCommands(cmd))
+        .map(({ name, command }) => [name, command] as const),
+    );
+    for (const commandName of [
+      "project",
+      "resource",
+      "stack",
+      "eject",
+      "import",
+      "upgrade",
+      "down",
+    ]) {
+      const command = allCommands.get(commandName);
+      expect(command, `expected command "${commandName}" to exist`).toBeDefined();
+      const yesOption = command?.options.find((option) => option.long === "--yes");
+      expect(yesOption?.short, `expected "${commandName}" to have -y`).toBe("-y");
+      expect(yesOption?.description, `expected "${commandName}" to use shared description`).toBe(
+        YES_OPTION_DESCRIPTION,
+      );
+    }
+  });
+
+  it("never defines --force with a 'skip confirmation' description", async () => {
+    const allCommands = (await loadAllCommands()).flatMap((cmd) => collectCommands(cmd));
+    const badForce = allCommands.flatMap(({ name, command }) =>
+      command.options
+        .filter(
+          (option) =>
+            option.long === "--force" &&
+            /(skip|bypass|suppress|without).*(confirm|prompt)/i.test(option.description),
+        )
+        .map((option) => `${name}: ${option.description}`),
+    );
+    expect(badForce).toEqual([]);
+  });
+
+  it("uses consistent descriptions for --json options", async () => {
+    const allCommands = (await loadAllCommands()).flatMap((cmd) => collectCommands(cmd));
+    const jsonOptions = allCommands.flatMap(({ name, command }) =>
+      command.options
+        .filter((option) => option.long === "--json")
+        .map((option) => ({ name, description: option.description })),
+    );
+    expect(jsonOptions.length).toBeGreaterThan(0);
+    for (const { description } of jsonOptions) {
+      const lower = description.toLowerCase();
+      expect(lower.includes("json") || lower.includes("machine-readable")).toBe(true);
+    }
+  });
+});
+
+describe("flag contract: --project on project-scoped commands", () => {
+  it("logs, restart and status expose the same required --project <path> option in specs", async () => {
+    const commands = new Map(
+      (await loadAllCommands())
+        .flatMap((cmd) => collectCommands(cmd))
+        .map(({ name, command }) => [name, command] as const),
+    );
+
+    for (const name of ["logs", "restart", "status"]) {
+      const option = commands
+        .get(name)
+        ?.options.find((candidate) => candidate.long === "--project");
+      expect(option?.flags, `${name} --project flags`).toBe("--project <path>");
+      const spec = COMMAND_SPECS.find((entry) => entry.path.join(" ") === name);
+      expect(
+        spec?.options.some((candidate) => candidate.flags === "--project <path>"),
+        `${name} generated spec`,
+      ).toBe(true);
+    }
+  });
+});
+
+describe("flag contract: unknown flag handling", () => {
+  it("rejects unknown flags with error and non-zero exit code", () => {
+    const dir = createTempDir("flisk-unknown-flag-");
+    try {
+      const res = runFlisk(["status", "--nonexistent-flag-test"], { cwd: dir });
+      expect(res.status).toBe(2);
+      expect(res.stderr).toContain("error: unknown option");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

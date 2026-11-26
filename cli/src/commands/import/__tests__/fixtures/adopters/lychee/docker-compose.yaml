@@ -1,0 +1,120 @@
+# Trimmed for Flisk importer tests from LycheeOrg/Lychee's docker-compose.yaml (MIT),
+# the Compose file the draft spec in LycheeOrg/Lychee#4936 was written against.
+# Kept: the base anchors, a renamed service, the custom `lychee` network, a profile,
+# tmpfs, env_file, deploy limits, start_period and a volume with its own Docker name.
+# Dropped: the worker, phpmyadmin's long comments, the nsfw and geo-decoding
+# sidecars and the per-variable documentation blocks.
+
+x-base-lychee-setup: &base-lychee-setup
+  image: ghcr.io/lycheeorg/lychee:latest
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+    - seccomp:unconfined
+  cap_drop:
+    - ALL
+  cap_add:
+    - CHOWN
+    - SETGID
+    - SETUID
+    - DAC_OVERRIDE
+    - NET_BIND_SERVICE
+  tmpfs:
+    - /tmp:noexec,nosuid,nodev,size=100m
+  deploy:
+    resources:
+      limits:
+        cpus: "2"
+        memory: 2G
+      reservations:
+        cpus: "0.5"
+        memory: 512M
+  env_file:
+    - path: ./.env
+  volumes:
+    - ./lychee/uploads:/app/public/uploads
+  networks:
+    - lychee
+
+x-common-env: &common-env
+  PUID: "${PUID:-1000}"
+  PGID: "${PGID:-1000}"
+
+services:
+  lychee_api:
+    <<: *base-lychee-setup
+    container_name: lychee-api
+    expose:
+      - "${APP_PORT:-8000}"
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    environment:
+      <<: *common-env
+    depends_on:
+      lychee_db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/up"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  phpmyadmin:
+    image: phpmyadmin
+    restart: always
+    ports:
+      - 8080:80
+    environment:
+      - PMA_HOST=lychee_db
+      - PMA_PORT=3306
+    depends_on:
+      lychee_db:
+        condition: service_healthy
+    networks:
+      - lychee
+    profiles:
+      - phpmyadmin
+
+  lychee_db:
+    image: mariadb:11
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
+      - CHOWN
+    tmpfs:
+      - /tmp:noexec,nosuid,nodev,size=200m
+    env_file:
+      - path: ./.env
+        required: false
+    environment:
+      - MYSQL_ROOT_PASSWORD=${DB_ROOT_PASSWORD:-rootpassword}
+      - MYSQL_DATABASE=${DB_DATABASE:-lychee}
+      - MYSQL_USER=${DB_USERNAME:-lychee}
+      - MYSQL_PASSWORD=${DB_PASSWORD:-password}
+    expose:
+      - 3306
+    volumes:
+      - mysql:/var/lib/mysql
+    networks:
+      - lychee
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+networks:
+  lychee:
+
+volumes:
+  mysql:
+    name: lychee_prod_mysql
+    driver: local

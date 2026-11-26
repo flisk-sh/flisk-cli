@@ -1,0 +1,21 @@
+/* Copyright (c) 2026 Flisk Landscape contributors */
+/* SPDX-License-Identifier: MIT */
+
+/* Config Inspector styles.
+   Shared IDE styles live in /static/styles.css; these are the rules
+   that were previously inline in the config tree markup. */
+
+.config-category {
+  margin-top: 1rem;
+}
+
+.config-category-title {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+}
+
+.config-category-items {
+  list-style: none;
+  padding-left: 0.5rem;
+}

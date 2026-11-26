@@ -1,0 +1,70 @@
+# Dependencies
+node_modules/
+*.log
+
+# npm is not the package manager here (bun.lock is); a stray package-lock.json
+# would pin another platform's optional binaries and break the Windows E2E job.
+package-lock.json
+# The one lockfile that is wanted: it pins the npm CLI that release-binaries.yml installs for trusted publishing.
+!.github/npm-cli/package-lock.json
+# The TypeScript compiler benchmark installs its experimental compilers with npm ci from this lockfile.
+!scripts/benchmarks/ts-compilers/package-lock.json
+
+# Build output
+cli/dist/
+cli/dist-bundle/
+*.tsbuildinfo
+*.tgz
+
+# Staged into cli/ only at publish time (see scripts/stage-npm-engine.sh) -
+# real sources live at the repo root.
+cli/Tiltfile
+cli/engine/
+cli/discovery/
+cli/specs/
+cli/ext/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Testing
+coverage/
+test-results/
+.nyc_output/
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# Generated reports
+.jscpd-report/
+.flisk/.flisk-out/
+.flisk/project.local.json
+.flisk/smoke/
+
+release-dist-*/
+
+# scratch file for trying Starlark changes (docs/contributing/02-feature-recipes.md)
+/try.Tiltfile
+
+# Bring-your-own templates synced from their own repositories by scripts/sync-byo-templates.sh (examples/byo/templates.json, #1965)
+/examples/byo/create-vue/
+/examples/byo/create-next-app/
+/examples/byo/create-adonisjs/
+/examples/byo/create-analog/
+/examples/byo/create-bati/
+/examples/byo/.sync-*
+.gstack/

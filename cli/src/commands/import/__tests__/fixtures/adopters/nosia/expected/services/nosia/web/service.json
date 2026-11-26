@@ -1,0 +1,52 @@
+{
+  "$schema": "https://flisk.sh/schema.service.json",
+  "schemaVersion": 1,
+  "appName": "web",
+  "appType": "bring-your-own",
+  "stack": "nosia",
+  "port": 3000,
+  "healthCheck": {
+    "command": ["curl", "-f", "http://localhost:3000/up"],
+    "interval": 2,
+    "timeout": 5,
+    "retries": 30
+  },
+  "image": "dilolabs/nosia:latest",
+  "exposeViaProxy": false,
+  "dependsOn": [
+    {
+      "name": "db-migrate",
+      "condition": "service_completed_successfully"
+    },
+    {
+      "name": "postgres-db",
+      "condition": "service_healthy"
+    }
+  ],
+  "env": {
+    "AI_API_KEY": "${AI_API_KEY}",
+    "AI_BASE_URL": "${AI_BASE_URL}",
+    "DATABASE_URL": "${DATABASE_URL}",
+    "EMBEDDING_MODEL": "${EMBEDDING_MODEL}",
+    "LLM_MODEL": "${LLM_MODEL}",
+    "SECRET_KEY_BASE": "${SECRET_KEY_BASE}"
+  },
+  "restart": "on-failure:5",
+  "models": [
+    {
+      "name": "llm",
+      "model": "${LLM_MODEL}"
+    },
+    {
+      "name": "embedding",
+      "model": "${EMBEDDING_MODEL}"
+    }
+  ],
+  "volumes": [
+    {
+      "source": "rails-storage",
+      "target": "/rails/storage",
+      "name": "nosia_rails-storage"
+    }
+  ]
+}

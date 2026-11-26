@@ -1,0 +1,16 @@
+name = "flisk-app-builder-mcp"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+# Needs no KV, no database and no secrets.
+# build.flisk.si is the address for people; mcp.flisk.sh stays served until the Claude directory listing points at the new one.
+# mcp.flisk.si belongs to the Pages MCP worker: never route it here.
+routes = [
+  { pattern = "build.flisk.si", custom_domain = true },
+  { pattern = "mcp.flisk.sh", custom_domain = true },
+]
+
+[vars]
+# Per caller IP, counted in the Cache API (approximate per data center), like the demo worker. See src/limits.js.
+MAX_CALLS_PER_IP_MINUTE = "30"
+MAX_CALLS_PER_IP_HOUR = "300"

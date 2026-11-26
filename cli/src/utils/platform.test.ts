@@ -1,0 +1,89 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  binaryAssetNameFor,
+  executableName,
+  fliskArch,
+  fliskArchFor,
+  fliskOs,
+  fliskOsFor,
+  pathLookups,
+  powerShellPathLiteral,
+} from "./platform.js";
+
+describe("platform mappings", () => {
+  it.each([
+    ["linux", "x64", "flisk-linux-amd64"],
+    ["darwin", "arm64", "flisk-darwin-arm64"],
+    ["win32", "x64", "flisk-windows-amd64.exe"],
+    ["win32", "arm64", null],
+    ["freebsd", "x64", null],
+  ])("maps %s/%s to %s", (platformName, architecture, expected) => {
+    expect(binaryAssetNameFor(platformName, architecture)).toBe(expected);
+  });
+
+  it("maps Node platform and architecture names", () => {
+    expect(fliskOsFor("win32")).toBe("windows");
+    expect(fliskArchFor("x64")).toBe("amd64");
+    expect(fliskOsFor("windows")).toBeNull();
+  });
+
+  it("includes Windows executable suffixes for PATH lookup", () => {
+    expect(pathLookups("tilt", true)).toEqual(["tilt", "tilt.exe", "tilt.cmd", "tilt.bat"]);
+  });
+
+  it("quotes PowerShell path literals without expanding them", () => {
+    expect(powerShellPathLiteral("C:\\Users\\me\\Documents\\flisk")).toBe(
+      "'C:\\Users\\me\\Documents\\flisk'",
+    );
+    expect(powerShellPathLiteral("C:\\it's here\\$home")).toBe("'C:\\it''s here\\$home'");
+  });
+
+  it("uses the native executable name for the current operating system", () => {
+    expect(executableName()).toBe(process.platform === "win32" ? "flisk.exe" : "flisk");
+  });
+
+  describe("fliskOs", () => {
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+
+    afterEach(() => {
+      if (originalPlatform) {
+        Object.defineProperty(process, "platform", originalPlatform);
+      }
+    });
+
+    it.each([
+      ["darwin", "darwin"],
+      ["linux", "linux"],
+      ["win32", "windows"],
+    ] as const)("maps %s to %s", (platform, expected) => {
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        value: platform,
+      });
+      expect(fliskOs()).toBe(expected);
+    });
+  });
+
+  describe("fliskArch", () => {
+    const originalArch = Object.getOwnPropertyDescriptor(process, "arch");
+
+    afterEach(() => {
+      if (originalArch) {
+        Object.defineProperty(process, "arch", originalArch);
+      }
+    });
+
+    it.each([
+      ["x64", "amd64"],
+      ["arm64", "arm64"],
+    ] as const)("maps %s to %s", (arch, expected) => {
+      Object.defineProperty(process, "arch", {
+        configurable: true,
+        value: arch,
+      });
+      expect(fliskArch()).toBe(expected);
+    });
+  });
+});

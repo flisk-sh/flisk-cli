@@ -1,0 +1,9 @@
+appName: nats-connector
+appType: backend
+stack: platform
+port: 4103
+features:
+  - nats
+dependsOn:
+replicas: 1
+runtime: node

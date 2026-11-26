@@ -1,0 +1,44 @@
+# One click: merge the latest main into every open PR branch that is behind.
+# Uses only GitHub's update-branch API; never checks out or runs PR code.
+# Conflicting PRs are listed in the job summary for human follow-up.
+name: 🤖 BOT | Manual | Update all PR branches with main
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: update-all-pr-branches
+  cancel-in-progress: false
+
+jobs:
+  update-all:
+    name: Update every open PR branch
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Update branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          updated=(); conflicts=(); skipped=()
+          for n in $(gh pr list --repo "$GITHUB_REPOSITORY" --state open --base main \
+            --limit 1000 --json number --jq '.[].number'); do
+            if out="$(gh api --method PUT "repos/${GITHUB_REPOSITORY}/pulls/${n}/update-branch" 2>&1)"; then
+              updated+=("#$n")
+            elif grep -qi "merge conflict" <<< "$out"; then
+              conflicts+=("#$n")
+            else
+              skipped+=("#$n")
+            fi
+          done
+          {
+            echo "### Update all PR branches"
+            echo "- Updated: ${updated[*]:-none}"
+            echo "- Merge conflict (needs a human): ${conflicts[*]:-none}"
+            echo "- Skipped (already current or no permission): ${skipped[*]:-none}"
+          } >> "$GITHUB_STEP_SUMMARY"

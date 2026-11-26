@@ -1,0 +1,36 @@
+# Measures Flisk's north star (north_star.measure in docs/gel.json: warm start of backend-postgres, Flisk vs Docker Compose)
+# every Monday and publishes the number, with this run's link, to the north-star branch. The GEL north-star guard and
+# Cilytics read it there. A missed target turns the run red.
+name: North star
+
+on:
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: north-star
+  cancel-in-progress: false
+
+jobs:
+  measure:
+    permissions:
+      contents: write
+    uses: flisk-sh/gel/.github/workflows/north-star.yml@bb90f64cd7dae9744d3f5f79b54e30c7f49e68e4 # v1.16.0
+    with:
+      gel_ref: bb90f64cd7dae9744d3f5f79b54e30c7f49e68e4
+      timeout: 60
+      # Same pinned Tilt release and checksum as .github/actions/setup-tilt, then what benchmarks.yml does: Bun (same pinned version
+      # as .github/actions/setup-bun) for the root install, and a CLI built from this commit. cli has a pnpm lockfile, so `npm ci` fails.
+      setup: |
+        curl -fsSL --retry 3 -o "$RUNNER_TEMP/tilt.tgz" https://github.com/tilt-dev/tilt/releases/download/v0.37.8/tilt.0.37.8.linux.x86_64.tar.gz
+        echo "e39513f958705d30524d55f68b1d46fbef2b46a0da568efd00e6383dee6be44f  $RUNNER_TEMP/tilt.tgz" | sha256sum -c -
+        mkdir -p "$HOME/.local/bin" && tar -xzf "$RUNNER_TEMP/tilt.tgz" -C "$HOME/.local/bin" tilt
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        npm install --global --ignore-scripts bun@1.4.4
+        node "$(npm root --global)/bun/install.js"
+        bun install --frozen-lockfile
+        (cd cli && npm run build)

@@ -1,0 +1,278 @@
+# Set up the Flisk MCP server
+
+`flisk mcp` is a Model Context Protocol (MCP) server that ships inside the Flisk CLI. Your MCP client starts it as a child process and talks to it over stdio.
+
+It runs on your machine, next to your project. It is not a hosted endpoint: there is no URL to point a client at, no account to create, and no separate MCP package to install.
+
+This page is the setup path, from installing Flisk to a first `doctor` and `up`. For tool calls and everyday use, see the [Flisk MCP quick guide](flisk-mcp.md).
+
+## What you need
+
+| Requirement | What it is for |
+| --- | --- |
+| The Flisk CLI (`flisk --version`) | Everything. `flisk mcp` is a subcommand of it. |
+| An MCP client: Codex, Claude Code, Claude Desktop, Cursor, Gemini CLI, or VS Code | Connecting the server. |
+| Docker running and Tilt installed | Starting and stopping a stack. |
+| A Flisk project directory, the folder that holds `.flisk/project.json` | Every tool except `doctor`. |
+
+`doctor` runs outside a project, so you can connect the server and check the machine before a project exists.
+
+## 1. Install Flisk
+
+Install the CLI with npm (Node.js 22.12 or newer):
+
+```bash
+npm install -g @flisk-sh/flisk
+```
+
+Or install the prebuilt binary, which needs no Node.js (macOS and Linux):
+
+```bash
+curl -fsSL https://flisk.sh/install.sh | sh
+```
+
+Check that both the CLI and the MCP server are there:
+
+```bash
+flisk --version
+flisk mcp --help
+```
+
+Both installation paths install the same CLI, and `flisk mcp` comes with it. There is no MCP package to add: no `@flisk-sh/flisk-mcp`, no `npx @flisk-sh/flisk-mcp`, and no MCP SDK to install. Docker and Tilt are needed to start a stack, but not to connect the client or to run `doctor`.
+
+## 2. Point a client at `flisk mcp`
+
+Shortcut for Claude Code, Cursor, Codex and Gemini CLI: `flisk connect <claude|cursor|codex|gemini>` in the project writes the project entry shown below (merged into an existing file) and the Flisk skills. Add `--dry-run` to see the files first. See [Flisk for AI agents](../agents/flisk-for-agents.md). The manual steps follow.
+
+The client launches `flisk mcp` for you. The server inherits the directory it is started in, so the project tools find `.flisk/project.json` when the client runs inside a Flisk project. Two ways to make that deterministic:
+
+- start the client in the project directory, or
+- set the working directory in the client's configuration: `cwd` in Codex, and a `cd` in the command for clients that have no working-directory setting.
+
+### Codex
+
+Add a project-scoped entry to `.codex/config.toml` in the Flisk project:
+
+```toml
+[mcp_servers.flisk]
+command = "flisk"
+args = ["mcp"]
+```
+
+Codex loads project-scoped MCP settings only for trusted projects, when it runs in that project, and the server starts in Codex's directory, so the entry needs no `cwd`. Leave it out of a project file you commit: an absolute path exists only on your machine. `~/.codex/config.toml` is the global variant; there, `cwd` is the directory Codex starts the server in, so set it to the absolute path of the folder that contains `.flisk/project.json` if you start Codex elsewhere. Some older Codex app versions start a stdio server in `/` when the entry has no `cwd`; if the Flisk tools then report that they are not in a Flisk project, update Codex or pass the tools' `projectPath` argument. If your global entry sets `cwd`, Codex can apply it to the project entry too, so remove it there when you use a project entry. You can also create the entry from a terminal with `codex mcp add flisk -- flisk mcp`. Confirm the server is connected with `/mcp` in the app or `codex mcp list` in the CLI. Codex's [MCP guide](https://developers.openai.com/codex/extend/mcp) lists the other options.
+
+### Gemini CLI
+
+Gemini CLI reads project MCP servers from `.gemini/settings.json` in the Flisk project. Run `flisk connect gemini --dry-run` to see the merged file, then `flisk connect gemini`:
+
+```json
+{
+  "mcpServers": {
+    "flisk": { "command": "flisk", "args": ["mcp"] }
+  }
+}
+```
+
+Other keys (for example `mcp.allowed`, `theme` or other servers) stay in the file, and a second run changes nothing. The equivalent user-scope file is `~/.gemini/settings.json` (`flisk connect gemini --global`). Start Gemini CLI in the project folder, approve the `flisk` server when asked, and run `/mcp list` to see it. `flisk connect gemini` also writes the Flisk skills to `.agents/skills`, which Gemini CLI reads as workspace skills. The [Gemini CLI MCP guide](https://geminicli.com/docs/tools/mcp-server/) lists the other settings.
+
+### Claude Code
+
+From the Flisk project directory, add a local stdio server and start Claude Code there:
+
+```bash
+cd /path/to/your/flisk-project
+claude mcp add --scope local --transport stdio flisk -- flisk mcp
+claude
+```
+
+`--scope local` keeps the configuration in your local Claude Code settings for the current project. The server starts in the directory Claude Code runs in, so start Claude Code in the project. Run `/mcp` inside Claude Code to confirm the server is connected. The [Claude Code MCP guide](https://code.claude.com/docs/en/mcp) covers the other scopes.
+
+### Claude Desktop
+
+Claude Desktop has no working-directory setting, so run the server through a shell that changes directory first. In `claude_desktop_config.json` (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS, `%APPDATA%\Claude\claude_desktop_config.json` on Windows):
+
+```json
+{
+  "mcpServers": {
+    "flisk": {
+      "command": "sh",
+      "args": ["-c", "cd \"/path/to/your/flisk-project\" && exec flisk mcp"]
+    }
+  }
+}
+```
+
+Replace the example path with the absolute path to the folder that contains `.flisk/project.json`. A desktop app may not see the same `PATH` as your shell, so if the server does not start, put the absolute path to the `flisk` binary in that `cd` line. Restart Claude Desktop after editing the file. The [MCP quickstart](https://modelcontextprotocol.io/quickstart/user) shows where this file lives and how the client restarts it.
+
+### Cursor
+
+One click: [Add to Cursor](https://cursor.com/en/install-mcp?name=flisk&config=eyJjb21tYW5kIjoiZmxpc2siLCJhcmdzIjpbIm1jcCJdfQ==) adds `flisk mcp` to your Cursor settings. To pin the project directory instead, put the entry in `.cursor/mcp.json` in the project, or in `~/.cursor/mcp.json` for every project:
+
+```json
+{
+  "mcpServers": {
+    "flisk": {
+      "type": "stdio",
+      "command": "sh",
+      "args": ["-c", "cd \"${workspaceFolder}\" && exec flisk mcp"]
+    }
+  }
+}
+```
+
+`${workspaceFolder}` is the folder that holds `.cursor/mcp.json`. Cursor's documented stdio fields are `type`, `command`, `args`, `env`, and `envFile`; there is no `cwd` key, so the `cd` in the command is what pins the project directory. The [Cursor MCP guide](https://cursor.com/docs/mcp) lists the rest of the format.
+
+### VS Code
+
+One click: [Install in VS Code](https://vscode.dev/redirect/mcp/install?name=flisk&config=%7B%22type%22%3A%22stdio%22%2C%22command%22%3A%22flisk%22%2C%22args%22%3A%5B%22mcp%22%5D%7D) opens VS Code and asks you to add the `flisk mcp` server. Or add it to `.vscode/mcp.json` in the project:
+
+```json
+{
+  "servers": {
+    "flisk": { "type": "stdio", "command": "flisk", "args": ["mcp"] }
+  }
+}
+```
+
+VS Code starts the server in the workspace folder. Run **MCP: List Servers** from the Command Palette to confirm it is running. The [VS Code MCP guide](https://code.visualstudio.com/docs/copilot/customization/mcp-servers) lists the other options.
+
+### Clients that search the MCP Registry
+
+Flisk is listed in the official [MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.flisk-sh/flisk) as `io.github.flisk-sh/flisk`: the npm package `@flisk-sh/flisk`, started as `flisk mcp` over stdio. Clients and catalogs that read the registry can add it from there; each release publishes its version.
+
+## 3. First run
+
+![Animated Doctor, Up, Status, and Logs icon demo](../assets/flisk-mcp-tool-icons.svg)
+
+### 1. Run doctor
+
+Ask the connected agent:
+
+> Run Flisk doctor. Tell me what would block a stack from starting, and do not start anything yet.
+
+Doctor checks the container runtime, Tilt, Docker Compose, host and ingress ports, disk space, and the project's own configuration when the server runs inside a project. The response carries `data.ready` and `data.host.canUp`, plus one entry per check with a message and a suggested fix.
+
+Fix what doctor reports and run it again. A passing doctor check means the host can start a Flisk stack. It does not mean your services are healthy.
+
+### 2. Start the stack
+
+When doctor passes, ask:
+
+> Start this project's Flisk stack.
+
+`up` starts Tilt detached and returns as soon as startup has begun. A successful `up` is not a readiness signal: it says the stack was started, not that it is up. A first build can take minutes.
+
+### 3. Check readiness
+
+> Check the Flisk status and tell me which services are ready.
+
+Call `status` again until `data.tilt.readiness.ready` is `true` (`data.readiness.ready` in a local-process project, which reports no `tilt` block). `status` reports the stacks, the resources, their ingress URLs and ports, and Tilt readiness: `ready`, `pending`, `failures`, or `enabled`, and `null` when no Tilt answers.
+
+### 4. Look at the logs, then stop
+
+`logs` returns a bounded snapshot of recent output, not a live stream:
+
+> Show the last 10 minutes of API logs.
+
+Stop the stack when you are done:
+
+> Stop this project's Flisk stack.
+
+### 5. Ask in outcomes
+
+| Goal | Example request |
+| --- | --- |
+| Check machine prerequisites | “Run Flisk doctor and explain anything that needs fixing.” |
+| Find services | “List this project's Flisk resources.” |
+| Check readiness | “Show the Flisk status and tell me which services are ready.” |
+| Start everything | “Start this project's Flisk stack, then check status.” |
+| Start selected services | “Start `web` and its dependencies.” |
+| Inspect logs | “Show the latest 200 lines from `api`.” |
+| Stop services | “Stop this project's Flisk stack.” |
+
+## The tools
+
+The server exposes twenty-five tools. Seven cover the stack lifecycle: `doctor`, `up`, `down`, `status`, `wait`, `logs`, and `resource_list`. Four work on one resource: `resource_restart`, `resource_run`, `agent_list`, and `agent_sessions`. Seven inspect the project, its generated files and the starter templates: `stack_list`, `project_info`, `project_templates`, `network_list`, `config_verify`, `config_explain`, and `runtime_check`. Seven create or change files: `config_regenerate`, `resource_create`, `tool_add`, `stack_assign`, `project_init`, `project_eject`, and `project_import`. Each one except `project_templates` runs the matching Flisk CLI command, so it behaves exactly like the command you would run by hand; `project_templates` returns the template catalog that `flisk project --list --json` prints, as `data.templates`. The other seventeen in the first three groups, `tool_add`, `config_regenerate`, `resource_create`, `stack_assign`, `project_eject` and `project_import` run their command with `--json` and return its envelope; `project_init` returns the command's text output as `exitCode`, `output`, and `stderr`, and is an error result when it exits non-zero.
+
+The tools were renamed to the `<noun>_<verb>` pattern the others follow: `restart_resource` is now `resource_restart`, `list_agents` is `agent_list`, and `get_agent_sessions` is `agent_sessions`. A call to a former name still works, so an existing agent configuration keeps running, but `tools/list` shows only the new names.
+
+| Tool | What it does | Use it when | Inputs |
+| --- | --- | --- | --- |
+| `doctor` | Checks whether this machine can run a Flisk stack, and the project config when it runs in a project. | First, before `up`. | `projectPath`, `noPing` |
+| `up` | Starts the stack, or a subset of it, detached, and returns before readiness. `profile` also starts opt-in services, and `envFile` runs with another project env file. | After `doctor` passes. | `projectPath`, `stack`, `only`, `profile`, `envFile`, `force`, `dryRun`, `waitForReady`, `waitSeconds` |
+| `status` | Reports stacks, resources, ingress URLs, ports, and Tilt readiness. | To see whether the stack is ready. Pass `unhealthy: true` first after a failed `up`: `data.resources` and each stack's `resources` then hold only the broken services (`data.unhealthy` names them, `data.filteredTo` says it was trimmed). | `projectPath`, `unhealthy`, `stack` |
+| `wait` | Blocks until the named `services` (or every service when omitted) are healthy, using the same readiness rule as `up --wait` and `status`. Read-only: starts nothing and changes no files. Returns one envelope with each service's state; a failure names the service and carries its last log lines. | To wait for readiness once instead of polling `status` in a loop. | `projectPath`, `services`, `timeoutSeconds` |
+| `logs` | Returns a bounded snapshot of recent logs, 200 lines by default and 10,000 at most. `source` keeps only `runtime` output or `build` steps. | To read what a service printed, or why a build failed. Pass `unhealthy: true` after a failed `up` to read only the failing or still-starting services. | `projectPath`, `unhealthy`, `services`, `tail`, `since`, `source` |
+| `resource_list` | Lists the project's services with their stack, type, port, and project-relative folder path. | To find a service name. | `projectPath`, `stack` |
+| `down` | Stops the running stack. | When you are finished. | `projectPath`, `dryRun` |
+| `resource_restart` | Restarts a running Flisk-generated Compose container without rebuilding its image (local processes and imported Tiltfiles use `tilt trigger`); `rebuild` rebuilds the image and recreates the container through Tilt. | When one service needs a fresh start. | `projectPath`, `resource`, `rebuild` |
+| `resource_run` | Runs a one-off command with the environment one resource has in the stack, and returns its exit code, stdout and stderr. A container resource must be running. | To seed data or check a migration. Refused unless `confirm` is `true`, and `.env` values in the output are masked. | `projectPath`, `resource`, `command`, `confirm` |
+| `agent_list` | Lists the project's agent resources with their stack, runtime, durability, and port. | To work with agent resources. | `projectPath`, `stack` |
+| `agent_sessions` | Lists the sessions of a running agent resource, or reads one checkpoint. | To inspect an agent's session state. | `projectPath`, `resource`, `sessionId` (optional) |
+| `stack_list` | Lists the project's stacks with their resource counts. | To find a stack name. | `projectPath`, `services`, `verbose` |
+| `project_info` | Reports the project root, whether the generated master files exist, and resource and stack counts. | To check that a directory is a configured Flisk project. | `projectPath` |
+| `project_templates` | Lists the starter templates `project_init` can clone: key, repository, description and, for a pinned template, the commit (`ref`) it checks out. | To pick a `template` for `project_init`. | none |
+| `network_list` | Lists the Traefik URL of every frontend and API service and whether it answers. | To find the URL to open or call. | `projectPath`, `stack` |
+| `config_verify` | Checks that the generated files match `.flisk/project.json` and that every `service.json` is valid. By default reports every error line and a short `data.diffs` entry per file (path, `state` missing or different, line counts), with no file bodies; pass `diffFiles` to get capped diffs for those files only. | After editing `service.json` or `project.json`, or when `up` reports drift. | `projectPath`, `diffFiles` |
+| `config_explain` | Says whether a file is generated or user-owned, and what editing it does on `up`. | Before editing a file you did not write. | `projectPath`, `file` |
+| `runtime_check` | Checks that the installed CLI has its bundled runtime assets. | When generated files or templates are missing. | `projectPath` |
+| `config_regenerate` | Regenerates the master config files from `.flisk/project.json`; a dry run unless `dryRun` is `false`. | When `config_verify` reports a drifted generated file. | `projectPath`, `dryRun` |
+| `tool_add` | Adds a tool by its everyday name with `flisk tool add` (react, nextjs, fastapi, postgresql, rag, llm-api…): runs the matching `flisk resource`, returns manual steps for tools Flisk cannot generate, and rejects cloud providers (aws, google-cloud, azure, kubernetes). | When the user names a tool rather than a resource type. See [Add a tool by name](../add-a-tool.md). | `projectPath`, `tool`, `name`, `stack`, `dryRun` |
+| `resource_create` | Scaffolds a service (or registers a directory that already has a `service.json`) without prompts. | To add a backend, frontend, worker, MCP server, or agent. | `projectPath`, `name`, `type`, `stack`, `framework`, `language`, `port`, `features`, `runtime`, `durability` |
+| `stack_assign` | Assigns resources that have no stack yet to a stack. | To group services so `up` can start them together. | `projectPath`, `stack`, `resources` |
+| `project_init` | Creates a Flisk project in a directory, or clones a starter template into it. | To start a new project. | `projectPath`, `template`, `path`, `agentSkills` |
+| `project_eject` | Writes `EJECTED.md`, which lists the generated Tilt files and how to run the stack with plain Tilt. It copies, moves, and deletes nothing. | When the user has decided to stop using the Flisk CLI. | `projectPath`, `confirm`, `dryRun` |
+| `project_import` | Imports the services in a directory's root `docker-compose.yml` as bring-your-own `service.json` files. | To adopt an existing Compose project. `force` is refused unless `confirm` is `true` (or `dryRun` is set). | `projectPath`, `dir`, `dryRun`, `force`, `confirm` |
+
+### Limit the tools an agent gets
+
+By default `flisk mcp` lists every tool. For a reviewer bot, a CI agent or a cloud agent, start it read-only:
+
+```json
+{ "command": "flisk", "args": ["mcp", "--read-only"] }
+```
+
+`--read-only` (or `FLISK_MCP_READ_ONLY=1`) lists and runs only the tools annotated `readOnlyHint`: `doctor`, `status`, `logs`, `resource_list`, `agent_list`, `agent_sessions`, `stack_list`, `project_info`, `project_templates`, `network_list`, `config_verify`, `config_explain` and `runtime_check`. A `tools/call` on any other tool, including a former name, returns an error result that says the server is read-only and that the user must restart it without `--read-only` to give write access.
+
+For an explicit list, pass `--tools status,logs,doctor` (or `FLISK_MCP_TOOLS=status,logs,doctor`). A tool outside the list is neither listed nor run, and an unknown name stops the server with the list of valid names. Together with `--read-only`, only the read-only tools in the list are allowed. A flag takes precedence over its environment variable. `flisk connect` does not write these options; add them to the `args` of the entry it wrote.
+
+`resource_run` and `project_import` with `force` ask for `confirm: true`, like `project_eject`, so the agent has to ask you before it runs an arbitrary command or overwrites a `service.json`.
+
+`projectPath` is an absolute path to a Flisk project root. Every tool accepts it, so a client that does not launch the server from the project directory can still target the right project. Without it, the tools use the server's own working directory and fail with `Could not find project root` when that directory is not a Flisk project. For `project_init` it is the existing directory to create the project in, or to clone the template from.
+
+Every tool publishes its input schema with `additionalProperties: false`, and the server enforces it: a call with an argument the tool does not declare is not run. It returns `isError: true`, names the unknown argument, lists the accepted ones and suggests the closest match (for example `services` when `logs` is called with `resource`).
+
+`agent_sessions`, `resource_restart` and `resource_create` need a `resource` or `name`, `config_explain` a `file`, and `stack_assign` a `stack` and at least one name in `resources`; without a `sessionId`, `agent_sessions` lists the agent's sessions.
+
+The tools that change files are careful by default. `config_regenerate` only reports what would change until it is called with `dryRun: false`; a real run discards hand edits in the generated files. `resource_create` refuses a directory that already exists unless it has a `service.json`, which it then registers; calling it again for a resource that is already registered rewrites that `service.json` and can give it a new port, so check `resource_list` first. `stack_assign` refuses a resource that is already in a stack. `project_init` never passes `--force`, so it never overwrites an existing `.flisk/project.json`; inside an existing project it refreshes that project's generated files. Leaving Flisk is your decision, so `project_eject` is refused unless it is called with `confirm: true`; with `dryRun: true` it only lists what it would write. `project_import` downloads and runs the pinned `flisk-import` package from npm, even for a dry run, and writes the `service.json` files without asking unless `dryRun` is `true`; it overwrites an existing one only with `force: true`.
+
+Some commands have no tool, so an agent runs them in a shell where you can see them:
+
+- `flisk config migrate`, `flisk config enable-infra`, and `flisk config disable-infra`: they rewrite `service.json` files or `.flisk/project.json` and have no dry run. Each prints one JSON envelope with `--json`.
+- `flisk config edit`: it opens your editor.
+
+To start part of a stack, name the services in `only`. Flisk starts their dependencies and the shared infrastructure with them.
+
+## Where the server runs
+
+- The server is a local process that your client starts and speaks to over stdio. Nothing listens on a port.
+- There is no Flisk-hosted MCP server and no remote URL to configure.
+- It runs with the permissions of the user who started the client, and every tool runs the same Flisk CLI command you would run by hand.
+- It needs the Flisk CLI on the `PATH` of the process that launches it.
+
+## If something goes wrong
+
+- **The client does not list the server:** check that the command is `flisk` with the argument `mcp`, that `flisk --version` works in the same shell, and that the client was restarted after the configuration changed.
+- **`Could not find project root`:** the server's working directory is not a Flisk project. Start the client in the project, set `cwd`, or pass `projectPath` with the absolute project path.
+- **Docker is not running:** start Docker Desktop, OrbStack, Colima, or Kiri, then run doctor again.
+- **Tilt CLI or Docker Compose is missing:** install the missing prerequisite using the links in the doctor output, then retry.
+- **Doctor passes but a service is not ready:** check project status and read that service's recent logs. Doctor checks the host and the project configuration, not every running service.
+- **`up` returns but nothing comes up:** `up` is detached, so read the stack's status and logs instead of restarting it.
+
+## Next
+
+- [Prompts to try](../agents/flisk-for-agents.md#prompts-to-try): whole tasks to paste into a connected agent, starting from an empty folder.
+- [Flisk MCP quick guide](flisk-mcp.md): tool calls in a connected client, and the `projectPath` rules.
+- [Machine-readable CLI reference](../reference/machine-readable-cli.md): the JSON shapes and exit codes behind each tool.
+- [Doctor contract](../reference/doctor-contract.md): what doctor checks and how it reports.
+- [Operator runbook](../operator-runbook.md): Docker, Tilt, and port prerequisites for running a stack.

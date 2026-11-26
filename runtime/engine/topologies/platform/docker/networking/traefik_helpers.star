@@ -1,0 +1,217 @@
+# Copyright (c) 2026 Flisk Landscape contributors
+# SPDX-License-Identifier: MIT
+# =============================================================================
+# 🐳 TILT SDK - TRAEFIK HELPERS
+# =============================================================================
+
+# === INLINED CONSTANTS for pure extension loading ===
+TRAEFIK_API_BASE_PATH = "/api"
+# === END INLINED CONSTANTS ===
+
+
+load(
+    "./traefik_constants.star",
+    "TRAEFIK_PROJECT_HOST",
+    "TRAEFIK_PROJECT_APP_HOST",
+    "TRAEFIK_PROJECT_API_HOST",
+    "TRAEFIK_ENABLE_BACKEND_PATH_RULE",
+    "TRAEFIK_ENABLE_BACKEND_HOST_RULE",
+    "TRAEFIK_ENABLE_FRONTEND_HOST_RULE",
+    "TRAEFIK_ENABLE_FRONTEND_PATH_RULE",
+    "TRAEFIK_FRONTEND_LOCALHOST_SUFFIX",
+    "TRAEFIK_WEB_ENTRYPOINT",
+    "TRAEFIK_WEBSECURE_ENTRYPOINT",
+    "TRAEFIK_API_VERSION",
+)
+
+
+
+def router_port_suffix():
+    """`:<port>` for a URL the browser opens, empty on port 80. `flisk up` exports the port it picked for this project's Traefik."""
+    port = os.environ.get('FLISK_HTTP_PORT', '80')
+    if port == '' or port == '80':
+        return ''
+    return ':' + port
+
+
+def build_entrypoints(enable_http, enable_https):
+    entrypoints = []
+    if enable_http:
+        entrypoints.append(TRAEFIK_WEB_ENTRYPOINT)
+    if enable_https:
+        entrypoints.append(TRAEFIK_WEBSECURE_ENTRYPOINT)
+    if len(entrypoints) == 0:
+        entrypoints.append(TRAEFIK_WEB_ENTRYPOINT)
+    return ",".join(entrypoints)
+
+
+def frontend_rule(res_name, base_path, traefik_host):
+    parts = []
+    if TRAEFIK_ENABLE_FRONTEND_HOST_RULE:
+        parts.append(
+            "Host(`{res_name}{suffix}`)".format(
+                res_name=res_name,
+                suffix=TRAEFIK_FRONTEND_LOCALHOST_SUFFIX,
+            ),
+        )
+    if traefik_host:
+        parts.append("Host(`{traefik_host}`)".format(traefik_host=traefik_host))
+    if TRAEFIK_ENABLE_FRONTEND_PATH_RULE:
+        parts.append(
+            "(Host(`{host}`) && PathPrefix(`{base_path}`))".format(
+                host=TRAEFIK_PROJECT_APP_HOST,
+                base_path=base_path,
+            ),
+        )
+        # Also accept localhost for local testing
+        parts.append(
+            "(Host(`localhost`) && PathPrefix(`{base_path}`))".format(
+                base_path=base_path,
+            ),
+        )
+    return " || ".join(parts)
+
+
+def byo_web_ui(manifest):
+    """True for a bring-your-own resource that serves a web UI and has a Traefik route (`webUi: true`, #2997).
+
+    Its pages and assets are served from `/`, so a path prefix such as /api/<name> cannot work: it is routed on its own host name,
+    `<name>.<project>.localhost`, with no prefix stripped. Everything else (APIs, `webUi` unset) keeps the path-prefix route.
+    """
+    if not manifest or manifest.get('appType') != 'bring-your-own':
+        return False
+    web_ui = manifest.get('webUi')
+    if web_ui != None and type(web_ui) != 'bool':
+        fail("MANIFEST ERROR: 'webUi' must be true or false")
+    return bool(web_ui) and bool(manifest.get('exposeViaProxy', True))
+
+
+def byo_ui_host(resource_name):
+    """The host name a `webUi` bring-your-own resource answers on: <name>.<project>.localhost. Keep in step with resolveUiBase in cli/src/utils/service-urls.ts."""
+    return resource_name + "." + TRAEFIK_PROJECT_HOST
+
+
+def path_segment_rule(path):
+    """Traefik matcher for `path` and everything below it, on a path-segment boundary (#3197).
+
+    A bare PathPrefix(`/api/vote`) also matches `/api/voters`, which then reaches `vote` with the prefix stripped mid-word
+    (`/rs`). `/api/vote` matches itself and `/api/vote/...` only. The result is parenthesised so it can sit beside `&&`.
+    A path that already ends in `/` is a segment boundary as written, so it keeps its single PathPrefix.
+    """
+    if path.endswith("/"):
+        return "PathPrefix(`{path}`)".format(path=path)
+    return "(Path(`{path}`) || PathPrefix(`{path}/`))".format(path=path)
+
+
+def backend_rule(traefik_host, traefik_path):
+    parts = []
+    if TRAEFIK_ENABLE_BACKEND_HOST_RULE and traefik_host:
+        parts.append("Host(`{host}`)".format(host=traefik_host))
+    if TRAEFIK_ENABLE_BACKEND_PATH_RULE and traefik_path:
+        parts.append(path_segment_rule(traefik_path))
+    return " || ".join(parts)
+
+
+def backend_rule_priority(traefik_host, traefik_path):
+    """Explicit priority for the stack router: the length its rule had before #3197.
+
+    The stack router sets no priority of its own, so Traefik ranked it by rule length. The segment-boundary matcher makes the
+    rule ~40 characters longer, enough to outrank routers it used to lose to (a frontend at `/` is priority 101; the default
+    `orders` stack rule went from 80 to 120). Pinning the old length keeps every precedence decision as it was; only the
+    matching is narrower.
+    """
+    parts = []
+    if TRAEFIK_ENABLE_BACKEND_HOST_RULE and traefik_host:
+        parts.append("Host(`{host}`)".format(host=traefik_host))
+    if TRAEFIK_ENABLE_BACKEND_PATH_RULE and traefik_path:
+        parts.append("PathPrefix(`{path}`)".format(path=traefik_path))
+    return len(" || ".join(parts))
+
+
+def _pluralize_stack(stack):
+    """Convert stack to proper plural form.
+
+    Handles irregular plurals and special cases.
+
+    Args:
+        stack: Singular stack name (e.g., "user", "order", "product")
+
+    Returns:
+        str: Pluralized stack name (e.g., "users", "orders", "products")
+    """
+    # Already plural
+    if stack.endswith("s"):
+        return stack
+
+    # Irregular plurals that don't follow normal rules
+    irregulars = {
+        "identity": "identity",
+        "profile": "profile",  # profiles is wrong, profile is correct
+        "staff": "staff",
+        "inventory": "inventory",
+    }
+
+    if stack in irregulars:
+        return irregulars[stack]
+
+    # Words ending in 'y' preceded by a consonant -> 'ies'
+    if stack.endswith("y") and len(stack) > 1 and stack[-2] not in "aeiou":
+        return stack[:-1] + "ies"
+
+    # Words ending in ch, sh, ss, x, z, o -> 'es'
+    if stack.endswith(("ch", "sh", "ss", "x", "z", "o")):
+        return stack + "es"
+
+    return stack + "s"
+
+
+def get_api_path(stack, manifest=None):
+    """Generate API path from stack. Converts stack to proper resource name.
+
+    URL Restructuring: Changed from /api/v1/{stack} to /api/{resource-name}
+
+    Args:
+        stack: Resource stack from manifest (from service.json)
+
+    Returns:
+        str: API path like "/api/{stack}-management"
+    """
+    # NEW: Use {stack}-management pattern instead of pluralized stack
+    # This matches the resource naming convention ({stack}-management)
+    return "{base}/{stack}-management".format(
+        base=TRAEFIK_API_BASE_PATH,
+        stack=stack,
+    )
+
+
+def cli_api_path(resource_name, manifest=None):
+    """API path printed by `flisk up` and served on api.{project}.localhost.
+
+    Matches cli/src/commands/up.ts: `/api/{name}` with a trailing `-api` stripped.
+    """
+    if manifest and manifest.get("apiPath"):
+        return manifest.get("apiPath")
+    name = resource_name or (manifest.get("appName", "") if manifest else "")
+    if name.endswith("-api"):
+        name = name[:-4]
+    return TRAEFIK_API_BASE_PATH + "/" + name
+
+
+def project_backend_rule(manifest, resource_name=None):
+    """Generate routing rule for api.{project}.localhost from manifest.
+
+    Args:
+        manifest: Service manifest dictionary
+        resource_name: Runtime resource name (e.g. auth-api-backend)
+
+    Returns:
+        str: Traefik routing rule for project localhost domain
+    """
+    if not manifest and not resource_name:
+        return ""
+
+    api_path = cli_api_path(resource_name, manifest)
+    return "Host(`{host}`) && {path_rule}".format(
+        host=TRAEFIK_PROJECT_API_HOST,
+        path_rule=path_segment_rule(api_path),
+    )

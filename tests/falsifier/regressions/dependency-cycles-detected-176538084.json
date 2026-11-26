@@ -1,0 +1,12 @@
+{
+  "engine": "FALSIFIER",
+  "property": "dependency-cycles-detected",
+  "seed": 176538084,
+  "commit": "aa4751d",
+  "minimized": { "graph": { "n1": [], "n2": [] }, "mode": "dag" },
+  "expected": "an acyclic graph is accepted",
+  "actual": "config verify valid=false: 2 port mismatchs: service.json port 4100 disagrees with Dockerfile: PORT 4000, EXPOSE 4000, healthcheck 4000",
+  "reproduction": "node tests/falsifier/run.mjs --property dependency-cycles-detected --seed 176538084 --scenarios 1",
+  "status": "fixed",
+  "fixed_by": "between aa4751d and 9c5432f8d28; replayed on both, fails on the first and passes on the second"
+}

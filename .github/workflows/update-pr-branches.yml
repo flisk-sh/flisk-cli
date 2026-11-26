@@ -1,0 +1,39 @@
+# Keep clean PR branches based on main. The job checks out this repository's own
+# helper script at the pushed commit and calls GitHub's update-branch API; no PR
+# code is fetched or executed. A conflict or missing fork permission is reported
+# for human follow-up.
+name: 🤖 BOT | Automation | Keep PR branches current
+
+# Manual only: running on every push to main fanned out one branch update and
+# one CI run per open PR for each merge. The merge queue keeps PRs current.
+on:
+  workflow_dispatch:
+permissions: {}
+
+concurrency:
+  group: update-pr-branches-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Update stale branches based on main
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Update clean branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          test -f scripts/update-pr-branches.sh
+          bash scripts/update-pr-branches.sh

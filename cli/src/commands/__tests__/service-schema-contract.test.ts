@@ -1,0 +1,439 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import Ajv from "ajv";
+import { describe, expect, it } from "vitest";
+import { BACKEND_FRAMEWORKS } from "../../backend-frameworks/registry.js";
+import { BACKEND_LANGUAGES } from "../../backend-languages/registry.js";
+import { FRONTEND_FRAMEWORKS } from "../../frontend-frameworks/registry.js";
+import {
+  CREATABLE_RESOURCE_TYPES,
+  RESOURCE_CONFIG_APP_TYPES,
+  type ResourceConfigFields,
+} from "../../types/index.js";
+import { RESOURCE_FEATURES } from "../../utils/resource-features.js";
+import { validateServiceManifest } from "../../utils/service-manifest.js";
+import { createByoServiceJson, createServiceJson } from "../resource.js";
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
+const schema = JSON.parse(
+  readFileSync(join(repoRoot, "runtime", "engine", "schemas", "service-schema.json"), "utf-8"),
+);
+const publishWorkflow = readFileSync(
+  join(repoRoot, ".github", "workflows", "publish-service-schema.yml"),
+  "utf-8",
+);
+
+const frameworkIds = [...Object.keys(FRONTEND_FRAMEWORKS), ...Object.keys(BACKEND_FRAMEWORKS)];
+const languageIds = Object.keys(BACKEND_LANGUAGES);
+const ajv = new Ajv({ strict: false });
+const validateService = ajv.compile(schema);
+const manifest = (fields: Record<string, unknown>) => ({
+  stack: "shop",
+  schemaVersion: 1,
+  ...fields,
+});
+const RESOURCE_CONFIG_FIELDS = [
+  "appName",
+  "appType",
+  "stack",
+  "schemaVersion",
+  "port",
+  "replicas",
+  "runtime",
+  "featuresEnabled",
+  "dependsOn",
+  "dependencies",
+  "enabled",
+  "basePath",
+  "backendName",
+  "apiPath",
+  "healthCheck",
+  "healthCheckPath",
+  "smoke",
+  "traefik",
+  "sablier",
+  "dockerfile",
+  "image",
+  "exposeViaProxy",
+  "webUi",
+  "container",
+  "agent",
+  "command",
+  "env",
+  "params",
+  "dev",
+] as const satisfies readonly (keyof ResourceConfigFields)[];
+type ResourceConfigFieldsAreComplete =
+  Exclude<keyof ResourceConfigFields, (typeof RESOURCE_CONFIG_FIELDS)[number]> extends never
+    ? true
+    : false;
+const resourceConfigFieldsAreComplete: ResourceConfigFieldsAreComplete = true;
+
+// The CLI provider registries are the contract: the CLI rejects an unknown id before it writes a resource. The JSON Schema is only
+// an editor hint, so adding a provider must not require touching its open framework/language fields.
+describe("service-schema.json stays independent of the provider registries", () => {
+  it("tracks ResourceConfig fields, app types, and registered feature names", () => {
+    expect(resourceConfigFieldsAreComplete).toBe(true);
+    expect(Object.keys(schema.properties)).toEqual(
+      expect.arrayContaining([...RESOURCE_CONFIG_FIELDS]),
+    );
+    expect(schema.properties.appType.enum).toEqual(
+      expect.arrayContaining([...RESOURCE_CONFIG_APP_TYPES]),
+    );
+    expect(schema.properties.appType.enum).toHaveLength(RESOURCE_CONFIG_APP_TYPES.length);
+    expect(schema.properties.type.enum).toEqual(schema.properties.appType.enum);
+    expect(schema.properties.featuresEnabled.items.enum).toEqual(
+      expect.arrayContaining([...Object.keys(RESOURCE_FEATURES), "nats"]),
+    );
+    const checkPropertyDescriptions = (objectSchema: { properties?: Record<string, unknown> }) => {
+      for (const [name, property] of Object.entries(objectSchema.properties ?? {})) {
+        expect(
+          (property as { description?: string }).description,
+          `${name} description`,
+        ).toBeTruthy();
+        checkPropertyDescriptions(property as { properties?: Record<string, unknown> });
+      }
+    };
+    checkPropertyDescriptions(schema);
+  });
+
+  it("validates all service manifests created by the resource generators", () => {
+    const generatedServices = [
+      ...CREATABLE_RESOURCE_TYPES.map((type, index) =>
+        type === "bring-your-own"
+          ? createByoServiceJson("test-byo", "shop", 4500, {
+              healthCheckPath: "/health",
+              dockerfile: "Dockerfile",
+            })
+          : createServiceJson(
+              `test-${type}`,
+              type,
+              "shop",
+              (type === "frontend" ? 3000 : 4000) + index,
+            ),
+      ),
+      ...Object.keys(FRONTEND_FRAMEWORKS).map((framework, index) =>
+        createServiceJson(
+          `test-frontend-${framework}`,
+          "frontend",
+          "shop",
+          3000 + index,
+          [],
+          framework,
+        ),
+      ),
+      ...Object.keys(BACKEND_FRAMEWORKS).map((framework, index) =>
+        createServiceJson(
+          `test-backend-${framework}`,
+          "backend",
+          "shop",
+          4000 + index,
+          [],
+          framework,
+        ),
+      ),
+      ...Object.keys(BACKEND_LANGUAGES).map((language, index) =>
+        createServiceJson(
+          `test-backend-${language}`,
+          "backend",
+          "shop",
+          4500 + index,
+          [],
+          undefined,
+          language,
+        ),
+      ),
+    ];
+
+    for (const service of generatedServices) {
+      expect(validateService(service), JSON.stringify(validateService.errors)).toBe(true);
+    }
+  });
+
+  it("accepts fresh frontend manifests wired to any backend resource name", () => {
+    const frontend = createServiceJson("web", "frontend", "shop", 3000);
+    frontend.backendName = "api";
+    frontend.dependsOn = ["api"];
+
+    expect(validateService(frontend), JSON.stringify(validateService.errors)).toBe(true);
+  });
+
+  it("accepts fresh worker manifests without nats features", () => {
+    const worker = createServiceJson("jobs", "worker", "shop", 4000);
+
+    expect(worker.featuresEnabled).toEqual([]);
+    expect(validateService(worker), JSON.stringify(validateService.errors)).toBe(true);
+  });
+
+  it("keeps . and .. segments out of a bind source that starts with a variable, as the CLI does", () => {
+    const withSource = (source: string) =>
+      manifest({
+        appName: "redis",
+        appType: "bring-your-own",
+        port: 6379,
+        image: "redis:7",
+        volumes: [{ source, target: "/data" }],
+      });
+    for (const source of ["${STORAGE_DIR}", "${STORAGE_DIR}/redis", "${DATA:-./data}/sub"]) {
+      expect(validateService(withSource(source)), source).toBe(true);
+    }
+    for (const source of ["${STORAGE_DIR}/../etc", "${STORAGE_DIR}/./x", "${STORAGE_DIR}/a/.."]) {
+      expect(validateService(withSource(source)), source).toBe(false);
+      expect(
+        validateServiceManifest(withSource(source), "service.json").errors,
+        source,
+      ).not.toEqual([]);
+    }
+  });
+
+  it("accepts the NATS feature used by existing service manifests", () => {
+    expect(
+      validateService(
+        manifest({
+          appName: "orders-api",
+          appType: "backend",
+          port: 4000,
+          featuresEnabled: ["nats"],
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("validates supported post-start smoke checks", () => {
+    expect(
+      validateService(
+        manifest({
+          appName: "orders-api",
+          appType: "backend",
+          port: 4000,
+          smoke: {
+            via: "proxy",
+            steps: [{ name: "health", path: "/health", expect: 200 }],
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("bounds backend ports to the range the engine allocates", () => {
+    for (const port of [4000, 5999]) {
+      expect(validateService(manifest({ appName: "api", appType: "backend", port }))).toBe(true);
+    }
+    for (const port of [0, 3999, 6000, 65536, 1.5]) {
+      expect(validateService(manifest({ appName: "api", appType: "backend", port }))).toBe(false);
+    }
+  });
+
+  it("refuses an empty dev.command, as the CLI does and as the schema does for top-level command (#4191)", () => {
+    const backend = { appName: "api", appType: "backend", port: 4000 };
+    expect(validateService(manifest({ ...backend, dev: { command: "bun run dev" } }))).toBe(true);
+    expect(validateService(manifest({ ...backend, dev: { command: "" } }))).toBe(false);
+  });
+
+  it("keeps the rules for required fields", () => {
+    expect(validateService({ appName: "api", appType: "backend", port: 4000 })).toBe(false);
+    expect(validateService(manifest({ appName: "api", port: 4000 }))).toBe(false);
+  });
+
+  it("accepts the legacy `type` alias when appType is absent", () => {
+    expect(validateService(manifest({ appName: "legacy-api", type: "backend", port: 4000 }))).toBe(
+      true,
+    );
+  });
+
+  it("treats `$schema` as editor metadata during service-manifest discovery", () => {
+    const result = validateServiceManifest(
+      {
+        $schema: schema.$id,
+        appName: "api",
+        appType: "backend",
+        stack: "shop",
+        schemaVersion: 1,
+      },
+      "service.json",
+    );
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("accepts every registered framework and language id with its open pattern", () => {
+    const framework = new RegExp(schema.properties.framework.pattern);
+    const language = new RegExp(schema.properties.language.pattern);
+    for (const id of frameworkIds) expect(id, `framework ${id}`).toMatch(framework);
+    for (const id of languageIds) expect(id, `language ${id}`).toMatch(language);
+    expect(schema.properties.framework.enum).toBeUndefined();
+    expect(schema.properties.language.enum).toBeUndefined();
+  });
+
+  it("keeps `examples` a short hint that names real providers, not a catalog to edit per provider", () => {
+    for (const field of ["framework", "language"] as const) {
+      const examples: string[] = schema.properties[field].examples;
+      const registered = field === "framework" ? frameworkIds : languageIds;
+      expect(
+        examples.length,
+        `${field} examples are a hint, not a list of every provider`,
+      ).toBeLessThanOrEqual(3);
+      for (const id of examples) expect(registered, `${field} example ${id}`).toContain(id);
+    }
+  });
+
+  it("describes the ids as coming from the CLI registry", () => {
+    expect(schema.properties.framework.description).toMatch(/registr(y|ies)/i);
+    expect(schema.properties.language.description).toMatch(/registr(y|ies)/i);
+  });
+});
+
+describe("publishing the schema from main", () => {
+  it("only publishes after a change lands on main, never from a pull request", () => {
+    expect(publishWorkflow).toMatch(/push:\s*\n\s*branches: \[main\]/);
+    expect(publishWorkflow).not.toContain("pull_request");
+  });
+
+  it("republishes when only project-schema.json changes", () => {
+    const pathsBlock =
+      publishWorkflow.match(/paths:([\s\S]*?)(?=\r?\n\s*workflow_dispatch:)/)?.[1] ?? "";
+    expect(pathsBlock).toContain("runtime/engine/schemas/service-schema.json");
+    expect(pathsBlock).toContain("runtime/engine/schemas/project-schema.json");
+  });
+
+  it("serializes publishes so two quick pushes cannot race on the website repo", () => {
+    expect(publishWorkflow).toMatch(
+      /concurrency:\s*\n\s*group: publish-service-schema\s*\n\s*cancel-in-progress: false/,
+    );
+  });
+
+  it("reports whether the live copy matches main, so a missing token is not a silent success", () => {
+    expect(publishWorkflow).toContain("Report whether the published schema matches main");
+    expect(publishWorkflow).toContain("https://flisk.sh/schema.service.json");
+    expect(publishWorkflow).toContain("https://flisk.sh/project-schema.json");
+    expect(publishWorkflow).toContain("GITHUB_STEP_SUMMARY");
+  });
+});
+
+describe("bring-your-own health path", () => {
+  const byo = manifest({
+    appName: "postgres",
+    appType: "bring-your-own",
+    port: 4500,
+    dockerfile: "Dockerfile",
+  });
+
+  it("accepts a bring-your-own service without healthCheckPath, for a service that is not HTTP", () => {
+    expect(validateService(byo)).toBe(true);
+  });
+
+  it("still requires port for a bring-your-own service", () => {
+    const withoutPort: Record<string, unknown> = { ...byo };
+    delete withoutPort.port;
+    expect(validateService(withoutPort)).toBe(false);
+  });
+
+  it("keeps the healthCheckPath pattern when a bring-your-own service sets one", () => {
+    expect(validateService({ ...byo, healthCheckPath: "/health" })).toBe(true);
+    expect(validateService({ ...byo, healthCheckPath: "health" })).toBe(false);
+  });
+});
+
+describe("command services (the minimal contract)", () => {
+  const minimal = {
+    appName: "api",
+    appType: "backend",
+    command: "node server.js",
+    schemaVersion: 1,
+  };
+
+  it("accepts a service with appName, appType, command and schemaVersion, and no stack", () => {
+    expect(validateService(minimal)).toBe(true);
+    expect(
+      validateService({ ...minimal, port: 8080, env: { API_URL: "http://localhost:4000" } }),
+    ).toBe(true);
+  });
+
+  it("does not apply the Docker port ranges to a local process", () => {
+    expect(validateService({ ...minimal, appType: "backend", port: 8080 })).toBe(true);
+    expect(validateService({ ...minimal, appType: "frontend", port: 5173 })).toBe(true);
+  });
+
+  it("refuses a second runtime source next to command", () => {
+    expect(validateService({ ...minimal, image: "nginx" })).toBe(false);
+    expect(validateService({ ...minimal, dockerfile: "Dockerfile" })).toBe(false);
+  });
+
+  it("still needs appName, appType and schemaVersion", () => {
+    for (const field of ["appName", "appType", "schemaVersion"]) {
+      const without: Record<string, unknown> = { ...minimal };
+      delete without[field];
+      expect(validateService(without), field).toBe(false);
+    }
+  });
+
+  it("has no `name` alias for appName", () => {
+    expect(schema.properties.name).toBeUndefined();
+  });
+
+  it("requires env values to be strings", () => {
+    expect(validateService({ ...minimal, env: { PORT2: 1 } })).toBe(false);
+  });
+});
+
+describe("bring-your-own keeps its Compose port and short names", () => {
+  it("accepts the container's own port and a two-letter name for bring-your-own", () => {
+    for (const port of [80, 3000, 5432, 8080]) {
+      const ok = validateService(
+        manifest({ appName: "db", appType: "bring-your-own", port, image: "postgres:16" }),
+      );
+      expect(ok, `${port}: ${JSON.stringify(validateService.errors)}`).toBe(true);
+    }
+  });
+
+  it("still keeps backend and frontend ports in their Flisk ranges", () => {
+    expect(validateService(manifest({ appName: "api", appType: "backend", port: 3000 }))).toBe(
+      false,
+    );
+    expect(validateService(manifest({ appName: "web", appType: "frontend", port: 80 }))).toBe(
+      false,
+    );
+  });
+
+  it("rejects a one-letter name", () => {
+    expect(
+      validateService(
+        manifest({ appName: "d", appType: "bring-your-own", port: 5432, image: "postgres:16" }),
+      ),
+    ).toBe(false);
+  });
+});
+
+// The published schema is what editors use for `$schema`, so an example that the CLI runs must not show an error there.
+describe("service.json files under examples/ validate against the schema", () => {
+  const findServiceJson = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory()
+        ? findServiceJson(join(dir, entry.name))
+        : entry.name === "service.json"
+          ? [join(dir, entry.name)]
+          : [],
+    );
+  const exampleManifests = findServiceJson(join(repoRoot, "examples"));
+
+  it("finds the example manifests", () => {
+    expect(exampleManifests.length).toBeGreaterThan(0);
+  });
+
+  it.each(exampleManifests.map((file) => [file.slice(repoRoot.length + 1), file]))(
+    "%s",
+    (_name, file) => {
+      const ok = validateService(JSON.parse(readFileSync(file, "utf-8")));
+      expect(ok, JSON.stringify(validateService.errors)).toBe(true);
+    },
+  );
+
+  it("accepts an image service without a stack, and still requires a stack for the rest", () => {
+    const byo = { appName: "redis", appType: "bring-your-own", port: 6379, schemaVersion: 1 };
+    expect(validateService({ ...byo, image: "redis:7-alpine" })).toBe(true);
+    expect(validateService({ ...byo, dockerfile: "Dockerfile" })).toBe(false);
+    expect(validateService({ ...byo, dockerfile: "Dockerfile", stack: "shop" })).toBe(true);
+  });
+});

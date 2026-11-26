@@ -1,0 +1,299 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import { describe, expect, it } from "vitest";
+import type { CheckResult } from "../../types/index.js";
+import type { HostInfo } from "../agent-host.js";
+import { CONTAINER_RUNTIME_CHECK } from "../constants.js";
+import type { DockerUsageReport } from "../docker-build-cache.js";
+import { collectDoctorChecks, createDoctorReport, getDoctorExitCode } from "../doctor-report.js";
+
+const passing = { name: "Docker", didPass: true, message: "Ready" };
+
+describe("doctor report contract", () => {
+  it("returns readiness with warnings and skipped checks, preserving findings", () => {
+    const checks = [
+      passing,
+      { name: "WSL path", didPass: false, isWarning: true, message: "Move from /mnt/c" },
+      { name: "Health", didPass: false, isSkipped: true, message: "Not running" },
+    ];
+    const report = createDoctorReport(checks, true);
+    expect(report).toEqual({
+      schemaVersion: 1,
+      data: {
+        ready: true,
+        inProject: true,
+        checks: checks.map((check) => ({ durationMs: 0, ...check })),
+        warnings: ["Move from /mnt/c"],
+      },
+      errors: [],
+    });
+    expect(getDoctorExitCode(report)).toBe(0);
+  });
+
+  it("returns 1 for blocking findings including strict-mode warnings", () => {
+    const report = createDoctorReport([{ ...passing, didPass: false, fix: "Start Docker" }], false);
+    expect(report.data.ready).toBe(false);
+    expect(getDoctorExitCode(report)).toBe(1);
+  });
+
+  it("includes requested, chosen, explicit and reason fields for each planned port", () => {
+    const plan = {
+      ingressHttp: 8080,
+      ingressHttps: 8443,
+      postgres: 15432,
+      requested: { ingressHttp: 80, ingressHttps: 443, postgres: 5432 },
+      explicit: { ingressHttp: false, ingressHttps: true, postgres: false },
+      reason: {
+        ingressHttp: "selected from fallback range 8080-8180",
+        ingressHttps: "explicit override",
+        postgres: "selected from fallback range 15432-15532",
+      },
+    };
+    const report = createDoctorReport([passing], true, [], plan);
+    expect(report.data.ports).toEqual({
+      http: {
+        requested: 80,
+        chosen: 8080,
+        explicit: false,
+        reason: "selected from fallback range 8080-8180",
+      },
+      https: { requested: 443, chosen: 8443, explicit: true, reason: "explicit override" },
+      postgres: {
+        requested: 5432,
+        chosen: 15432,
+        explicit: false,
+        reason: "selected from fallback range 15432-15532",
+      },
+    });
+  });
+
+  it("omits ports when no host port plan is provided (local-process/native projects)", () => {
+    const report = createDoctorReport([passing], true);
+    expect(report.data.ports).toBeUndefined();
+  });
+
+  it("surfaces image and reclaimable bytes from the Docker Build Cache check as dockerUsage", () => {
+    const dockerUsage: DockerUsageReport = {
+      imageBytes: 4_500_000_000,
+      reclaimableBytes: 1_200_000_000,
+      totalBytes: 16_470_000_000,
+    };
+    const check: CheckResult & { dockerUsage?: DockerUsageReport } = {
+      name: "Docker Build Cache",
+      didPass: true,
+      message: "OK",
+      dockerUsage,
+    };
+    const report = createDoctorReport([check], true);
+    expect(report.data.dockerUsage).toEqual(dockerUsage);
+  });
+
+  it("omits dockerUsage when Docker could not report system df", () => {
+    const report = createDoctorReport(
+      [{ name: "Docker Build Cache", didPass: true, isSkipped: true, message: "No daemon" }],
+      true,
+    );
+    expect(report.data.dockerUsage).toBeUndefined();
+  });
+
+  it("returns 2 for usage and internal errors even if other checks pass", () => {
+    for (const code of ["USAGE", "INTERNAL"] as const) {
+      const report = createDoctorReport([passing], false, [{ code, message: "Failed" }]);
+      expect(report.data.ready).toBe(false);
+      expect(getDoctorExitCode(report)).toBe(2);
+    }
+  });
+
+  it("settles all concurrent checks and preserves results when a probe throws", async () => {
+    let cleanedUp = false;
+    const result = await collectDoctorChecks(
+      [
+        () => {
+          throw new Error("probe failure");
+        },
+        async () => {
+          await Promise.resolve();
+          cleanedUp = true;
+          return passing;
+        },
+      ],
+      [() => ({ ...passing, name: "Project" })],
+    );
+    expect(cleanedUp).toBe(true);
+    expect(result.checks.map((check) => check.name)).toEqual(["Docker", "Project"]);
+    expect(result.errors).toEqual([{ code: "INTERNAL", message: "probe failure" }]);
+    expect(getDoctorExitCode(createDoctorReport(result.checks, true, result.errors))).toBe(2);
+  });
+
+  it("runs project checks together and keeps results in input order", async () => {
+    const events: string[] = [];
+    const project = (name: string, delayMs: number) => async () => {
+      events.push(`start:${name}`);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      events.push(`end:${name}`);
+      return { name, didPass: true, message: "ok" };
+    };
+    const result = await collectDoctorChecks(
+      [() => passing],
+      [project("p1", 30), project("p2", 10), project("p3", 20)],
+    );
+    // All three project probes start before any of them finishes; p2 settles first.
+    expect(events.slice(0, 3)).toEqual(["start:p1", "start:p2", "start:p3"]);
+    expect(result.checks.map((check) => check.name)).toEqual(["Docker", "p1", "p2", "p3"]);
+    expect(result.errors).toEqual([]);
+  });
+
+  it("handles empty checks in collectDoctorChecks", async () => {
+    const result = await collectDoctorChecks([], []);
+    expect(result).toEqual({ checks: [], errors: [] });
+  });
+
+  it("handles non-Error thrown reasons and project-level check errors", async () => {
+    const result = await collectDoctorChecks(
+      [() => Promise.reject("string rejection")],
+      [() => Promise.reject(new Error("project error"))],
+    );
+    expect(result.checks).toEqual([]);
+    expect(result.errors).toEqual([
+      { code: "INTERNAL", message: "string rejection" },
+      { code: "INTERNAL", message: "project error" },
+    ]);
+  });
+
+  describe("host enrichment", () => {
+    const baseHost: HostInfo = { kind: "local", canUp: true };
+
+    it("enriches host with containerRuntimeReachable: true and keeps canUp: true when runtime passes", () => {
+      const checks = [{ name: CONTAINER_RUNTIME_CHECK, didPass: true, message: "Docker OK" }];
+      const report = createDoctorReport(checks, true, [], undefined, baseHost);
+      expect(report.data.host).toEqual({
+        kind: "local",
+        canUp: true,
+        containerRuntimeReachable: true,
+      });
+    });
+
+    it("sets canUp: false when container runtime check did not pass", () => {
+      const checks = [{ name: CONTAINER_RUNTIME_CHECK, didPass: false, message: "Docker down" }];
+      const report = createDoctorReport(checks, true, [], undefined, baseHost);
+      expect(report.data.host).toEqual({
+        kind: "local",
+        canUp: false,
+        containerRuntimeReachable: false,
+      });
+    });
+
+    it("sets containerRuntimeReachable: null when container runtime check is not in checks", () => {
+      const checks = [{ name: "Other Check", didPass: true, message: "OK" }];
+      const report = createDoctorReport(checks, true, [], undefined, baseHost);
+      expect(report.data.host).toEqual({
+        kind: "local",
+        canUp: true,
+        containerRuntimeReachable: null,
+      });
+    });
+
+    it("keeps canUp: false if host.canUp was already false regardless of runtime check", () => {
+      const disabledHost: HostInfo = { kind: "webcontainer", canUp: false };
+      const checks = [{ name: CONTAINER_RUNTIME_CHECK, didPass: true, message: "Docker OK" }];
+      const report = createDoctorReport(checks, true, [], undefined, disabledHost);
+      expect(report.data.host).toEqual({
+        kind: "webcontainer",
+        canUp: false,
+        containerRuntimeReachable: true,
+      });
+    });
+  });
+
+  describe("commit sha reporting", () => {
+    it("includes commit and commitSha in doctor report data when provided", () => {
+      const report = createDoctorReport(
+        [passing],
+        true,
+        [],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        "testcommit12345",
+      );
+      expect(report.data.commit).toBe("testcommit12345");
+      expect(report.data.commitSha).toBe("testcommit12345");
+    });
+
+    it("omits commit when not provided", () => {
+      const report = createDoctorReport([passing], true);
+      expect(report.data.commit).toBeUndefined();
+      expect(report.data.commitSha).toBeUndefined();
+    });
+  });
+
+  describe("port fallback planning", () => {
+    it("provides fallback ports when portPlan is null", () => {
+      const report = createDoctorReport([passing], true, [], null);
+      expect(report.data.ports).toEqual({
+        http: {
+          requested: 80,
+          chosen: null,
+          explicit: false,
+          reason: "port planning failed",
+        },
+        https: {
+          requested: 443,
+          chosen: null,
+          explicit: false,
+          reason: "port planning failed",
+        },
+        postgres: {
+          requested: 5432,
+          chosen: null,
+          explicit: false,
+          reason: "port planning failed",
+        },
+      });
+    });
+
+    it("drops passing and skipped checks and adds summary counts when problemsOnly is true", () => {
+      const checks = [
+        { name: "P1", didPass: true, message: "OK" },
+        { name: "P2", didPass: true, message: "OK" },
+        { name: "P3", didPass: true, message: "OK" },
+        { name: "S1", didPass: true, isSkipped: true, message: "Skipped" },
+        { name: "F1", didPass: false, message: "Failed 1" },
+        { name: "F2", didPass: false, message: "Failed 2" },
+      ];
+      const report = createDoctorReport(
+        checks,
+        true,
+        [],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { problemsOnly: true },
+      );
+      expect(report.data.ready).toBe(false);
+      expect(report.data.checks).toEqual([
+        { name: "F1", didPass: false, message: "Failed 1", durationMs: 0 },
+        { name: "F2", didPass: false, message: "Failed 2", durationMs: 0 },
+      ]);
+      expect(report.data.summary).toEqual({
+        passed: 3,
+        skipped: 1,
+        failed: 2,
+      });
+    });
+
+    it("keeps all checks and omits summary when problemsOnly is omitted or false", () => {
+      const checks = [
+        { name: "P1", didPass: true, message: "OK" },
+        { name: "S1", didPass: true, isSkipped: true, message: "Skipped" },
+        { name: "F1", didPass: false, message: "Failed 1" },
+      ];
+      const report = createDoctorReport(checks, true);
+      expect(report.data.checks).toHaveLength(3);
+      expect(report.data.summary).toBeUndefined();
+    });
+  });
+});

@@ -1,0 +1,353 @@
+# A PR can touch several areas, so matching labels intentionally accumulate.
+# `sync-labels: true` removes only labels declared below when their paths stop matching.
+
+# Release inputs (#3098): a PR that touches one invalidates a running release candidate, so the label tells
+# maintainers and agents which PRs to hold during a release. The list is the one in .github/release-inputs.txt that the
+# publish gate (scripts/check-release-candidate.mjs) and the release-binaries.yml changes filter read; the drift test in
+# scripts/check-release-candidate.test.mjs keeps this copy equal to it.
+"release-input":
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/workflows/release-binaries.yml"
+          - ".github/release-inputs.txt"
+          - "package.json"
+          - "bun.lock"
+          - "cli/**"
+          - "scripts/release-binaries.sh"
+          - "scripts/release/**"
+          - "tests/e2e/platforms/container-image/**"
+          - ".github/workflows/publish-cli-image.yml"
+          - "runtime/**"
+
+# Main code areas
+"area: cli":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "cli/**"
+          - "package.json"
+          - "bun.lock"
+          - "install.sh"
+
+"area: tui":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "cli/src/components/**"
+          - "cli/src/commands/ui.tsx"
+          - "cli/src/commands/ui/**"
+          - "cli/src/commands/__tests__/*ui*.test.ts"
+          - "runtime/ext/ui-enhancements/**"
+
+"area: doctor":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "cli/src/commands/doctor.ts"
+          - "cli/src/commands/__tests__/doctor.test.ts"
+          - "cli/src/utils/doctor-*.ts"
+          - "cli/src/utils/__tests__/doctor-*.test.ts"
+          - "cli/src/utils/env-validator.ts"
+
+"area: frontend-frameworks":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "cli/src/frontend-frameworks/**"
+          - "cli/src/commands/__tests__/resource-frameworks-e2e.test.ts"
+          - "cli/src/commands/__tests__/frontend-vite-generator.test.ts"
+          - "runtime/engine/topologies/tilt/generators/vite/**"
+          - "runtime/engine/topologies/tilt/generators/typescript/frontend_tsconfig.star"
+          - "runtime/engine/schemas/service-schema.json"
+          - "docs/frontend-framework-providers.md"
+
+"area: infrastructure":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "runtime/engine/topologies/tilt/resources/**"
+          - "runtime/engine/topologies/platform/**"
+          - "runtime/discovery/services/platform/**"
+          - "runtime/platform/services/**"
+          - "runtime/shared-platform-engineering/**"
+          - "cli/shared-platform-engineering/**"
+          - "docs/FEATURES.md"
+
+"area: engine":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "runtime/engine/**"
+          - "runtime/Tiltfile"
+
+"area: discovery":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "runtime/discovery/**"
+
+"area: extensions":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "runtime/ext/**"
+
+"area: specifications":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "runtime/specs/**"
+          - "openspec/**"
+          - "runtime/engine/schemas/**"
+
+"area: tests":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "tests/**"
+          - "**/*.test.ts"
+          - "**/*.test.tsx"
+          - "**/tests/**"
+          - "cli/src/**/__tests__/**"
+
+"area: scripts":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "scripts/**"
+          - "Makefile"
+          - ".pre-commit-config.yaml"
+
+"area: benchmarks":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/benchmarks/**"
+          - "scripts/benchmark/**"
+
+"area: platform":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "platform/**"
+          - "runtime/shared-platform-engineering/**"
+          - "cli/shared-platform-engineering/**"
+
+"area: packaging":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "package.json"
+          - "cli/package.json"
+          - "bun.lock"
+          - "cli/pnpm-lock.yaml"
+          - "cli/bin/**"
+          - "install.sh"
+          - "scripts/release-binaries.sh"
+          - "scripts/stage-npm-engine.sh"
+          - "release-dist*/**"
+
+# Contributor-facing docs and repository automation
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/**"
+          - "README*"
+          - ".github/CONTRIBUTING.md"
+          - "docs/CHANGELOG.md"
+          - "cli/README.md"
+          - "runtime/engine/README.md"
+          - "**/*.md"
+
+guide:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/contributing/**"
+          - "docs/frontend-framework-providers.md"
+          - "runtime/engine/docs/**"
+          - "cli/README.md"
+          - ".github/CONTRIBUTING.md"
+
+agents:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".claude/**"
+          - "**/AGENTS.md"
+
+dx:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/contributing/**"
+          - "cli/src/commands/completion.ts"
+          - "cli/src/commands/doctor.ts"
+          - "cli/src/utils/doctor-*.ts"
+          - "scripts/install-git-hooks.sh"
+          - "scripts/setup-pre-commit.sh"
+
+community:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/CODE_OF_CONDUCT.md"
+          - ".github/SECURITY.md"
+          - ".github/ISSUE_TEMPLATE/**"
+
+design:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "cli/src/components/**"
+          - "runtime/ext/ui-enhancements/**"
+          - "runtime/ext/ide-components/**/static/**"
+          - "docs/assets/demo-*.svg"
+          - "scripts/demo-svgs.mjs"
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/workflows/**"
+          - ".github/dependabot.yml"
+          - ".github/zizmor.yml"
+          - ".github/labeler.yml"
+
+# Technology labels help route reviews to people familiar with that stack.
+"tech: typescript":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "cli/**/*.ts"
+          - "cli/**/*.tsx"
+          - "scripts/**/*.ts"
+          - "runtime/engine/assets/**/*.ts"
+
+"tech: bun":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "bun.lock"
+          - "package.json"
+          - "cli/package.json"
+          - "cli/src/**"
+          - "runtime/engine/topologies/platform/docker/layers/bun_helpers.star"
+          - "runtime/shared-platform-engineering/docker-templates/bun-*.sh"
+
+"tech: javascript":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.js"
+          - "**/*.jsx"
+          - "**/*.mjs"
+          - "**/*.cjs"
+
+"tech: hono":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "cli/src/commands/resource.ts"
+          - "cli/src/utils/project-templates.ts"
+          - "cli/templates/**"
+
+"tech: react":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "cli/src/frontend-frameworks/react.ts"
+          - "cli/src/components/**"
+          - "cli/src/commands/ui.tsx"
+          - "cli/src/commands/ui/**"
+          - "runtime/engine/topologies/tilt/generators/vite/frameworks/react.star"
+
+"tech: ink":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "cli/src/components/**"
+          - "cli/src/commands/ui.tsx"
+          - "cli/src/commands/ui/**"
+          - "cli/package.json"
+
+"tech: prisma":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "runtime/engine/topologies/platform/docker/layers/prisma/**"
+          - "runtime/engine/topologies/tilt/generators/typescript/prisma_config.star"
+          - "runtime/shared-platform-engineering/docker-templates/prisma-*.sh"
+          - "cli/shared-platform-engineering/docker-templates/prisma-*.sh"
+          - "docs/FEATURES.md"
+
+"tech: vite":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "cli/src/frontend-frameworks/**"
+          - "cli/src/commands/__tests__/frontend-vite-generator.test.ts"
+          - "cli/src/commands/__tests__/resource-frameworks-e2e.test.ts"
+          - "runtime/engine/topologies/tilt/generators/vite/**"
+          - "docs/frontend-framework-providers.md"
+
+"tech: nats":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "runtime/engine/topologies/tilt/resources/infra-loader.star"
+          - "runtime/engine/topologies/platform/docker/compose/compose.star"
+          - "runtime/discovery/services/platform/cdc/**/nats*/**"
+          - "runtime/discovery/services/platform/cdc/**/service.yaml"
+          - "docs/FEATURES.md"
+
+"tech: biome":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "cli/biome.json"
+          - ".pre-commit-config.yaml"
+          - "cli/package.json"
+          - ".github/workflows/ci.yml"
+
+"tech: vitest":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "cli/**/*.test.ts"
+          - "cli/**/*.test.tsx"
+          - "cli/package.json"
+          - ".github/workflows/ci.yml"
+
+"tech: docker":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "runtime/engine/topologies/platform/docker/**"
+          - "runtime/engine/assets/docker/**"
+          - "runtime/shared-platform-engineering/docker-templates/**"
+          - "cli/shared-platform-engineering/docker-templates/**"
+          - "runtime/discovery/**/docker-compose*.yml"
+          - "runtime/engine/topologies/tilt/resources/infra-loader.star"
+
+"tech: tilt":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "runtime/Tiltfile"
+          - "runtime/engine/**/*.star"
+          - "runtime/discovery/**/*.star"
+          - "runtime/ext/Tiltfile"
+          - "cli/templates/*.star.hbs"
+          - "tests/tilt-engine/**"
+
+"tech: traefik":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "runtime/engine/topologies/platform/docker/networking/traefik*.star"
+          - "runtime/engine/topologies/platform/docker/compose/traefik*.star"
+          - "runtime/engine/topologies/tilt/resources/infra-loader.star"
+          - "runtime/platform/services/platform/proxy/**"
+          - "tests/tilt-engine/test_*traefik*.py"
+
+"tech: postgres":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "runtime/engine/topologies/tilt/resources/databases.star"
+          - "runtime/engine/topologies/tilt/resources/infra-loader.star"
+          - "runtime/engine/topologies/platform/state/**"
+          - "runtime/engine/topologies/platform/docker/layers/prisma/**"
+          - "runtime/engine/topologies/platform/docker/compose/compose.star"
+          - "docs/FEATURES.md"
+
+"tech: starlark":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.star"
+          - "runtime/Tiltfile"
+          - "runtime/engine/Tiltfile"
+          - "runtime/discovery/Tiltfile"
+
+"tech: github-actions":
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/workflows/**"
+          - ".github/dependabot.yml"
+          - ".github/zizmor.yml"
+          - ".github/labeler.yml"
+
+"tech: json-schema":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "runtime/engine/schemas/**"
+          - "runtime/engine/topologies/tilt/manifest/schema.star"
+          - "runtime/discovery/manifest/**"
+          - "cli/src/frontend-frameworks/registry.ts"
+          - "cli/src/commands/__tests__/resource.test.ts"

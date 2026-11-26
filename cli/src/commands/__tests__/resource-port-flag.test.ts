@@ -1,0 +1,308 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveResourcePort, resourceCommand } from "../../commands/resource.js";
+import { captureExit } from "../../test-support/index.js";
+import { clearDiscoveryCache } from "../../utils/discovery-context.js";
+import { FliskError } from "../../utils/errors.js";
+
+const jsonOutput = vi.hoisted(() => ({ createJsonEmitter: vi.fn() }));
+vi.mock("../../utils/json-output.js", () => ({ ...jsonOutput }));
+
+const originalCwd = process.cwd();
+
+describe("--port for every port-assigned resource type", () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), "flisk-port-flag-test-"));
+    mkdirSync(join(tempDir, ".flisk"), { recursive: true });
+    writeFileSync(
+      join(tempDir, ".flisk", "project.json"),
+      JSON.stringify({
+        version: "1.0.0",
+        project: { name: "test", version: "1.0.0" },
+        phases: Object.fromEntries(
+          ["pre_alpha", "alpha", "beta", "out_of_scope"].map((name) => [
+            name,
+            { name, description: "", enabledStacks: [] },
+          ]),
+        ),
+        optional_infra: {
+          monitoring: false,
+          elk: false,
+          golden_image: false,
+          verdaccio: false,
+        },
+        discovery: { paths: ["services/**"] },
+      }),
+    );
+    process.chdir(tempDir);
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  // Command errors exit the process; capture the message instead of ending the test run.
+  async function refuse(name: string, type: string, args: string[]): Promise<string> {
+    const errors: string[] = [];
+    const error = vi.spyOn(console, "error").mockImplementation((...parts: unknown[]) => {
+      errors.push(parts.map(String).join(" "));
+    });
+    const { exit } = captureExit();
+    try {
+      await createResource(name, type, args).catch(() => {});
+      expect(exit).toHaveBeenCalledWith(1);
+      return errors.join("\n");
+    } finally {
+      error.mockRestore();
+      exit.mockRestore();
+      clearDiscoveryCache();
+    }
+  }
+
+  async function createResource(name: string, type: string, args: string[] = []): Promise<string> {
+    await resourceCommand.parseAsync(
+      ["node", "flisk", name, "--type", type, "--stack", "shop", "--yes", ...args],
+      { from: "node" },
+    );
+    return join(tempDir, "services", "shop", name, "service.json");
+  }
+
+  it.each([
+    ["backend", "api", 4100],
+    ["frontend", "web", 3100],
+    ["worker", "jobs", 6100],
+  ])("stores the requested %s port in service.json", async (type, name, port) => {
+    const serviceJson = await createResource(name, type, ["--port", String(port)]);
+    expect(JSON.parse(readFileSync(serviceJson, "utf-8")).port).toBe(port);
+  });
+
+  // #4228: the scaffold's own PORT fallback must be the port service.json, the Dockerfile and
+  // `flisk networks` use, so running `bun run dev` without PORT does not listen somewhere else.
+  it.each([
+    ["backend", "api", 4321, []],
+    ["backend", "drizzle-api", 4322, ["--feature", "drizzle"]],
+    ...["express", "elysia", "fastify", "h3", "koa", "nestjs"].map(
+      (framework, offset) =>
+        ["backend", `${framework}-api`, 4330 + offset, ["--framework", framework]] as const,
+    ),
+    ["mcp", "tools", 4801, []],
+    ["agent", "planner", 4501, []],
+    ["agent", "durable-planner", 4502, ["--durability", "postgres"]],
+  ] as const)(
+    "falls back to the assigned %s port in src/index.ts (%s)",
+    async (type, name, port, extra) => {
+      const serviceJson = await createResource(name, type, ["--port", String(port), ...extra]);
+      const index = readFileSync(join(serviceJson, "..", "src", "index.ts"), "utf-8");
+      expect(index).toContain(`envPort <= 65535 ? envPort : ${port};`);
+      expect(index).not.toContain("envPort : 3000;");
+    },
+  );
+
+  it("falls back to the automatically assigned port, not the type's first port", async () => {
+    for (const name of ["first-api", "second-api"]) {
+      const serviceJson = await createResource(name, "backend");
+      clearDiscoveryCache();
+      const { port } = JSON.parse(readFileSync(serviceJson, "utf-8"));
+      const index = readFileSync(join(serviceJson, "..", "src", "index.ts"), "utf-8");
+      expect(index).toContain(`envPort <= 65535 ? envPort : ${port};`);
+    }
+    const ports = ["first-api", "second-api"].map(
+      (name) =>
+        JSON.parse(readFileSync(join(tempDir, "services", "shop", name, "service.json"), "utf-8"))
+          .port,
+    );
+    expect(new Set(ports).size).toBe(2);
+  });
+
+  it("keeps the existing service.json port when rerun without --port", async () => {
+    const serviceJson = await createResource("rerun-api", "backend");
+    const first = JSON.parse(readFileSync(serviceJson, "utf-8")).port as number;
+
+    await createResource("rerun-api", "backend");
+    expect(JSON.parse(readFileSync(serviceJson, "utf-8")).port).toBe(first);
+
+    await createResource("rerun-api", "backend");
+    expect(JSON.parse(readFileSync(serviceJson, "utf-8")).port).toBe(first);
+  });
+
+  it("applies the type's own range: a worker port outside 6000-6999 is refused", async () => {
+    const message = await refuse("jobs", "worker", ["--port", "4100"]);
+    expect(message).toContain("--port must be an integer from 6000 through 6999");
+  });
+
+  it("refuses --port for sdk resources", async () => {
+    const message = await refuse("client", "sdk", ["--port", "4100"]);
+    expect(message).toContain("--port does not apply to --type sdk");
+  });
+
+  it("words the bring-your-own range error as --port for a bring-your-own resource, never as a BYO flag", () => {
+    expect(() => resolveResourcePort("bring-your-own", "3999", 4000, [])).toThrow(
+      "--port for a bring-your-own resource must be an integer from 4000 through 5999.",
+    );
+  });
+
+  it("refuses a port another resource already has, regardless of type", () => {
+    expect(() =>
+      resolveResourcePort("backend", "4100", 4000, [{ config: { port: 4100 } }]),
+    ).toThrow("Port 4100 is already assigned to another resource.");
+  });
+
+  it("falls back to the next free port when --port is absent", () => {
+    expect(resolveResourcePort("worker", undefined, 6005, [])).toBe(6005);
+    expect(resolveResourcePort("backend", "", 4005, [])).toBe(4005);
+  });
+
+  describe("resolveResourcePort across all types and boundaries", () => {
+    it.each([
+      ["frontend", "3000", 3000],
+      ["frontend", "3999", 3999],
+      ["backend", "4000", 4000],
+      ["backend", "4999", 4999],
+      ["worker", "6000", 6000],
+      ["worker", "6999", 6999],
+      ["agent", "4500", 4500],
+      ["mcp", "4800", 4800],
+      ["bring-your-own", "5000", 5000],
+    ] as const)("accepts valid port %s for %s", (type, portStr, expected) => {
+      expect(resolveResourcePort(type, portStr, 4000, [])).toBe(expected);
+    });
+
+    it("refuses out-of-boundary ports for frontend", () => {
+      expect(() => resolveResourcePort("frontend", "2999", 3000, [])).toThrow(
+        "--port must be an integer from 3000 through 3999.",
+      );
+      expect(() => resolveResourcePort("frontend", "4000", 3000, [])).toThrow(
+        "--port must be an integer from 3000 through 3999.",
+      );
+    });
+
+    it("refuses out-of-boundary ports for backend", () => {
+      expect(() => resolveResourcePort("backend", "3999", 4000, [])).toThrow(
+        "--port must be an integer from 4000 through 4999.",
+      );
+      expect(() => resolveResourcePort("backend", "5000", 4000, [])).toThrow(
+        "--port must be an integer from 4000 through 4999.",
+      );
+    });
+
+    it("refuses out-of-boundary ports for agent and mcp", () => {
+      expect(() => resolveResourcePort("agent", "3999", 4000, [])).toThrow(
+        "--port must be an integer from 4000 through 5999.",
+      );
+      expect(() => resolveResourcePort("agent", "6000", 4000, [])).toThrow(
+        "--port must be an integer from 4000 through 5999.",
+      );
+      expect(() => resolveResourcePort("mcp", "3999", 4000, [])).toThrow(
+        "--port must be an integer from 4000 through 5999.",
+      );
+      expect(() => resolveResourcePort("mcp", "6000", 4000, [])).toThrow(
+        "--port must be an integer from 4000 through 5999.",
+      );
+    });
+
+    it("refuses out-of-boundary ports for worker", () => {
+      expect(() => resolveResourcePort("worker", "5999", 6000, [])).toThrow(
+        "--port must be an integer from 6000 through 6999.",
+      );
+      expect(() => resolveResourcePort("worker", "7000", 6000, [])).toThrow(
+        "--port must be an integer from 6000 through 6999.",
+      );
+    });
+
+    it("rejects non-digit strings, floats and whitespace-padded port numbers", () => {
+      for (const invalid of ["abc", "4000.5", "-4000", " 4000 ", "4000px", "NaN"]) {
+        expect(() => resolveResourcePort("backend", invalid, 4000, [])).toThrow(
+          "--port must be an integer from 4000 through 4999.",
+        );
+      }
+    });
+
+    it("reports the collision for bring-your-own without a BYO flag either", () => {
+      expect(() =>
+        resolveResourcePort("bring-your-own", "4500", 4000, [{ config: { port: 4500 } }]),
+      ).toThrow("Port 4500 is already assigned to another resource.");
+    });
+
+    it("safely handles resources without config or with undefined ports during collision checks", () => {
+      const existing = [
+        {},
+        { config: undefined },
+        { config: { port: undefined } },
+        { config: { port: 4200 } },
+      ];
+      expect(resolveResourcePort("backend", "4100", 4000, existing)).toBe(4100);
+      expect(() => resolveResourcePort("backend", "4200", 4000, existing)).toThrow(
+        "Port 4200 is already assigned to another resource.",
+      );
+    });
+  });
+
+  // #5063: the range hint must suggest a port that is actually free in this project (assignedPort), not the
+  // first port of the range, and no message may show "BYO --port" as if it were a flag.
+  describe("range-error hints suggest the next free port", () => {
+    const thrown = (fn: () => unknown): FliskError => {
+      try {
+        fn();
+      } catch (err) {
+        expect(err).toBeInstanceOf(FliskError);
+        return err as FliskError;
+      }
+      throw new Error("expected resolveResourcePort to throw");
+    };
+
+    it("suggests assignedPort instead of the first port of the range when that port is taken (#5063)", () => {
+      const err = thrown(() =>
+        resolveResourcePort("backend", "99999", 4001, [{ name: "api", config: { port: 4000 } }]),
+      );
+      expect(err.message).toBe("--port must be an integer from 4000 through 4999.");
+      expect(err.suggestions.join("\n")).toContain("for example --port 4001");
+      expect(err.suggestions.join("\n")).not.toContain("--port 4000");
+    });
+
+    it("suggests assignedPort for a non-numeric --port too", () => {
+      const err = thrown(() => resolveResourcePort("backend", "abc", 4001, []));
+      expect(err.message).toBe("--port must be an integer from 4000 through 4999.");
+      expect(err.suggestions.join("\n")).toContain("for example --port 4001");
+    });
+
+    it("keeps the --port flag in the bring-your-own hint and message", () => {
+      const outOfRange = thrown(() => resolveResourcePort("bring-your-own", "99999", 4001, []));
+      expect(outOfRange.message).toBe(
+        "--port for a bring-your-own resource must be an integer from 4000 through 5999.",
+      );
+      expect(outOfRange.suggestions.join("\n")).toContain("for example --port 4001");
+      expect(`${outOfRange.message}\n${outOfRange.suggestions.join("\n")}`).not.toContain(
+        "BYO --port",
+      );
+
+      const notANumber = thrown(() => resolveResourcePort("bring-your-own", "abc", 4001, []));
+      expect(`${notANumber.message}\n${notANumber.suggestions.join("\n")}`).not.toContain(
+        "BYO --port",
+      );
+      expect(notANumber.suggestions.join("\n")).toContain("for example --port 4001");
+    });
+
+    it("names the resource that owns a taken port and suggests a free one", () => {
+      const err = thrown(() =>
+        resolveResourcePort("backend", "4000", 4001, [{ name: "api", config: { port: 4000 } }]),
+      );
+      expect(err.message).toBe("Port 4000 is already assigned to api.");
+      expect(err.suggestions.join("\n")).toContain("for example --port 4001");
+    });
+
+    it("still says another resource when the owner has no name", () => {
+      const err = thrown(() =>
+        resolveResourcePort("backend", "4000", 4001, [{ config: { port: 4000 } }]),
+      );
+      expect(err.message).toBe("Port 4000 is already assigned to another resource.");
+      expect(err.suggestions.join("\n")).toContain("for example --port 4001");
+    });
+  });
+});

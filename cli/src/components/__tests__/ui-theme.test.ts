@@ -1,0 +1,98 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import { describe, expect, it } from "vitest";
+import { createTUITheme, getTUIStatusIcon, sectionTitle } from "../ui-theme.js";
+
+describe("flisk ui theme", () => {
+  it("preserves the normal palette by default", () => {
+    const theme = createTUITheme(false, {});
+
+    expect(theme.accent).toBe("cyan");
+    expect(theme.muted).toBe("gray");
+    expect(theme.dimMuted).toBe(true);
+    expect(theme.boldMuted).toBe(false);
+    expect(theme.selectionMarker).toBe("▓▒░");
+  });
+
+  it("uses bright colors and avoids dim text in high-contrast mode", () => {
+    const theme = createTUITheme(true, {});
+
+    expect(theme.highContrast).toBe(true);
+    expect(theme.accent).toBe("cyanBright");
+    expect(theme.muted).toBe("white");
+    expect(theme.border).toBe("whiteBright");
+    expect(theme.success).toBe("greenBright");
+    expect(theme.warning).toBe("yellowBright");
+    expect(theme.dimMuted).toBe(false);
+    expect(theme.boldMuted).toBe(true);
+    expect(theme.selectedBackground).toBe("cyanBright");
+    expect(theme.selectedForeground).toBe("black");
+  });
+
+  it("uses printable status marks for plain terminals", () => {
+    const theme = createTUITheme(false, { TERM: "dumb" });
+
+    expect(getTUIStatusIcon(theme, "✓", "green")).toBe("[+]");
+    expect(getTUIStatusIcon(theme, "!", "yellow")).toBe("[~]");
+    expect(getTUIStatusIcon(theme, "x", "red")).toBe("[x]");
+    expect(getTUIStatusIcon(theme, "?", "gray")).toBe("[?]");
+  });
+
+  it("formats tab section titles for Unicode and ASCII terminals", () => {
+    expect(sectionTitle(createTUITheme(false, {}), "Resources")).toBe("┌─ Resources ─");
+    expect(sectionTitle(createTUITheme(false, { TERM: "dumb" }), "Resources")).toBe(
+      "[ Resources ]",
+    );
+  });
+
+  it("uses a printable footer separator for plain terminals", () => {
+    expect(createTUITheme(false, {}).separator).toBe(" \u2502 ");
+    expect(createTUITheme(false, { TERM: "dumb" }).separator).toBe(" | ");
+  });
+
+  it("adapts colors for light terminal backgrounds (COLORFGBG)", () => {
+    const lightTheme = createTUITheme(false, { COLORFGBG: "0;15" });
+    expect(lightTheme.foreground).toBe("black");
+    expect(lightTheme.accent).toBe("blue");
+    expect(lightTheme.dimMuted).toBe(false);
+
+    const lightTheme7 = createTUITheme(false, { COLORFGBG: "0;7" });
+    expect(lightTheme7.foreground).toBe("black");
+
+    const darkTheme = createTUITheme(false, { COLORFGBG: "15;0" });
+    expect(darkTheme.foreground).toBe("white");
+    expect(darkTheme.accent).toBe("cyan");
+  });
+
+  it("uses ASCII markers but keeps colors when the locale or TERM cannot draw Unicode", () => {
+    for (const environment of [
+      { LANG: "C" },
+      { LC_ALL: "POSIX", LANG: "en_US.UTF-8" },
+      { LC_CTYPE: "en_US.ISO-8859-1" },
+      { TERM: "linux" },
+    ]) {
+      const theme = createTUITheme(false, environment);
+      expect(theme.ascii).toBe(true);
+      expect(theme.accent).toBe("cyan");
+    }
+    expect(createTUITheme(false, { LC_ALL: "en_US.utf8", LANG: "C" }).ascii).toBe(false);
+  });
+
+  it.each([{ NO_COLOR: "1" }, { NO_COLOR: "" }, { TERM: "dumb" }, { TERM: "dumb-256color" }])(
+    "disables styling and uses ASCII markers for a plain terminal",
+    (environment) => {
+      const theme = createTUITheme(true, environment);
+
+      expect(theme.accent).toBeUndefined();
+      expect(theme.muted).toBeUndefined();
+      expect(theme.dimMuted).toBe(false);
+      expect(theme.boldMuted).toBe(false);
+      expect(theme.ascii).toBe(true);
+      expect(theme.highContrast).toBe(false);
+      expect(theme.bannerStart).toBe(">>>");
+      expect(theme.bannerEnd).toBe("<<<");
+      expect(theme.selectionMarker).toBe(">>>");
+      expect(Object.values(theme.fileColors).every((color) => color === undefined)).toBe(true);
+    },
+  );
+});

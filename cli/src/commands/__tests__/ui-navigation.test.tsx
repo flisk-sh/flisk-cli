@@ -1,0 +1,859 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import { PassThrough } from "node:stream";
+import { render } from "ink";
+import { expect, it, vi } from "vitest";
+import { createTUITheme, TUIThemeContext } from "../../components/ui-theme.js";
+import { tiltGetUiResources } from "../../utils/up-readiness.js";
+import { TUIApp } from "../ui.js";
+
+const { discoverResourcesMock, loadTiltEventsMock, TiltEventsLoadErrorMock } = vi.hoisted(() => {
+  class MockTiltEventsLoadError extends Error {
+    constructor(
+      message: string,
+      readonly kind: "unavailable" | "error",
+    ) {
+      super(message);
+      this.name = "TiltEventsLoadError";
+    }
+  }
+  return {
+    discoverResourcesMock: vi.fn(() => [{ name: "api", path: "/tmp/test/api", stack: "stack-00" }]),
+    loadTiltEventsMock: vi.fn(),
+    TiltEventsLoadErrorMock: MockTiltEventsLoadError,
+  };
+});
+vi.mock("../../utils/tilt-events.js", async (importOriginal) => ({
+  stripTerminalControls: (await importOriginal<typeof import("../../utils/tilt-events.js")>())
+    .stripTerminalControls,
+  loadTiltEvents: loadTiltEventsMock,
+  TiltEventsLoadError: TiltEventsLoadErrorMock,
+}));
+
+const ANSI_SGR = new RegExp([String.fromCharCode(0x1b), "\\[[0-?]*[ -/]*[@-~]"].join(""), "g");
+
+vi.mock("../../utils/services.js", () => ({
+  clearDiscoveryResultCache: vi.fn(),
+  clearMetadataCache: vi.fn(),
+  discoverStacks: () =>
+    Array.from({ length: 30 }, (_, i) => ({
+      name: `stack-${String(i).padStart(2, "0")}`,
+      resources: [],
+      resourceCount: 0,
+    })),
+  discoverResources: discoverResourcesMock,
+  getResourceMetadata: vi.fn(),
+  getStackMetadata: (stack: { name: string }) => ({
+    name: stack.name,
+    resourceCount: 0,
+    createdAt: "2026-10-07T00:00:00.000Z",
+    lastModified: "2026-10-07T00:00:00.000Z",
+    resources: [],
+    overallStatus: "unknown",
+  }),
+}));
+vi.mock("../../utils/up-readiness.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/up-readiness.js")>()),
+  tiltGetUiResources: vi.fn(async () => null),
+}));
+vi.mock("../../utils/paths.js", () => ({
+  findProjectRoot: () => "/tmp/test",
+  getPackageVersion: () => "1.1.0",
+}));
+
+function streams() {
+  const stdin = new PassThrough() as unknown as NodeJS.ReadStream;
+  Object.assign(stdin, {
+    isTTY: true,
+    isRaw: false,
+    setRawMode: () => {},
+    ref: () => {},
+    unref: () => {},
+  });
+  const stdout = new PassThrough() as unknown as NodeJS.WriteStream;
+  Object.assign(stdout, { isTTY: true, columns: 100, rows: 24 });
+  const stderr = new PassThrough() as unknown as NodeJS.WriteStream;
+  Object.assign(stderr, { isTTY: true, columns: 100, rows: 24 });
+  let output = "";
+  stdout.on("data", (data) => {
+    output += String(data);
+  });
+  return { stdin, stdout, stderr, output: () => output };
+}
+
+it.each([
+  [undefined, 10350],
+  ["12345", 12345],
+  ["12345abc", 10350],
+  ["10350.5", 10350],
+  ["0", 10350],
+  ["-1", 10350],
+  ["65536", 10350],
+])("polls the validated port for TILT_PORT=%s", async (value, port) => {
+  vi.stubEnv("TILT_PORT", value);
+  vi.mocked(tiltGetUiResources).mockClear();
+  const io = streams();
+  const app = render(<TUIApp animated={false} />, {
+    stdin: io.stdin,
+    stdout: io.stdout,
+    stderr: io.stderr,
+    interactive: true,
+    exitOnCtrlC: false,
+    patchConsole: false,
+  });
+  try {
+    await vi.waitFor(() => expect(tiltGetUiResources).toHaveBeenCalledWith(port));
+    expect(vi.mocked(tiltGetUiResources).mock.calls.every(([actual]) => actual === port)).toBe(
+      true,
+    );
+  } finally {
+    app.unmount();
+    io.stdin.destroy();
+    io.stdout.destroy();
+    io.stderr.destroy();
+    vi.unstubAllEnvs();
+  }
+});
+
+it("navigates with vim keys and terminal page/home/end sequences while search receives text", async () => {
+  const io = streams();
+  const app = render(<TUIApp animated={false} />, {
+    stdin: io.stdin,
+    stdout: io.stdout,
+    stderr: io.stderr,
+    interactive: true,
+    exitOnCtrlC: false,
+    patchConsole: false,
+  });
+  const send = async (key: string) => {
+    io.stdin.write(key);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await app.waitUntilRenderFlush();
+  };
+  const selected = () =>
+    io
+      .output()
+      .replace(ANSI_SGR, "")
+      .match(/▓▒░ stack-\d+/g)
+      ?.at(-1);
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await app.waitUntilRenderFlush();
+    expect(selected(), io.output()).toBe("▓▒░ stack-00");
+    await send("j");
+    expect(selected()).toBe("▓▒░ stack-01");
+    await send("k");
+    expect(selected()).toBe("▓▒░ stack-00");
+    await send("G");
+    expect(selected()).toBe("▓▒░ stack-29");
+    await send("g");
+    expect(selected()).toBe("▓▒░ stack-00");
+    await send("\x1b[6~");
+    expect(selected()).toBe("▓▒░ stack-10");
+    await send("\x1b[5~");
+    expect(selected()).toBe("▓▒░ stack-00");
+    await send("\x1b[F");
+    expect(selected()).toBe("▓▒░ stack-29");
+    await send("\x1b[H");
+    expect(selected()).toBe("▓▒░ stack-00");
+    await send("\x0b");
+    expect(selected()).toBe("▓▒░ stack-00");
+    await send("\x1bk");
+    expect(selected()).toBe("▓▒░ stack-00");
+    io.stdout.rows = 30;
+    io.stdout.emit("resize");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await send("\x1b[6~");
+    expect(selected()).toBe("▓▒░ stack-16");
+    await send("g");
+    await send("/");
+    await send("j");
+    await send("k");
+    await send("g");
+    expect(io.output()).toContain("Search: jkg_");
+    await send("\x1b");
+    await send("G");
+    await send("\r");
+    expect(io.output()).toContain("Selected stack: stack-29");
+  } finally {
+    app.unmount();
+    io.stdin.destroy();
+    io.stdout.destroy();
+    io.stderr.destroy();
+  }
+});
+
+it("uses the shared keymap for footer hints and the help panel", async () => {
+  const io = streams();
+  io.stdout.rows = 40;
+  loadTiltEventsMock.mockReset().mockResolvedValue({ resources: [], events: [] });
+  const app = render(<TUIApp animated={false} />, {
+    stdin: io.stdin,
+    stdout: io.stdout,
+    stderr: io.stderr,
+    interactive: true,
+    exitOnCtrlC: false,
+    patchConsole: false,
+  });
+  const send = async (key: string) => {
+    io.stdin.write(key);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await app.waitUntilRenderFlush();
+  };
+  const output = () => io.output().replace(ANSI_SGR, "");
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await app.waitUntilRenderFlush();
+    expect(output()).toContain("[Enter or Space] Select");
+    expect(output()).toContain("[e] show all");
+    await send("3");
+    await new Promise((resolve) => setTimeout(resolve, 2100));
+    await app.waitUntilRenderFlush();
+    expect(output()).toContain("[Tab/Shift+Tab] Tabs");
+    await send("?");
+    expect(output()).toContain("Keyboard Shortcuts");
+    expect(output()).toContain("Tab/Shift+Tab Next / previous tab");
+    expect(output()).toContain("1-5 Direct tab access");
+    expect(output()).toContain("Enter or Space Select item / Open detail");
+  } finally {
+    app.unmount();
+    io.stdin.destroy();
+    io.stdout.destroy();
+    io.stderr.destroy();
+  }
+});
+
+it("renders Tilt events and refreshes them with r", async () => {
+  const snapshot = {
+    resources: [{ name: "api", runtimeStatus: "OK", updateStatus: "OK", hasPendingChanges: false }],
+    events: [
+      {
+        id: "api:build:one",
+        resourceName: "api",
+        kind: "success" as const,
+        title: "Build completed",
+        occurredAt: "2026-10-07T12:00:00Z",
+      },
+    ],
+  };
+  discoverResourcesMock
+    .mockReset()
+    .mockReturnValue([{ name: "api", path: "/tmp/test/api", stack: "stack-00" }]);
+  loadTiltEventsMock.mockReset().mockResolvedValue(snapshot);
+  const theme = createTUITheme(false, { NO_COLOR: "1" });
+  const io = streams();
+  const app = render(
+    <TUIThemeContext.Provider value={theme}>
+      <TUIApp animated={false} />
+    </TUIThemeContext.Provider>,
+    {
+      stdin: io.stdin,
+      stdout: io.stdout,
+      stderr: io.stderr,
+      interactive: true,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    },
+  );
+  const send = async (key: string) => {
+    io.stdin.write(key);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await app.waitUntilRenderFlush();
+  };
+  try {
+    await send("3");
+    const output = io.output().replace(ANSI_SGR, "");
+    expect(output).toContain("[ Event Timeline ]");
+    expect(output).toContain("api: Runtime OK; Update OK");
+    expect(output).toContain("Build completed");
+    expect(loadTiltEventsMock).toHaveBeenCalledTimes(1);
+    await send("r");
+    expect(loadTiltEventsMock).toHaveBeenCalledTimes(2);
+  } finally {
+    app.unmount();
+    io.stdin.destroy();
+    io.stdout.destroy();
+    io.stderr.destroy();
+  }
+});
+
+it("shows a friendly state when Tilt cannot provide events", async () => {
+  discoverResourcesMock
+    .mockReset()
+    .mockReturnValue([{ name: "api", path: "/tmp/test/api", stack: "stack-00" }]);
+  loadTiltEventsMock
+    .mockReset()
+    .mockRejectedValue(new TiltEventsLoadErrorMock("Tilt is offline", "unavailable"));
+  const io = streams();
+  const app = render(<TUIApp animated={false} />, {
+    stdin: io.stdin,
+    stdout: io.stdout,
+    stderr: io.stderr,
+    interactive: true,
+    exitOnCtrlC: false,
+    patchConsole: false,
+  });
+  const send = async (key: string) => {
+    io.stdin.write(key);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await app.waitUntilRenderFlush();
+  };
+  try {
+    await send("3");
+    const output = io.output().replace(ANSI_SGR, "");
+    expect(output).toContain("Tilt is not running or its UI is unreachable.");
+    expect(output).toContain("press [r] to retry.");
+    await send("r");
+    expect(loadTiltEventsMock).toHaveBeenCalledTimes(2);
+  } finally {
+    app.unmount();
+    io.stdin.destroy();
+    io.stdout.destroy();
+    io.stderr.destroy();
+  }
+});
+
+it("keeps the Events tab reachable when no local services are discovered", async () => {
+  discoverResourcesMock.mockReset().mockReturnValue([]);
+  loadTiltEventsMock.mockReset().mockResolvedValue({ resources: [], events: [] });
+  const io = streams();
+  const app = render(<TUIApp animated={false} />, {
+    stdin: io.stdin,
+    stdout: io.stdout,
+    stderr: io.stderr,
+    interactive: true,
+    exitOnCtrlC: false,
+    patchConsole: false,
+  });
+  const send = async (key: string) => {
+    io.stdin.write(key);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await app.waitUntilRenderFlush();
+  };
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await app.waitUntilRenderFlush();
+    expect(io.output().replace(ANSI_SGR, "")).toContain("No service.json files found");
+    await send("\x1b");
+    expect(io.output().replace(ANSI_SGR, "")).toContain("Press q to quit");
+    await send("3");
+    const output = io.output().replace(ANSI_SGR, "");
+    expect(output).toContain("Event Timeline");
+    expect(output).toContain("No recent build events are available from Tilt yet.");
+    expect(loadTiltEventsMock).toHaveBeenCalledTimes(1);
+  } finally {
+    app.unmount();
+    io.stdin.destroy();
+    io.stdout.destroy();
+    io.stderr.destroy();
+  }
+});
+
+it("discards stale event responses and shows a loading state", async () => {
+  discoverResourcesMock
+    .mockReset()
+    .mockReturnValue([{ name: "api", path: "/tmp/test/api", stack: "stack-00" }]);
+  const snapshot = {
+    resources: [],
+    events: [
+      {
+        id: "latest",
+        resourceName: "api",
+        kind: "success" as const,
+        title: "Latest response",
+        occurredAt: "2026-10-07T12:00:00Z",
+      },
+    ],
+  };
+  let rejectFirst!: (reason: unknown) => void;
+  let resolveSecond!: (value: typeof snapshot) => void;
+  const first = new Promise<typeof snapshot>((_resolve, reject) => {
+    rejectFirst = reject;
+  });
+  const second = new Promise<typeof snapshot>((resolve) => {
+    resolveSecond = resolve;
+  });
+  loadTiltEventsMock
+    .mockReset()
+    .mockImplementationOnce(() => first)
+    .mockImplementationOnce(() => second);
+  const io = streams();
+  const app = render(<TUIApp animated={false} />, {
+    stdin: io.stdin,
+    stdout: io.stdout,
+    stderr: io.stderr,
+    interactive: true,
+    exitOnCtrlC: false,
+    patchConsole: false,
+  });
+  const send = async (key: string) => {
+    io.stdin.write(key);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await app.waitUntilRenderFlush();
+  };
+  const flush = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await app.waitUntilRenderFlush();
+  };
+  try {
+    await send("3");
+    expect(io.output().replace(ANSI_SGR, "")).toContain("Loading Tilt events...");
+    await send("r");
+    expect(loadTiltEventsMock).toHaveBeenCalledTimes(2);
+    resolveSecond(snapshot);
+    await flush();
+    expect(io.output().replace(ANSI_SGR, "")).toContain("Latest response");
+    rejectFirst(new TiltEventsLoadErrorMock("Tilt is offline", "unavailable"));
+    await flush();
+    const output = io.output().replace(ANSI_SGR, "");
+    expect(output).toContain("Latest response");
+    expect(output).not.toContain("Tilt is not running or its UI is unreachable.");
+  } finally {
+    app.unmount();
+    io.stdin.destroy();
+    io.stdout.destroy();
+    io.stderr.destroy();
+  }
+});
+
+it("shows command and parsing errors without calling Tilt unavailable", async () => {
+  discoverResourcesMock
+    .mockReset()
+    .mockReturnValue([{ name: "api", path: "/tmp/test/api", stack: "stack-00" }]);
+  loadTiltEventsMock
+    .mockReset()
+    .mockRejectedValue(
+      new TiltEventsLoadErrorMock("Tilt returned invalid UIResource JSON", "error"),
+    );
+  const io = streams();
+  const app = render(<TUIApp animated={false} />, {
+    stdin: io.stdin,
+    stdout: io.stdout,
+    stderr: io.stderr,
+    interactive: true,
+    exitOnCtrlC: false,
+    patchConsole: false,
+  });
+  const send = async (key: string) => {
+    io.stdin.write(key);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await app.waitUntilRenderFlush();
+  };
+  try {
+    await send("3");
+    const output = io.output().replace(ANSI_SGR, "");
+    expect(output).toContain("Could not load Tilt events.");
+    expect(output).toContain("Tilt returned invalid UIResource JSON");
+    expect(output).not.toContain("Tilt is not running or its UI is unreachable.");
+  } finally {
+    app.unmount();
+    io.stdin.destroy();
+    io.stdout.destroy();
+    io.stderr.destroy();
+  }
+});
+
+it("truncates event details and labels the event limit", async () => {
+  discoverResourcesMock
+    .mockReset()
+    .mockReturnValue([{ name: "api", path: "/tmp/test/api", stack: "stack-00" }]);
+  const longDetails = "build output ".repeat(30);
+  loadTiltEventsMock.mockReset().mockResolvedValue({
+    resources: [{ name: "api", runtimeStatus: "OK" }],
+    events: Array.from({ length: 21 }, (_, index) => ({
+      id: `event-${index}`,
+      resourceName: "api",
+      kind: "warning" as const,
+      title: `Build event ${index}`,
+      occurredAt: "2026-10-07T12:00:00Z",
+      details: index === 0 ? longDetails : undefined,
+    })),
+  });
+  const io = streams();
+  const app = render(<TUIApp animated={false} />, {
+    stdin: io.stdin,
+    stdout: io.stdout,
+    stderr: io.stderr,
+    interactive: true,
+    exitOnCtrlC: false,
+    patchConsole: false,
+  });
+  const send = async (key: string) => {
+    io.stdin.write(key);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await app.waitUntilRenderFlush();
+  };
+  try {
+    await send("3");
+    const output = io.output().replace(ANSI_SGR, "");
+    expect(output).toContain("2026-10-07 12:00:00Z");
+    expect(output).toContain("Showing first 20 events");
+    expect(output).toMatch(/\.\.\.|\u2026/);
+    expect(output).not.toContain(longDetails);
+    expect(output).not.toContain("Build event 20");
+  } finally {
+    app.unmount();
+    io.stdin.destroy();
+    io.stdout.destroy();
+    io.stderr.destroy();
+  }
+});
+
+it("renders running and stopped service status rows and changes the selected row with keyboard handlers", async () => {
+  const services = [
+    {
+      name: "api",
+      path: "/tmp/test/core/api",
+      configPath: "/tmp/test/core/api/service.json",
+      stack: "core",
+      type: "backend" as const,
+      config: { name: "api", appType: "backend" as const, port: 8080, enabled: true },
+    },
+    {
+      name: "worker",
+      path: "/tmp/test/core/worker",
+      configPath: "/tmp/test/core/worker/service.json",
+      stack: "core",
+      type: "worker" as const,
+      config: { name: "worker", appType: "worker" as const, enabled: true },
+    },
+  ];
+  const stacks = [
+    {
+      name: "core",
+      path: "/tmp/test/core",
+      resources: services,
+      resourceCount: 2,
+    },
+    {
+      name: "edge",
+      path: "/tmp/test/edge",
+      resources: [],
+      resourceCount: 0,
+    },
+  ];
+
+  const servicesModule = await import("../../utils/services.js");
+  vi.spyOn(servicesModule, "discoverStacks").mockReturnValue(stacks as never);
+  discoverResourcesMock.mockReset().mockReturnValue(services);
+  vi.spyOn(servicesModule, "getStackMetadata").mockImplementation(
+    (stack: { name: string }) =>
+      ({
+        name: stack.name,
+        resourceCount: stack.name === "core" ? 2 : 0,
+        createdAt: "2026-10-07T00:00:00.000Z",
+        lastModified: "2026-10-07T00:00:00.000Z",
+        overallStatus: (stack.name === "core" ? "degraded" : "unknown") as never,
+        resources:
+          stack.name === "core"
+            ? [
+                {
+                  name: "api",
+                  type: "backend" as const,
+                  stack: "core",
+                  path: "/tmp/test/core/api",
+                  configPath: "/tmp/test/core/api/service.json",
+                  status: "running" as const,
+                  port: 8080,
+                  autogeneratedFiles: [],
+                  dependencies: [],
+                  hasDockerfile: true,
+                  hasTiltfile: true,
+                  hasDockerCompose: false,
+                  createdAt: "2026-10-07T00:00:00.000Z",
+                  lastModified: "2026-10-07T00:00:00.000Z",
+                },
+                {
+                  name: "worker",
+                  type: "worker" as const,
+                  stack: "core",
+                  path: "/tmp/test/core/worker",
+                  configPath: "/tmp/test/core/worker/service.json",
+                  status: "stopped" as const,
+                  statusReason: "Container exited (0)",
+                  autogeneratedFiles: [],
+                  dependencies: [],
+                  hasDockerfile: true,
+                  hasTiltfile: true,
+                  hasDockerCompose: false,
+                  createdAt: "2026-10-07T00:00:00.000Z",
+                  lastModified: "2026-10-07T00:00:00.000Z",
+                },
+              ]
+            : [],
+      }) as never,
+  );
+
+  const io = streams();
+  io.stdout.columns = 120;
+  io.stdout.rows = 30;
+  const app = render(<TUIApp animated={false} />, {
+    stdin: io.stdin,
+    stdout: io.stdout,
+    stderr: io.stderr,
+    interactive: true,
+    exitOnCtrlC: false,
+    patchConsole: false,
+  });
+  const send = async (key: string) => {
+    io.stdin.write(key);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await app.waitUntilRenderFlush();
+  };
+  const cleanOutput = () => io.output().replace(ANSI_SGR, "");
+  const selectedRow = () =>
+    cleanOutput()
+      .match(/(?:▓▒░|>>>) (?:core|edge) \(\d+ resources\)/g)
+      ?.at(-1)
+      ?.trim();
+
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await app.waitUntilRenderFlush();
+
+    expect(selectedRow()).toMatch(/core \(2 resources\)$/);
+    await send("j");
+    expect(selectedRow()).toMatch(/edge \(0 resources\)$/);
+    await send("k");
+    expect(selectedRow()).toMatch(/core \(2 resources\)$/);
+
+    await send("\t");
+    await send("\r");
+
+    const rendered = cleanOutput();
+    expect(rendered).toContain("Stack: core");
+    expect(rendered).toMatch(/api\s+core\s+backend\s+(?:✓|\[\+\]) running/);
+    expect(rendered).toMatch(/worker\s+core\s+worker\s+(?:✗|\[x\]) stopped/);
+    expect(rendered).toContain("worker: Container exited (0)");
+  } finally {
+    app.unmount();
+    io.stdin.destroy();
+    io.stdout.destroy();
+    io.stderr.destroy();
+    vi.restoreAllMocks();
+  }
+});
+
+it("covers files and config tabs, filter/mouse/tooltip toggles, and error recovery", async () => {
+  const services = [
+    {
+      name: "api",
+      path: "/tmp/test/core/api",
+      configPath: "/tmp/test/core/api/service.json",
+      stack: "core",
+      type: "backend" as const,
+      config: { name: "api", appType: "backend" as const, port: 8080, enabled: true },
+    },
+    {
+      name: "legacy",
+      path: "/tmp/test/core/legacy",
+      configPath: "/tmp/test/core/legacy/service.json",
+      stack: "core",
+      type: "backend" as const,
+      config: { name: "legacy", appType: "backend" as const, enabled: false },
+    },
+  ];
+  const stacks = [
+    {
+      name: "core",
+      path: "/tmp/test/core",
+      resources: services,
+      resourceCount: 2,
+    },
+  ];
+
+  const servicesModule = await import("../../utils/services.js");
+  let failOnce = true;
+  vi.spyOn(servicesModule, "discoverStacks").mockImplementation(() => {
+    if (failOnce) {
+      failOnce = false;
+      throw new Error("Invalid service.json syntax");
+    }
+    return stacks as never;
+  });
+  discoverResourcesMock.mockReset().mockReturnValue(services);
+  vi.spyOn(servicesModule, "getResourceMetadata").mockReturnValue({
+    name: "api",
+    type: "backend",
+    stack: "core",
+    path: "/tmp/test/core/api",
+    configPath: "/tmp/test/core/api/service.json",
+    status: "running",
+    port: 8080,
+    autogeneratedFiles: [
+      {
+        name: "Dockerfile",
+        path: "/tmp/test/core/api/Dockerfile",
+        type: "docker",
+        exists: true,
+        size: 128,
+        lastModified: "2026-10-07T00:00:00.000Z",
+      },
+    ],
+    createdAt: "2026-10-07T00:00:00.000Z",
+    lastModified: "2026-10-07T00:00:00.000Z",
+  } as never);
+
+  const io = streams();
+  io.stdout.columns = 120;
+  io.stdout.rows = 30;
+  const app = render(<TUIApp animated={false} />, {
+    stdin: io.stdin,
+    stdout: io.stdout,
+    stderr: io.stderr,
+    interactive: true,
+    exitOnCtrlC: false,
+    patchConsole: false,
+  });
+  const send = async (key: string) => {
+    io.stdin.write(key);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await app.waitUntilRenderFlush();
+  };
+  const cleanOutput = () => io.output().replace(ANSI_SGR, "");
+
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await app.waitUntilRenderFlush();
+
+    expect(cleanOutput()).toContain("Could Not Load Services");
+    expect(cleanOutput()).toContain("Invalid service.json syntax");
+
+    await send("r");
+    expect(cleanOutput()).toContain("core (2 resources)");
+
+    await send("4");
+    expect(cleanOutput()).toContain("Select a service to view files");
+    expect(cleanOutput()).not.toContain("legacy [DISABLED]");
+
+    await send("e");
+    expect(cleanOutput()).toContain("Showing all services (including disabled)");
+    expect(cleanOutput()).toContain("core/legacy [DISABLED]");
+
+    await send("e");
+    expect(cleanOutput()).toContain("Showing enabled services only");
+
+    await send("\r");
+    expect(cleanOutput()).toContain("Service: api");
+    expect(cleanOutput()).toMatch(/(?:▶|\[\+\]) api/);
+
+    await send("\r");
+    expect(cleanOutput()).toContain("Selected file: Dockerfile (docker)");
+
+    await send("\x1b");
+    await send("\x1b");
+
+    await send("5");
+    expect(cleanOutput()).toContain("Select a service to view configuration");
+    await send("\r");
+    expect(cleanOutput()).toContain("/tmp/test/core/api/service.json");
+    expect(cleanOutput()).toContain('"appType": "backend"');
+
+    await send("t");
+    expect(cleanOutput()).toContain("Tooltips disabled");
+    await send("m");
+    expect(cleanOutput()).toContain("Mouse support disabled");
+  } finally {
+    app.unmount();
+    io.stdin.destroy();
+    io.stdout.destroy();
+    io.stderr.destroy();
+    vi.restoreAllMocks();
+  }
+});
+
+it("handles URL open/copy actions, mouse selection, Shift+Tab, and createHelpHint branches", async () => {
+  const { createHelpHint } = await import("../ui.js");
+  expect(createHelpHint("overview", "core", null, true, false)).toContain('Stack "core" selected.');
+  expect(createHelpHint("resources", null, null, false, true)).toContain("enabled only");
+  expect(createHelpHint("files", null, "api", true, false)).toContain('Service "api"');
+  expect(createHelpHint("files", null, null, true, true)).toContain("Select service to view files");
+  expect(createHelpHint("config", null, null, true, false)).toContain("View configurations");
+
+  const services = [
+    {
+      name: "web",
+      path: "/tmp/test/core/web",
+      configPath: "/tmp/test/core/web/service.json",
+      stack: "core",
+      type: "frontend" as const,
+      config: { name: "web", appType: "frontend" as const, port: 3000, enabled: true },
+    },
+    {
+      name: "worker",
+      path: "/tmp/test/core/worker",
+      configPath: "/tmp/test/core/worker/service.json",
+      stack: "core",
+      type: "worker" as const,
+      config: { name: "worker", appType: "worker" as const, enabled: true },
+    },
+  ];
+  const stacks = [
+    {
+      name: "core",
+      path: "/tmp/test/core",
+      resources: [services[0]],
+      resourceCount: 1,
+    },
+    {
+      name: "jobs",
+      path: "/tmp/test/jobs",
+      resources: [services[1]],
+      resourceCount: 1,
+    },
+  ];
+
+  const servicesModule = await import("../../utils/services.js");
+  vi.spyOn(servicesModule, "discoverStacks").mockReturnValue(stacks as never);
+  discoverResourcesMock.mockReset().mockReturnValue(services);
+
+  const urlActions = await import("../../utils/url-actions.js");
+  const openUrlSpy = vi.spyOn(urlActions, "openUrl").mockResolvedValue(true);
+  const copySpy = vi.spyOn(urlActions, "copyToClipboard").mockResolvedValue(true);
+
+  const io = streams();
+  io.stdout.columns = 120;
+  io.stdout.rows = 30;
+  const app = render(<TUIApp animated={false} />, {
+    stdin: io.stdin,
+    stdout: io.stdout,
+    stderr: io.stderr,
+    interactive: true,
+    exitOnCtrlC: false,
+    patchConsole: false,
+  });
+  const send = async (key: string) => {
+    io.stdin.write(key);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await app.waitUntilRenderFlush();
+  };
+  const cleanOutput = () => io.output().replace(ANSI_SGR, "");
+
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await app.waitUntilRenderFlush();
+
+    await send("o");
+    expect(openUrlSpy).toHaveBeenCalledWith("http://app.flisk-project.localhost/web");
+    expect(cleanOutput()).toContain("Opening http://app.flisk-project.localhost/web");
+
+    await send("y");
+    expect(copySpy).toHaveBeenCalledWith("http://app.flisk-project.localhost/web");
+    expect(cleanOutput()).toContain("Copied http://app.flisk-project.localhost/web");
+
+    await send("j");
+    await send("o");
+    expect(cleanOutput()).toContain("No URL for this resource");
+    await send("y");
+    expect(cleanOutput()).toContain("No URL for this resource");
+
+    await send("\x1b[Z");
+    expect(cleanOutput()).toContain("Select a service to view configuration");
+  } finally {
+    app.unmount();
+    io.stdin.destroy();
+    io.stdout.destroy();
+    io.stderr.destroy();
+    vi.restoreAllMocks();
+  }
+});

@@ -1,0 +1,416 @@
+#!/usr/bin/env bash
+# Copyright (c) 2026 Flisk Landscape contributors
+# SPDX-License-Identifier: MIT
+# End-to-end checks for the AI agent surface (#1268): the `agent` resource, `flisk agent sessions`, `flisk restart` and the MCP
+# tools, run against a real `flisk up` stack. This is the reference suite for tests/e2e (see docs/contributing/05-write-e2e.md).
+# Each case is one named function, listed in CI order in suite.json, so a CI step (and a person) can run a single case:
+#
+#   tests/e2e/resource-types/agent/run.sh <case> [<case> ...]   e.g.  run.sh A1 A2 A3
+#   tests/e2e/resource-types/agent/run.sh all                   every case in order, then cleanup
+#   tests/e2e/resource-types/agent/run.sh list | self-check | diagnostics | cleanup
+#
+# Needs: flisk on PATH, Docker, Tilt, Node 22+, jq, curl. The distribution and docs checks (D1-D3) need no stack: they live in
+# tests/e2e/static/skills-and-docs.sh and run in make test-shell, not here.
+# Scratch state lives under $E2E_ROOT/agent (see tests/e2e/lib/lib.sh for the variables and overrides).
+set -euo pipefail
+
+SUITE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../../lib/lib.sh
+source "$SUITE_DIR/../../lib/lib.sh"
+# shellcheck source=../common.sh
+source "$SUITE_DIR/../common.sh"
+e2e_init agent agente2e
+STACK=shop
+AGENT=bot
+# Read by e2e_diagnostics in tests/e2e/lib/lib.sh (container logs to collect).
+# shellcheck disable=SC2034
+RESOURCES=("$AGENT")
+
+agent_port() { resource_port "$AGENT"; }
+traefik_url() { resource_url "$AGENT"; }
+agent_container() { running_container "$AGENT"; }
+via_traefik() { traefik_request "$AGENT" "$@"; } # <path> [curl args...]
+turn_via_traefik() { # <session id> <input> -> body on stdout; fails on anything but HTTP 2xx
+  traefik_request_ok "$AGENT" /turn -X POST -H "x-session-id: $1" -H 'content-type: application/json' -d "{\"input\":\"$2\"}"
+}
+agent_ready() { [[ "$(via_traefik /ready -o /dev/null -w '%{http_code}')" = "200" ]]; }
+wait_agent_ready() { poll_until "agent $AGENT answers /ready 200 through Traefik" "$READY_TIMEOUT" agent_ready; }
+session_answers() { (cd "$DIR" && flisk agent sessions "$AGENT" --session-id s1 --json) >/dev/null 2>&1; }
+# #4192: `flisk restart` stops and starts the SAME container (no rebuild), so wait for /ready and the
+# session route instead of a replaced container id.
+agent_restarted() { # <container id from before the restart>
+  poll_until "agent $AGENT answers /ready 200 through Traefik" "$READY_TIMEOUT" agent_ready
+  poll_until "flisk agent sessions answers again after restart" "$READY_TIMEOUT" session_answers
+}
+start_up() { start_stack "$STACK"; }
+wait_stack() { wait_status_url "$AGENT"; wait_agent_ready; } # after `flisk up`: the status lists the agent and it is ready
+agent_stub() { with_stub "$(agent_port)" "$@"; } # <mode> [args...]: a stub stands in for the agent's route
+
+# ---------------------------------------------------------------------------------------------------------------- A: happy path
+
+A1() { # scaffold the project and the agent
+  log "A1 scaffold: flisk project --yes, flisk resource $AGENT --type agent"
+  # common.sh scaffolds the project and the agent resource; --stack puts the agent on the stack this suite boots.
+  common_scaffold agent "$AGENT" --stack "$STACK" --yes
+  local src="$DIR/services/$STACK/$AGENT/src/index.ts"
+  [[ -f "$src" ]] || die "scaffolded agent source missing: $src"
+  # The scaffold tells you to replace runTurn. Do what a user does: report which instance answered (for the sticky-routing
+  # check) and support a slow turn (for the drain check), logging when a turn starts so the test can wait for it.
+  node - "$src" <<'JS'
+const fs = require("node:fs");
+const file = process.argv[2];
+const text = fs.readFileSync(file, "utf8");
+const marker = /return 'received ' \+ input \+ ' \(turn ' \+ Math\.ceil\(checkpoint\.messages\.length \/ 2\) \+ '\)';/;
+if (!marker.test(text)) { console.error("scaffold runTurn changed; update tests/e2e/resource-types/agent/run.sh"); process.exit(1); }
+fs.writeFileSync(file, text.replace(marker, [
+  "const slow = /^slow:(\\d+)$/.exec(input);",
+  "  if (slow) {",
+  "    console.log('[e2e] slow turn started');",
+  "    await new Promise((resolve) => setTimeout(resolve, Number(slow[1])));",
+  "  }",
+  "  return 'received ' + input + ' (turn ' + Math.ceil(checkpoint.messages.length / 2) + ') from ' + (process.env.HOSTNAME ?? 'unknown');",
+].join("\n")));
+JS
+  grep -q "slow turn started" "$src" || die "runTurn patch not applied"
+  echo "scaffolded $DIR (agent $AGENT in stack $STACK)"
+}
+
+A2() { # flisk up, poll until the agent is ready
+  log "A2 flisk up and bounded wait for $AGENT"
+  : >"$DIR/up.log"
+  start_up
+  echo '$ flisk up '"$STACK"'  (background, log: up.log)'
+  wait_stack
+  common_wait_status "$AGENT" agent
+}
+
+A3() { # /health and /ready through Traefik; the agent publishes no host port
+  log "A3 /health and /ready through Traefik"
+  local port; port="$(agent_port)"
+  echo "agent port: $port; traefik url: $(traefik_url)"
+  local code
+  code="$(via_traefik /health -o /dev/null -w '%{http_code}')"; echo "traefik GET /health -> $code"; [[ "$code" = 200 ]] || die "traefik /health returned $code"
+  code="$(via_traefik /ready -o /dev/null -w '%{http_code}')"; echo "traefik GET /ready -> $code"; [[ "$code" = 200 ]] || die "traefik /ready returned $code"
+  # The agent container publishes no host port: Traefik is the only way in, and `flisk agent sessions` uses the same route.
+  code="$(direct "http://127.0.0.1:$port/health" -o /dev/null -w '%{http_code}' || true)"; echo "direct GET :$port/health -> ${code:-000} (expected: not published)"
+  [[ "${code:-000}" != 200 ]] || die "agent port $port answers on the host; the docs say agents are reached through Traefik"
+  timing_serving cold_start || true
+}
+
+A3b() { # flisk down, then flisk up again with the images cached: /ready answers 200 (the warm start, stacklytics)
+  log "A3b warm start: flisk down, flisk up, $AGENT answers /ready"
+  common_warm_start "$STACK" "agent $AGENT answers /ready 200 through Traefik" agent_ready
+}
+
+A4() { # a checkpoint through Traefik, read back with flisk agent sessions
+  log "A4 session checkpoint envelope"
+  local body; body="$(turn_via_traefik s1 hello)"; echo "POST /turn (x-session-id: s1) -> $body"
+  echo "$body" >"$OUT/a4-turn.out"
+  assert check "$OUT/a4-turn.out" "j.sessionId === 's1' && j.turns === 1 && j.reply.startsWith('received hello')" "the turn was answered and checkpointed"
+  run a4-sessions agent sessions "$AGENT" --session-id s1 --json
+  [[ "$RC" -eq 0 ]] || die "flisk agent sessions exited $RC"
+  assert check "$OUT/a4-sessions.out" "typeof j.schemaVersion === 'number' && Array.isArray(j.errors) && j.errors.length === 0" "envelope has schemaVersion and errors: []"
+  assert check "$OUT/a4-sessions.out" "j.data.agent === '$AGENT' && Number.isInteger(j.data.port)" "data.agent and data.port are set by the CLI"
+  assert check "$OUT/a4-sessions.out" "j.data.session && j.data.session.sessionId === 's1' && j.data.session.messages.length === 2" "the checkpoint is nested under data.session"
+  assert check "$OUT/a4-sessions.out" "!('messages' in j.data) && !('sessionId' in j.data)" "checkpoint fields are not spread into data"
+  assert check "$OUT/a4-sessions.out" "Array.isArray(j.data.session.toolCalls) && j.data.session.toolCalls[0]?.[0]?.name === 'echo' && j.data.session.toolCalls[0][0].ok === true && typeof j.data.session.toolCalls[0][0].ms === 'number'" "the checkpoint records the turn's tool call"
+  run a4-session-human agent sessions "$AGENT" --session-id s1
+  [[ "$RC" -eq 0 ]] || die "flisk agent sessions (human) exited $RC"
+  grep -q "Tool calls:" "$OUT/a4-session-human.out" || die "the session view did not print tool activity"
+  grep -q "Turn 1:" "$OUT/a4-session-human.out" || die "the session view did not print the turn"
+  grep -q -- "- ok echo" "$OUT/a4-session-human.out" || die "the session view did not print the tool call"
+  run a4-list agent sessions "$AGENT" --json
+  [[ "$RC" -eq 0 ]] || die "flisk agent sessions (list) exited $RC"
+  assert check "$OUT/a4-list.out" "j.data.agent === '$AGENT' && j.data.total >= 1 && j.data.sessions.some(s => s.sessionId === 's1' && s.checkpointBytes > 0)" "without --session-id the sessions are listed under data.sessions"
+}
+
+A5() { # sticky routing: same session id -> same instance
+  log "A5 sticky routing through Traefik"
+  local first="" body who i
+  for i in 1 2 3 4 5; do
+    body="$(turn_via_traefik s-sticky "ping $i")"
+    who="$(echo "$body" | sed -E 's/.* from ([^"]+)".*/\1/')"
+    echo "s-sticky request $i answered by instance: $who"
+    [[ -n "$first" ]] || first="$who"
+    [[ "$who" = "$first" ]] || die "session s-sticky moved from instance $first to $who"
+  done
+  body="$(turn_via_traefik s-other "ping")"; echo "s-other answered by instance: $(echo "$body" | sed -E 's/.* from ([^"]+)".*/\1/') (may differ; this stack runs one replica)"
+}
+
+A6() { # flisk restart, healthy again, checkpoint intact
+  log "A6 flisk restart $AGENT"
+  local before; before="$(agent_container)"
+  # A fast restart starts the same container again, then /ready answers; common_restart waits for readiness.
+  common_restart "$AGENT" "$before" "agent $AGENT answers /ready 200 through Traefik" agent_ready
+  poll_until "flisk agent sessions answers again after restart" "$READY_TIMEOUT" session_answers
+  run a6-sessions agent sessions "$AGENT" --session-id s1 --json
+  [[ "$RC" -eq 0 ]] || die "flisk agent sessions after restart exited $RC"
+  assert check "$OUT/a6-sessions.out" "j.data.session.messages.length === 2 && j.data.session.messages[0].content === 'hello'" "checkpoint s1 survived the restart"
+}
+
+# Graceful drain: SIGTERM while a slow turn is in flight; the turn must complete and the checkpoint must be whole.
+A8() {
+  log "A8 graceful drain: SIGTERM during an in-flight turn"
+  local cid; cid="$(agent_container)"; [[ -n "$cid" ]] || die "no running $AGENT container"
+  turn_via_traefik s-drain "slow:5000" >"$OUT/a8-turn.out" 2>"$OUT/a8-turn.err" &
+  local turn_pid=$!
+  poll_until "the slow turn to start (log line)" 60 slow_turn_started "$cid"
+  echo "$ docker kill --signal=SIGTERM $cid  (turn is in flight)"
+  docker kill --signal=SIGTERM "$cid" >/dev/null
+  wait "$turn_pid" || die "the in-flight turn did not complete (curl failed: $(cat "$OUT/a8-turn.err"))"
+  echo "in-flight turn answered: $(cat "$OUT/a8-turn.out")"
+  assert check "$OUT/a8-turn.out" "j.sessionId === 's-drain' && j.reply.startsWith('received slow:5000')" "the in-flight turn completed with its reply"
+  poll_until "container to exit after draining" 60 container_stopped "$cid"
+  docker logs "$cid" 2>&1 | grep 'draining' | tee "$OUT/a8-drain.log"
+  grep -q 'draining 1 in-flight' "$OUT/a8-drain.log" || die "the agent did not report draining the in-flight request"
+  echo "exit code of drained container: $(docker inspect -f '{{.State.ExitCode}}' "$cid")"
+  [[ "$(docker inspect -f '{{.State.ExitCode}}' "$cid")" = 0 ]] || die "drained container did not exit 0"
+  # Bring it back through Tilt and read the checkpoint: it must parse and hold the drained turn (not truncated).
+  run a8-restart restart "$AGENT" --json
+  [[ "$RC" -eq 0 ]] || die "flisk restart after drain exited $RC"
+  wait_agent_ready
+  run a8-sessions agent sessions "$AGENT" --session-id s-drain --json
+  [[ "$RC" -eq 0 ]] || die "flisk agent sessions exited $RC"
+  assert check "$OUT/a8-sessions.out" "j.data.session.messages.length === 2 && j.data.session.messages[1].content.startsWith('received slow:5000')" "checkpoint holds the drained turn, whole"
+}
+
+slow_turn_started() {
+  docker logs "$1" 2>&1 | grep -q 'slow turn started'
+}
+
+container_stopped() {
+  local running
+  running="$(docker ps -q --filter "id=$1" --filter status=running)"
+  [[ -z "$running" ]]
+}
+
+# Durability across flisk down / flisk up, and removal with docker volume rm.
+A7() {
+  log "A7 durability across flisk down / flisk up, and docker volume rm"
+  # In CI order B0 has stopped the container and B1-B7 leave it stopped; bring it back through Tilt before writing the turn.
+  if [[ -z "$(agent_container)" ]]; then
+    run a7-restart restart "$AGENT" --json; [[ "$RC" -eq 0 ]] || die "flisk restart exited $RC"
+    wait_agent_ready
+    poll_until "flisk agent sessions answers after restart" "$READY_TIMEOUT" session_answers
+  fi
+  turn_via_traefik s-durable "remember me" >"$OUT/a7-turn.out" || die "could not write the checkpoint before the down/up cycle"
+  cat "$OUT/a7-turn.out"; echo
+  assert check "$OUT/a7-turn.out" "j.sessionId === 's-durable'" "the turn to persist reached the agent"
+  stack_cycle() { # down, up, wait
+    run "a7-down-$1" down; [[ "$RC" -eq 0 ]] || die "flisk down exited $RC"
+    : >"$DIR/up.log"; start_up; wait_stack
+  }
+  stack_cycle 1
+  run a7-after-up agent sessions "$AGENT" --session-id s-durable --json
+  [[ "$RC" -eq 0 ]] || die "flisk agent sessions exited $RC"
+  assert check "$OUT/a7-after-up.out" "j.data.session.messages.length === 2 && j.data.session.messages[0].content === 'remember me'" "checkpoint survived flisk down / flisk up"
+  echo "--- now remove the named volume"
+  run a7-down-2 down; [[ "$RC" -eq 0 ]] || die "flisk down exited $RC"
+  local vol; vol="$(docker volume ls -q | grep -E "^${PROJECT}-${STACK}.*${AGENT}-agent-state\$" || true)"
+  echo "volume: $vol"
+  [[ "$(echo "$vol" | grep -c .)" = 1 ]] || die "expected exactly one agent-state volume, got: '$vol'"
+  docker volume rm "$vol"
+  : >"$DIR/up.log"; start_up; wait_stack
+  run a7-after-rm agent sessions "$AGENT" --session-id s-durable --json
+  [[ "$RC" -eq 0 ]] || die "flisk agent sessions exited $RC"
+  assert check "$OUT/a7-after-rm.out" "j.data.session.messages.length === 0" "checkpoint is gone after docker volume rm (documented behavior)"
+}
+
+# ---------------------------------------------------------------------------------------------------------------- B: error paths
+
+# Stop the real container (Tilt stays up) so Traefik has no live backend for the agent.
+B0() {
+  log "B0 stop the agent container (Tilt stays up)"
+  local cid; cid="$(agent_container)"; [[ -n "$cid" ]] || die "no running $AGENT container"
+  docker stop -t 15 "$cid" >/dev/null
+  echo "stopped container $cid"
+  flisk_jq_check() { (cd "$DIR" && flisk status --json >/dev/null); }
+  tilt get uiresources >/dev/null 2>&1 || die "Tilt is not reachable after stopping the container"
+}
+
+
+B1() { # AGENT_NOT_RUNNING with nothing listening
+  log "B1 AGENT_NOT_RUNNING (container stopped)"
+  [[ -z "$(agent_container)" ]] || die "agent container is still running; run B0 first"
+  run b1-json agent sessions "$AGENT" --session-id s1 --json
+  [[ "$RC" -eq 1 ]] || die "expected exit 1, got $RC"
+  assert envelope "$OUT/b1-json.out" AGENT_NOT_RUNNING
+  run b1-human agent sessions "$AGENT" --session-id s1
+  [[ "$RC" -eq 1 ]] || die "expected exit 1, got $RC"
+  grep -q 'flisk up' "$OUT/b1-human.out" "$OUT/b1-human.err" || die "human error has no 'flisk up' hint"
+  ! grep -qE '^\s+at .*:[0-9]+:[0-9]+' "$OUT/b1-human.out" "$OUT/b1-human.err" || die "human error shows a stack trace"
+}
+
+b_timeout() { # <mode> <label>
+  agent_stub "$1"
+  run "b-$1" agent sessions "$AGENT" --session-id s1 --json
+  stop_stub
+  [[ "$RC" -eq 1 ]] || die "expected exit 1, got $RC"
+  assert envelope "$OUT/b-$1.out" AGENT_NOT_RUNNING
+  echo "elapsed: ${ELAPSED_MS}ms (bound: 9000-15000)"
+  [[ "$ELAPSED_MS" -ge 9000 ]] && [[ "$ELAPSED_MS" -le 15000 ]] || die "$2 took ${ELAPSED_MS}ms, expected 9000-15000"
+}
+B2() { log "B2 timeout: stub accepts the connection and never replies"; b_timeout hang "timeout"; }
+B3() { log "B3 stalled body: stub sends headers, then stalls"; b_timeout stall "stalled body"; }
+
+B4() { # AGENT_REQUEST_FAILED with the status and the agent's error text
+  log "B4 AGENT_REQUEST_FAILED"
+  local code text
+  for pair in "400:x-session-id header is required" "500:internal_error"; do
+    code="${pair%%:*}"; text="${pair#*:}"
+    agent_stub status "$code" "$text"
+    run "b4-$code" agent sessions "$AGENT" --session-id s1 --json
+    stop_stub
+    [[ "$RC" -eq 1 ]] || die "expected exit 1, got $RC"
+    assert envelope "$OUT/b4-$code.out" AGENT_REQUEST_FAILED
+    assert check "$OUT/b4-$code.out" "j.errors[0].message.includes('$code') && j.errors[0].message.includes('$text')" "message includes status $code and the agent's error text"
+  done
+}
+
+A4b() { # reply shapes: an array stays an array; agent/port keys in the reply cannot overwrite data.agent / data.port
+  log "A4b envelope nesting with hostile replies (stub)"
+  agent_stub json '{"agent":"spoofed","port":1,"messages":["x"]}'
+  run a4b-object agent sessions "$AGENT" --session-id s1 --json
+  stop_stub
+  [[ "$RC" -eq 0 ]] || die "expected exit 0, got $RC"
+  assert check "$OUT/a4b-object.out" "j.data.agent === '$AGENT' && j.data.port !== 1 && j.data.session.agent === 'spoofed' && j.data.session.port === 1" "reply keys agent/port stay inside data.session"
+  agent_stub json '[{"id":"a"}]'
+  run a4b-array agent sessions "$AGENT" --session-id s1 --json
+  stop_stub
+  [[ "$RC" -eq 0 ]] || die "expected exit 0, got $RC"
+  assert check "$OUT/a4b-array.out" "Array.isArray(j.data.session) && j.data.session[0].id === 'a'" "an array reply stays an array"
+}
+
+B5() { # UNKNOWN_RESOURCE (a mistyped name is refused before Tilt is probed)
+  log "B5 UNKNOWN_RESOURCE"
+  run b5 restart no-such-resource --json
+  [[ "$RC" -eq 1 ]] || die "expected exit 1, got $RC"
+  assert envelope "$OUT/b5.out" UNKNOWN_RESOURCE
+  assert check "$OUT/b5.out" "j.errors[0].message.includes('no-such-resource')" "the error names the resource"
+}
+
+B6() { # no --session-id is the list case: it makes a request, so with nothing listening it is AGENT_NOT_RUNNING
+  log "B6 list without --session-id is no longer SESSION_ID_REQUIRED"
+  run b6 agent sessions "$AGENT" --json
+  [[ "$RC" -eq 1 ]] || die "expected exit 1, got $RC"
+  assert envelope "$OUT/b6.out" AGENT_NOT_RUNNING
+}
+
+B7() { # UNKNOWN_RESOURCE, NOT_AN_AGENT, NO_PORT: one smoke each
+  log "B7 UNKNOWN_RESOURCE, NOT_AN_AGENT, NO_PORT"
+  run b7-unknown agent sessions no-such-resource --session-id s1 --json
+  [[ "$RC" -eq 1 ]] || die "expected exit 1, got $RC"
+  assert envelope "$OUT/b7-unknown.out" UNKNOWN_RESOURCE
+  # The other two need resources the live project does not have: use a throwaway project (no stack needed).
+  local tmp; tmp="$(mktemp -d)"
+  mkdir -p "$tmp/.flisk" "$tmp/services/api" "$tmp/services/noport"
+  echo '{}' >"$tmp/.flisk/project.json"
+  echo '{"appName":"api","appType":"backend","port":4000}' >"$tmp/services/api/service.json"
+  echo '{"appName":"noport","appType":"agent"}' >"$tmp/services/noport/service.json"
+  for pair in "api:NOT_AN_AGENT" "noport:NO_PORT"; do
+    local name="${pair%%:*}" code="${pair#*:}"
+    run_in "$tmp" "b7-$name" agent sessions "$name" --session-id s1 --json
+    [[ "$RC" -eq 1 ]] || die "expected exit 1, got $RC"
+    assert envelope "$OUT/b7-$name.out" "$code"
+  done
+  rm -rf "$tmp"
+}
+
+B8() { # TILT_NOT_RUNNING after flisk down
+  log "B8 TILT_NOT_RUNNING after flisk down"
+  run b8-down down; [[ "$RC" -eq 0 ]] || die "flisk down exited $RC"
+  common_error_envelope TILT_NOT_RUNNING restart "$AGENT" --json
+}
+
+# ---------------------------------------------------------------------------------------------------------------- C: MCP over stdio
+
+
+C1() {
+  log "C1 flisk mcp: initialize and tools/list"
+  mcp_session c1 '[]'
+  assert check "$OUT/c1.out" "['agent_list','agent_sessions','resource_restart'].every(n => j.tools.some(t => t.name === n))" "tools/list includes agent_list, agent_sessions, resource_restart"
+  assert check "$OUT/c1.out" "!['list_agents','get_agent_sessions','restart_resource'].some(n => j.tools.some(t => t.name === n))" "tools/list does not list the former names"
+  assert check "$OUT/c1.out" "j.tools.find(t => t.name === 'agent_sessions').inputSchema.required.join() === 'resource'" "agent_sessions requires only resource; sessionId is optional"
+}
+
+C2() { # each tool's payload equals the CLI --json envelope
+  log "C2 MCP tool payloads equal the CLI --json envelopes"
+  mcp_session c2 '[{"tool":"agent_list"},{"tool":"agent_sessions","arguments":{"resource":"bot","sessionId":"s1"}}]'
+  assert check "$OUT/c2.out" "j.calls.every(c => c.result && c.result.isError === false)" "agent_list and agent_sessions succeed"
+  mcp_structured c2 0; mcp_structured c2 1
+  run c2-cli-list resources --type=agent --json
+  run c2-cli-sessions agent sessions "$AGENT" --session-id s1 --json
+  assert equal "$OUT/c2.0.json" "$OUT/c2-cli-list.out"
+  assert equal "$OUT/c2.1.json" "$OUT/c2-cli-sessions.out"
+  local before; before="$(agent_container)"
+  mcp_session c2r '[{"tool":"resource_restart","arguments":{"resource":"bot"}}]'
+  mcp_structured c2r 0
+  assert check "$OUT/c2r.out" "j.calls[0].result.isError === false" "resource_restart succeeds"
+  agent_restarted "$before"
+  before="$(agent_container)"
+  run c2-cli-restart restart "$AGENT" --json
+  assert equal "$OUT/c2r.0.json" "$OUT/c2-cli-restart.out"
+  agent_restarted "$before"
+}
+
+C3() { # projectPath from another cwd; an unknown resource is a structured tool error and the server survives
+  log "C3 MCP projectPath from another cwd, and structured errors"
+  local elsewhere; elsewhere="$(mktemp -d)"
+  mcp_session c3a "[{\"tool\":\"agent_sessions\",\"arguments\":{\"projectPath\":\"$DIR\",\"resource\":\"bot\",\"sessionId\":\"s1\"}}]" "$elsewhere"
+  mcp_structured c3a 0
+  assert check "$OUT/c3a.0.json" "j.errors.length === 0 && j.data.agent === '$AGENT' && j.data.session.sessionId === 's1'" "projectPath resolves the project from a different cwd"
+  # The last call uses a former name (list_agents): tools/call still accepts it.
+  mcp_session c3b '[{"tool":"agent_sessions","arguments":{"resource":"no-such-resource","sessionId":"s1"}},{"tool":"agent_sessions","arguments":{"resource":"bot"}},{"tool":"resource_restart","arguments":{"resource":"no-such-resource"}},{"tool":"list_agents"}]'
+  mcp_structured c3b 0; mcp_structured c3b 2
+  assert check "$OUT/c3b.0.json" "j.errors[0].code === 'UNKNOWN_RESOURCE'" "unknown resource: structured error envelope"
+  assert check "$OUT/c3b.out" "j.calls[0].result.isError === true" "unknown resource: isError is true"
+  mcp_structured c3b 1
+  assert check "$OUT/c3b.1.json" "j.errors.length === 0 && Array.isArray(j.data.sessions) && j.data.sessions.some(s => s.sessionId === 's1')" "no sessionId lists the agent's sessions"
+  assert check "$OUT/c3b.2.json" "j.errors[0].code === 'UNKNOWN_RESOURCE'" "resource_restart on an unknown resource: structured error"
+  assert check "$OUT/c3b.out" "j.calls[3].result.isError === false" "the server still answers after the failed calls, under a former tool name"
+  rm -rf "$elsewhere"
+}
+
+# ---------------------------------------------------------------------------------------------------------------- N: no Docker
+
+N1() { # a local-process agent: `flisk resource --type agent --local`, `flisk up` with no Docker, `flisk agent sessions` (#4045)
+  log "N1 local-process agent: --type agent --local, flisk up with no Docker, flisk agent sessions"
+  # The same shape the cloud-agent recipes in docs/agent-hosts.md#cloud-agents teach: a local-process
+  # project scaffolded in an empty directory. This case owns $DIR and runs last, after B8's flisk down.
+  rm -rf "$DIR"; mkdir -p "$DIR"; (cd "$DIR" && git init -q .)
+  run n1-project project --yes
+  [[ "$RC" -eq 0 ]] || die "flisk project --yes exited $RC"
+  run n1-resource resource nbot --type agent --local --yes
+  [[ "$RC" -eq 0 ]] || die "flisk resource nbot --type agent --local exited $RC"
+  local svc_dir="$DIR/services/main/nbot"
+  jq -e '.command and (.agent.durability == "files")' "$svc_dir/service.json" >/dev/null \
+    || die "service.json is not a command service with files durability"
+  [[ ! -f "$svc_dir/Dockerfile" ]] || die "--local agent still has a Dockerfile"
+  grep -q "'localhost'" "$svc_dir/src/index.ts" || die "agent does not bind localhost"
+  local port; port="$(jq -r .port "$svc_dir/service.json")"
+  echo "nbot port: $port"
+  # The files-durability runtime imports only Node built-ins: nothing to install, nothing to pull.
+  : >"$DIR/up.log"
+  (cd "$DIR" && nohup flisk up >>"$DIR/up.log" 2>&1 &)
+  nbot_ready() {
+    [[ "$(direct "http://localhost:$port/ready" -o /dev/null -w '%{http_code}' 2>/dev/null || true)" = "200" ]]
+  }
+  poll_until "nbot answers /ready as a local process" 120 nbot_ready
+  run n1-status status --json
+  assert check "$OUT/n1-status.out" "j.data.runtime === 'native'" "flisk status reports a native run"
+  assert check "$OUT/n1-status.out" "j.data.resources.some(r => r.name === 'nbot' && r.type === 'agent' && r.url === 'http://localhost:' + r.port && !('directUrl' in r))" "nbot is listed with a localhost url"
+  # The agent e2e runner does have Docker; the run must not have used it.
+  [[ -z "$(docker ps -q --filter "name=${PROJECT}-.*-nbot-")" ]] || die "a container exists for the local-process agent"
+  local body
+  body="$(direct "http://localhost:$port/turn" -X POST -H "x-session-id: s-n1" -H 'content-type: application/json' -d '{"input":"hello"}')"
+  echo "POST /turn (x-session-id: s-n1) -> $body"
+  echo "$body" >"$OUT/n1-turn.out"
+  assert check "$OUT/n1-turn.out" "j.sessionId === 's-n1' && j.turns === 1" "the local-process agent answered a turn"
+  run n1-sessions agent sessions nbot --json
+  [[ "$RC" -eq 0 ]] || die "flisk agent sessions exited $RC"
+  assert check "$OUT/n1-sessions.out" "j.data.sessions.some(s => s.sessionId === 's-n1' && s.checkpointBytes > 0)" "flisk agent sessions lists the session"
+}
+
+# ---------------------------------------------------------------------------------------------------------------- D: distribution and docs
+
+e2e_main "$@"

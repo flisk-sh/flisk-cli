@@ -1,0 +1,1429 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import {
+  type ExecFileSyncOptionsWithStringEncoding,
+  execFileSync,
+  execSync,
+} from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  accessSync,
+  chmodSync,
+  constants,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, dirname, join, resolve, win32 } from "node:path";
+import { fileURLToPath } from "node:url";
+import chalk from "chalk";
+import { Command } from "commander";
+import { LEGACY_PACKAGE } from "../utils/cli-command.js";
+import { addYesOption, handleDryRun } from "../utils/command-helpers.js";
+import { PACKAGE_JSON } from "../utils/constants.js";
+import { FliskError, getErrorMessage, logVerbose, showErrorAndExit } from "../utils/errors.js";
+import { showCancelled } from "../utils/formatting.js";
+import { fetchRegistryVersion } from "../utils/latest-version.js";
+import { createMachineEnvelope, writeMachineError } from "../utils/machine-output.js";
+import { getPackageVersion } from "../utils/paths.js";
+import { binaryAssetName, executableName, isWindows } from "../utils/platform.js";
+import { promptConfirm } from "../utils/prompt.js";
+import { startSpinner } from "../utils/spinner.js";
+import { extractTarball } from "../utils/tar.js";
+import {
+  cleanupStaleUpgradeArtifacts,
+  isWindowsBusyError,
+  staleBackupPathFor,
+} from "../utils/upgrade-cleanup.js";
+import { findAllOnPath, findOnPath } from "../utils/which.js";
+
+/** @internal Exported for unit tests only; not part of the package API. */
+export interface InstallInfo {
+  method: "npm" | "bun" | "git" | "binary" | "homebrew" | "scoop" | "unknown";
+  path?: string;
+  version?: string;
+}
+
+/** Homebrew and Scoop own the files they install, so only they may replace them. */
+function managedMethodForPath(path: string): "homebrew" | "scoop" | null {
+  if (path.includes("/Cellar/flisk/")) return "homebrew";
+  // On PATH a Scoop install is a shim; the binary itself is under apps/flisk.
+  if (/[\\/]scoop[\\/](apps[\\/]flisk|shims)[\\/]/i.test(path)) return "scoop";
+  return null;
+}
+
+/** @internal Exported for unit tests only; not part of the package API. */
+export function managedUpgradeMessage(installInfo: InstallInfo): string | null {
+  if (installInfo.method === "homebrew") {
+    return "Flisk was installed with Homebrew. Upgrade it with: brew upgrade flisk";
+  }
+  if (installInfo.method === "scoop") {
+    return "Flisk was installed with Scoop. Upgrade it with: scoop update flisk";
+  }
+  return null;
+}
+
+/** @internal Exported for unit tests only; not part of the package API. */
+export function isStandaloneBinary(fliskPath: string): boolean {
+  if (isWindows() && fliskPath.toLowerCase().endsWith(".exe")) return true;
+  try {
+    const fileInfo = execFileSync("file", ["-b", fliskPath], { encoding: "utf-8" });
+    return /Mach-O|ELF/.test(fileInfo);
+  } catch (err: unknown) {
+    logVerbose("Binary detection (file command) error", err);
+    return false;
+  }
+}
+
+/** @internal Exported for unit tests only; not part of the package API. */
+export function classifyRunningInstall(
+  execPath: string,
+  scriptPath: string,
+  platformName = process.platform,
+): InstallInfo | null {
+  const runningName = (
+    platformName === "win32" ? win32.basename(execPath) : basename(execPath)
+  ).toLowerCase();
+  if (runningName === "flisk" || runningName === "flisk.exe") {
+    return { method: managedMethodForPath(execPath) ?? "binary", path: execPath };
+  }
+  if (runningName === "node" || runningName === "node.exe") {
+    const normalizedScriptPath = scriptPath.toLowerCase();
+    if (normalizedScriptPath.includes("node_modules") || normalizedScriptPath.includes(".npm")) {
+      return { method: "npm", path: scriptPath };
+    }
+  }
+  return null;
+}
+
+/** @internal Exported for unit tests only; not part of the package API. */
+export function windowsNpmUpgradeMessage(
+  platformName: string,
+  installInfo: InstallInfo,
+): string | null {
+  return platformName === "win32" && installInfo.method === "npm"
+    ? "use npm install -g @flisk-sh/flisk@latest"
+    : null;
+}
+
+/** The package manager whose global directory a path lives in, or null. Checks `.bun` before `node_modules`. */
+function packageManagerForPath(path: string): "npm" | "bun" | null {
+  if (path.includes(".bun")) return "bun";
+  if (path.includes("node_modules") || path.includes(".npm")) return "npm";
+  return null;
+}
+
+/** @internal Exported for unit tests only; not part of the package API. */
+export function detectInstallation(): InstallInfo {
+  const runningPath = process.execPath;
+  const runningInstall = classifyRunningInstall(runningPath, process.argv[1] ?? "");
+  if (runningInstall) return runningInstall;
+  try {
+    const fliskPath = findOnPath(executableName());
+    if (!fliskPath) return { method: "unknown" };
+
+    // `readlink -f` is not available on macOS. Use Node's cross-platform
+    // realpath implementation so standalone binaries are detected there too.
+    const realPath = realpathSync(fliskPath);
+    const managedMethod = managedMethodForPath(realPath);
+    if (managedMethod) return { method: managedMethod, path: realPath };
+    // If the real path contains flisk-cli and has .git, it's a linked git install
+    if (realPath.includes("flisk-cli")) {
+      const possibleGitRoot = resolve(realPath, "..", "..", "..");
+      if (existsSync(join(possibleGitRoot, ".git"))) {
+        return { method: "git", path: possibleGitRoot };
+      }
+    }
+
+    // A global install puts a symlink on PATH (/usr/local/bin/flisk, /opt/homebrew/bin/flisk),
+    // so the package manager's directory shows up only in the resolved path.
+    const packageManager = packageManagerForPath(fliskPath) ?? packageManagerForPath(realPath);
+    if (packageManager) {
+      return { method: packageManager, path: fliskPath };
+    }
+
+    const cliRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+    if (existsSync(join(cliRoot, ".git"))) {
+      return { method: "git", path: cliRoot };
+    }
+
+    // Standalone prebuilt binary from flisk-sh/releases (installed to e.g. /usr/local/bin),
+    // not a node_modules/.bun link and not sitting inside a git checkout.
+    if (isStandaloneBinary(realPath)) {
+      return { method: "binary", path: realPath };
+    }
+
+    return { method: "unknown", path: fliskPath };
+  } catch (err: unknown) {
+    console.warn(chalk.yellow("⚠️ Could not detect installation method"));
+    logVerbose("Installation detection error", err);
+    return { method: "unknown" };
+  }
+}
+
+/** @internal Exported for unit tests only; not part of the package API. */
+export function detectInstallationForPath(fliskPath: string): InstallInfo {
+  try {
+    const realPath = realpathSync(fliskPath);
+    const managedMethod = managedMethodForPath(realPath);
+    if (managedMethod) return { method: managedMethod, path: realPath };
+    if (realPath.includes("flisk-cli")) {
+      const possibleGitRoot = resolve(realPath, "..", "..", "..");
+      if (existsSync(join(possibleGitRoot, ".git"))) {
+        return { method: "git", path: possibleGitRoot };
+      }
+    }
+    const packageManager = packageManagerForPath(fliskPath) ?? packageManagerForPath(realPath);
+    if (packageManager) return { method: packageManager, path: fliskPath };
+    if (isStandaloneBinary(realPath)) return { method: "binary", path: realPath };
+  } catch (err: unknown) {
+    logVerbose(`Installation detection failed for ${fliskPath}`, err);
+  }
+  return { method: "unknown", path: fliskPath };
+}
+
+/** @internal Exported for unit tests only; not part of the package API. */
+export function detectAllInstallations(): InstallInfo[] {
+  const candidates = findAllOnPath(executableName()).map(detectInstallationForPath);
+  const current = detectInstallation();
+  if (current.method !== "unknown") candidates.unshift(current);
+  const unique = new Map<string, InstallInfo>();
+  for (const install of candidates) {
+    if (install.method === "unknown" || !install.path) continue;
+    let key = install.path;
+    try {
+      if (install.method === "binary") key = realpathSync(install.path);
+    } catch {}
+    unique.set(`${install.method}:${key}`, install);
+  }
+  return [...unique.values()];
+}
+
+const BINARY_RELEASE_REPO = "flisk-sh/releases";
+
+const ENGINE_ASSET_NAME = "flisk-cli-engine.tar.gz";
+const CHECKSUMS_ASSET_NAME = "checksums.txt";
+const CHECKSUMS_BUNDLE_ASSET_NAME = `${CHECKSUMS_ASSET_NAME}.sigstore.json`;
+
+/** Set to 1 to refuse a release that has no signature bundle for checksums.txt. */
+const REQUIRE_SIGNATURE_ENV = "FLISK_UPGRADE_REQUIRE_SIGNATURE";
+
+/**
+ * First release whose checksums.txt is signed: every release from v1.3.130 on in
+ * flisk-sh/releases carries checksums.txt.sigstore.json. For those, a missing
+ * bundle means the asset was removed (a downgrade attack) or the release is
+ * broken, so it is an error. Older releases predate signing and only warn.
+ */
+const FIRST_SIGNED_VERSION = [1, 3, 130] as const;
+
+/** Upper bound for the whole signature check, trust-root download included. */
+const SIGNATURE_CHECK_TIMEOUT_MS = 60_000;
+
+/** True when `tag` (e.g. "v1.4.2") is at or after FIRST_SIGNED_VERSION; unparseable tags count as signed. */
+function isSignedRelease(tag: string): boolean {
+  const match = tag.match(/^v?(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return true;
+  const parts = [Number(match[1]), Number(match[2]), Number(match[3])];
+  for (let i = 0; i < 3; i++) {
+    const have = parts[i] ?? 0;
+    const want = FIRST_SIGNED_VERSION[i] ?? 0;
+    if (have !== want) return have > want;
+  }
+  return true;
+}
+
+/** Workflows of this repository that sign checksums.txt (cosign, keyless). */
+const SIGNER_IDENTITY =
+  /^https:\/\/github\.com\/flisk-sh\/flisk\/\.github\/workflows\/(release-binaries|sign-release)\.yml@.*$/;
+const SIGNER_ISSUER = "https://token.actions.githubusercontent.com";
+
+/** @internal Exported for unit tests only; not part of the package API. */
+export interface BinaryRelease {
+  tag: string;
+  assetName: string;
+  downloadUrl: string;
+  engineDownloadUrl: string;
+  checksumsUrl: string;
+  checksumsBundleUrl: string;
+}
+
+/** Parses `shasum -a 256` / `sha256sum` output ("<hash>  <name>" or "<hash> *<name>"). */
+/** @internal Exported for unit tests only; not part of the package API. */
+export function parseChecksums(text: string): Map<string, string> {
+  const sums = new Map<string, string>();
+  for (const line of text.split("\n")) {
+    const match = line.trim().match(/^([0-9a-f]{64})\s+\*?(.+)$/i);
+    if (match) {
+      const [, hash, name] = match;
+      if (hash && name) sums.set(name.trim(), hash.toLowerCase());
+    }
+  }
+  return sums;
+}
+
+/**
+ * Throws unless `filePath` hashes to the checksum listed for `assetName`.
+ * A missing entry is an error when `required`; otherwise it is skipped, so
+ * releases published before an asset was added to checksums.txt (older
+ * releases list only the binaries, not the engine tarball) still install.
+ */
+function verifyChecksum(
+  filePath: string,
+  assetName: string,
+  sums: Map<string, string>,
+  required: boolean,
+): void {
+  const expected = sums.get(assetName);
+  if (!expected) {
+    if (required)
+      throw new FliskError(`${CHECKSUMS_ASSET_NAME} has no entry for ${assetName}`, [
+        "Run flisk upgrade again once the release has finished publishing",
+        "Or install with: npm install -g @flisk-sh/flisk",
+      ]);
+    logVerbose(`${CHECKSUMS_ASSET_NAME} has no entry for ${assetName}; skipping verification`);
+    return;
+  }
+  const actual = createHash("sha256").update(readFileSync(filePath)).digest("hex");
+  if (actual !== expected) {
+    throw new FliskError(
+      `${isWindows() ? "checksum mismatch" : "Checksum mismatch"} for ${assetName} (expected ${expected}, got ${actual})`,
+      [
+        "Run flisk upgrade again; an interrupted download fails this check",
+        "Or install with: npm install -g @flisk-sh/flisk",
+      ],
+    );
+  }
+}
+
+/**
+ * Verifies checksums.txt against the release's keyless Sigstore bundle, so a
+ * release whose assets and checksums were replaced together is still caught:
+ * the signing certificate must name one of this repository's release
+ * workflows. A bundle that fails verification is an error. A release without a
+ * bundle (published before signing) only warns, unless
+ * FLISK_UPGRADE_REQUIRE_SIGNATURE=1.
+ *
+ * @internal Exported for unit tests only; not part of the package API.
+ */
+export async function verifyChecksumsSignature(
+  checksums: Buffer,
+  bundleUrl: string,
+  tag: string,
+): Promise<boolean> {
+  const mustBeSigned = isSignedRelease(tag);
+  const required = mustBeSigned || process.env[REQUIRE_SIGNATURE_ENV] === "1";
+  const response = await fetch(bundleUrl, { signal: AbortSignal.timeout(30_000) });
+  if (response.status === 404) {
+    if (required)
+      throw new FliskError(
+        mustBeSigned
+          ? `Release ${tag} has no signature (${CHECKSUMS_BUNDLE_ASSET_NAME}), but every release since v1.3.130 is signed`
+          : `Release ${tag} has no signature (${CHECKSUMS_BUNDLE_ASSET_NAME}) and ${REQUIRE_SIGNATURE_ENV}=1 is set`,
+        [
+          mustBeSigned
+            ? "Do not install this release; report it at https://github.com/flisk-sh/flisk/security"
+            : "Upgrade to a signed release, or unset FLISK_UPGRADE_REQUIRE_SIGNATURE",
+          "Or install with: npm install -g @flisk-sh/flisk",
+        ],
+      );
+    console.warn(
+      chalk.yellow(
+        `Warning: this release has no signature for ${CHECKSUMS_ASSET_NAME}; verifying checksums only. Set ${REQUIRE_SIGNATURE_ENV}=1 to refuse unsigned releases.`,
+      ),
+    );
+    return false;
+  }
+  if (!response.ok)
+    throw new FliskError(`Signature download failed (${response.status})`, [
+      "Check your network connection and run flisk upgrade again",
+      "Or install with: npm install -g @flisk-sh/flisk",
+    ]);
+
+  const fail = (reason: string): FliskError =>
+    new FliskError(`Signature verification failed for ${CHECKSUMS_ASSET_NAME}: ${reason}`, [
+      "Nothing was installed. Do not use this release; report it at https://github.com/flisk-sh/flisk/security",
+      "Or install with: npm install -g @flisk-sh/flisk",
+    ]);
+  let signer: { identity?: { subjectAlternativeName?: string } };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const bundle = JSON.parse(await response.text()) as Parameters<
+      typeof import("sigstore").verify
+    >[0];
+    const { verify } = await import("sigstore");
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(Object.assign(new Error("timed out"), { code: "TUF_TIMEOUT" })),
+        SIGNATURE_CHECK_TIMEOUT_MS,
+      );
+    });
+    signer = await Promise.race([
+      verify(bundle, checksums, { certificateIssuer: SIGNER_ISSUER, timeout: 30_000 }),
+      timeout,
+    ]);
+  } catch (err: unknown) {
+    // The Sigstore trust root (TUF) comes from the network; if it cannot be
+    // fetched we cannot verify, and must not install unverified.
+    const code = (err as { code?: unknown } | null)?.code;
+    if (typeof code === "string" && code.startsWith("TUF_"))
+      throw new FliskError(
+        `Could not fetch the Sigstore trust root needed to verify ${CHECKSUMS_ASSET_NAME}: ${getErrorMessage(err)}`,
+        [
+          "Nothing was installed. Check your network connection (tuf-repo-cdn.sigstore.dev) and run flisk upgrade again",
+          `The signature check is never skipped, and ${REQUIRE_SIGNATURE_ENV} does not bypass it`,
+          "Or install with: npm install -g @flisk-sh/flisk",
+        ],
+      );
+    throw fail(getErrorMessage(err));
+  } finally {
+    clearTimeout(timer);
+  }
+  const identity = signer.identity?.subjectAlternativeName ?? "";
+  if (!SIGNER_IDENTITY.test(identity)) throw fail(`unexpected signer identity "${identity}"`);
+  return true;
+}
+
+/** @internal Exported for unit tests only; not part of the package API. */
+export async function getLatestBinaryRelease(): Promise<BinaryRelease | null> {
+  const assetName = binaryAssetName();
+  if (!assetName) return null;
+
+  try {
+    const response = await fetch(
+      `https://api.github.com/repos/${BINARY_RELEASE_REPO}/releases/latest`,
+      {
+        signal: AbortSignal.timeout(10_000),
+      },
+    );
+    if (!response.ok) return null;
+    const data = (await response.json()) as { tag_name?: string };
+    if (!data.tag_name) return null;
+
+    return {
+      tag: data.tag_name,
+      assetName,
+      downloadUrl: `https://github.com/${BINARY_RELEASE_REPO}/releases/download/${data.tag_name}/${assetName}`,
+      engineDownloadUrl: `https://github.com/${BINARY_RELEASE_REPO}/releases/download/${data.tag_name}/${ENGINE_ASSET_NAME}`,
+      checksumsUrl: `https://github.com/${BINARY_RELEASE_REPO}/releases/download/${data.tag_name}/${CHECKSUMS_ASSET_NAME}`,
+      checksumsBundleUrl: `https://github.com/${BINARY_RELEASE_REPO}/releases/download/${data.tag_name}/${CHECKSUMS_BUNDLE_ASSET_NAME}`,
+    };
+  } catch (err: unknown) {
+    logVerbose("Binary release lookup error", err);
+    return null;
+  }
+}
+
+/** @internal Exported for unit tests only; not part of the package API. */
+export function isPermissionError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return code === "EACCES" || code === "EPERM";
+}
+
+/** @internal Exported for unit tests only; not part of the package API. */
+export function isWritable(path: string): boolean {
+  try {
+    accessSync(path, constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** @internal Exported for unit tests only; not part of the package API. */
+export interface BinaryUpgradeDeps {
+  rmSync?: typeof rmSync;
+  renameSync?: typeof renameSync;
+  isWindows?: () => boolean;
+}
+
+/** @internal Exported for unit tests only; not part of the package API. */
+export async function upgradeViaBinary(
+  fliskPath: string,
+  release: BinaryRelease,
+  deps: BinaryUpgradeDeps = {},
+): Promise<boolean> {
+  const windowsMode = (deps.isWindows ?? isWindows)();
+  const remove = deps.rmSync ?? rmSync;
+  const rename = deps.renameSync ?? renameSync;
+
+  // Never shells out to sudo - if the install dir isn't user-writable, fail
+  // fast with the manual curl command instead of downloading first and
+  // elevating automatically. The user runs that curl themselves.
+  const installDir = dirname(fliskPath);
+  if (!isWritable(installDir)) {
+    console.log(chalk.yellow(`\n🔒 ${installDir} isn't writable by your user.`));
+    console.log(chalk.yellow("💡 Upgrade manually instead:"));
+    if (windowsMode) {
+      console.log(
+        chalk.cyan("   Install Flisk in a user-writable directory, then retry the upgrade."),
+      );
+    } else {
+      console.log(chalk.cyan(`   curl -fsSL -o ${fliskPath} ${release.downloadUrl}`));
+      console.log(chalk.cyan(`   chmod +x ${fliskPath}`));
+    }
+    return false;
+  }
+
+  // Clean up any leftover .old binaries or stale .flisk-upgrade-* folders from prior runs.
+  cleanupStaleUpgradeArtifacts(installDir, {
+    binaryName: basename(fliskPath),
+    rmSync: remove,
+  });
+
+  const spinner = startSpinner(`Downloading ${release.assetName} (${release.tag})...`);
+  const tempDir = join(installDir, `.flisk-upgrade-${process.pid}-${Date.now()}`);
+  const tmpPath = join(tempDir, release.assetName);
+  const engineTmpPath = join(tempDir, "engine.tar.gz");
+  const engineDir = join(installDir, "flisk-cli");
+  const engineStageDir = join(tempDir, "flisk-cli");
+  const preferredWindowsBackup = staleBackupPathFor(fliskPath);
+  const binaryBackup =
+    windowsMode && !existsSync(preferredWindowsBackup)
+      ? preferredWindowsBackup
+      : join(tempDir, `${basename(fliskPath)}.previous`);
+  const engineBackup = join(tempDir, "flisk-cli.previous");
+
+  try {
+    mkdirSync(tempDir, { recursive: true });
+    const binaryResponse = await fetch(release.downloadUrl, {
+      signal: AbortSignal.timeout(120_000),
+    });
+    if (!binaryResponse.ok)
+      throw new FliskError(`Download failed (${binaryResponse.status})`, [
+        "Check your network connection and run flisk upgrade again",
+        "Or install with: npm install -g @flisk-sh/flisk",
+      ]);
+    writeFileSync(tmpPath, Buffer.from(await binaryResponse.arrayBuffer()));
+
+    // The compiled binary has no source checkout to find engine/ or
+    // cli/templates/ in, so it looks for a flisk-cli/ folder next to itself
+    // (see template-engine.ts loadTemplate() / vendorFliskExtension()).
+    // `flisk upgrade` only used to swap the binary, leaving that folder
+    // stale/missing after an upgrade - refresh it here too, every time,
+    // the same way install.sh does on a fresh install.
+    spinner.text = `Downloading bundled engine (${release.tag})...`;
+    const engineResponse = await fetch(release.engineDownloadUrl, {
+      signal: AbortSignal.timeout(120_000),
+    });
+    if (!engineResponse.ok)
+      throw new FliskError(`Engine download failed (${engineResponse.status})`, [
+        "Check your network connection and run flisk upgrade again",
+        "Or install with: npm install -g @flisk-sh/flisk",
+      ]);
+    const engineBuffer = Buffer.from(await engineResponse.arrayBuffer());
+    writeFileSync(engineTmpPath, engineBuffer);
+
+    // Verify both downloads against the release's checksums.txt before
+    // touching the installed binary or engine.
+    spinner.text = `Verifying checksums (${release.tag})...`;
+    const checksumResponse = await fetch(release.checksumsUrl, {
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!checksumResponse.ok)
+      throw new FliskError(`Checksum download failed (${checksumResponse.status})`, [
+        "Check your network connection and run flisk upgrade again",
+        "Or install with: npm install -g @flisk-sh/flisk",
+      ]);
+    const checksumBytes = Buffer.from(await checksumResponse.arrayBuffer());
+    // checksums.txt comes from the same release as the binaries, so check its
+    // signature before trusting anything it says.
+    spinner.text = `Verifying signature (${release.tag})...`;
+    await verifyChecksumsSignature(checksumBytes, release.checksumsBundleUrl, release.tag);
+    const sums = parseChecksums(checksumBytes.toString("utf8"));
+    verifyChecksum(tmpPath, release.assetName, sums, true);
+    verifyChecksum(engineTmpPath, ENGINE_ASSET_NAME, sums, false);
+
+    // writeFileSync creates the file 0644; without this the swapped-in binary
+    // is not executable and the shell reports "Permission denied".
+    if (!windowsMode) chmodSync(tmpPath, 0o755);
+
+    mkdirSync(engineStageDir, { recursive: true });
+    extractTarball(engineBuffer, engineStageDir);
+
+    if (existsSync(fliskPath)) rename(fliskPath, binaryBackup);
+    try {
+      rename(tmpPath, fliskPath);
+    } catch (err) {
+      if (existsSync(binaryBackup)) rename(binaryBackup, fliskPath);
+      throw err;
+    }
+    if (existsSync(engineDir)) rename(engineDir, engineBackup);
+    try {
+      rename(engineStageDir, engineDir);
+    } catch (err) {
+      if (existsSync(engineBackup)) rename(engineBackup, engineDir);
+      if (existsSync(binaryBackup)) {
+        remove(fliskPath, { force: true });
+        rename(binaryBackup, fliskPath);
+      }
+      throw err;
+    }
+
+    // Windows allows renaming a running executable but refuses to unlink it until the process
+    // exits (EPERM/EBUSY). Treat locked backup removal as non-fatal on Windows; the next flisk
+    // invocation, upgrade, or doctor run cleans it up.
+    try {
+      remove(binaryBackup, { force: true });
+    } catch (err) {
+      if (!windowsMode || !isWindowsBusyError(err)) throw err;
+      logVerbose(`Deferred removal of in-use binary backup ${binaryBackup}`, err);
+    }
+    try {
+      remove(engineBackup, { recursive: true, force: true });
+    } catch (err) {
+      if (!windowsMode || !isWindowsBusyError(err)) throw err;
+      logVerbose(`Deferred removal of engine backup ${engineBackup}`, err);
+    }
+
+    spinner.succeed(`Upgraded to ${release.tag}`);
+    return true;
+  } catch (err: unknown) {
+    spinner.fail(`Binary upgrade failed: ${getErrorMessage(err)}`);
+    logVerbose("Binary upgrade error", err);
+    console.log(
+      chalk.yellow(
+        "\n💡 If this failed due to permissions, use the platform installer or install command.",
+      ),
+    );
+    return false;
+  } finally {
+    try {
+      remove(tempDir, { recursive: true, force: true });
+    } catch (err) {
+      logVerbose(`Deferred removal of upgrade temp directory ${tempDir}`, err);
+    }
+  }
+}
+
+/** @internal Exported for unit tests only; not part of the package API. */
+export function getCurrentVersion(): string {
+  try {
+    return getPackageVersion();
+  } catch (err: unknown) {
+    logVerbose("Version detection error", err);
+    return "unknown";
+  }
+}
+
+function getNpmRegistryVersion(): string | null {
+  try {
+    // The user's own npm, found on PATH, is the point here: it carries their registry configuration.
+    // Sonar typescript:S4036 (PATH lookup) is therefore suppressed on the call.
+    const options: ExecFileSyncOptionsWithStringEncoding = {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 10_000,
+    };
+    return execFileSync("npm", ["view", "@flisk-sh/flisk", "version"], options).trim(); // NOSONAR
+  } catch (err: unknown) {
+    if (err instanceof Error && "code" in err && err.code === "ENOENT") return null;
+    // The subprocess error message can include npm's raw stderr.
+    throw new FliskError("npm view failed", [
+      "Check your network connection and npm registry access",
+      "Run: npm view @flisk-sh/flisk version",
+    ]);
+  }
+}
+
+/** @internal Exported for unit tests only; not part of the package API. */
+export async function getLatestVersion(options: { quiet?: boolean } = {}): Promise<string | null> {
+  const quiet = options.quiet === true;
+  const spinner = quiet ? null : startSpinner("Checking for latest version...");
+
+  try {
+    // Keep npm's configured registry on Unix. Windows already uses the HTTP path.
+    const result =
+      (isWindows() ? null : getNpmRegistryVersion()) ??
+      (await fetchRegistryVersion(AbortSignal.timeout(10_000))).trim();
+    spinner?.succeed(`Latest version: ${chalk.green(result)}`);
+    return result;
+  } catch (err: unknown) {
+    logVerbose("npm registry check failed", err);
+    if (!quiet) {
+      spinner?.warn("Could not check the npm registry");
+      console.log(chalk.yellow("\nInstall the latest published release manually:"));
+      console.log(chalk.cyan("   npm install -g @flisk-sh/flisk@latest"));
+      console.log(chalk.cyan("   bun install -g @flisk-sh/flisk@latest"));
+    }
+    return null;
+  }
+}
+
+/**
+ * Removes the package the CLI shipped under before the rename. It owns the old `flisk` command,
+ * so npm and bun refuse to install @flisk-sh/flisk next to it (EEXIST) and the upgrade dies
+ * before it starts. The removal is best effort: the package is often not installed at all.
+ */
+function removeLegacyInstallation(manager: "npm" | "bun"): void {
+  const command =
+    manager === "npm" ? `npm uninstall -g ${LEGACY_PACKAGE}` : `bun remove -g ${LEGACY_PACKAGE}`;
+  try {
+    execSync(command, { stdio: ["ignore", "ignore", "ignore"], timeout: 60000 });
+  } catch {
+    // Not installed under the old name, or the manager is missing. Nothing to remove.
+  }
+}
+
+/** @internal Exported for unit tests only; not part of the package API. */
+export async function upgradeViaNpm(): Promise<boolean> {
+  const spinner = startSpinner("Upgrading via npm...");
+
+  try {
+    removeLegacyInstallation("npm");
+    execSync("npm install -g @flisk-sh/flisk@latest", {
+      stdio: ["inherit", "inherit", "pipe"],
+      timeout: 120000,
+    });
+    spinner.succeed("Upgraded successfully via npm");
+    return true;
+  } catch (err: unknown) {
+    const errorStderr =
+      err && typeof err === "object" && "stderr" in err
+        ? String((err as { stderr?: unknown }).stderr ?? "")
+        : "";
+    if (errorStderr) process.stderr.write(errorStderr);
+
+    logVerbose("npm upgrade error", err);
+    spinner.fail(`npm upgrade failed: ${getErrorMessage(err)}`);
+    console.log(chalk.yellow("\nTo retry manually, install the latest published npm release:"));
+    console.log(chalk.cyan("   npm install -g @flisk-sh/flisk@latest"));
+
+    const errorCode =
+      err && typeof err === "object" && "code" in err
+        ? String((err as { code?: unknown }).code ?? "")
+        : "";
+    if (
+      /EACCES|EPERM|permission denied/i.test(`${errorCode} ${getErrorMessage(err)} ${errorStderr}`)
+    ) {
+      console.log(
+        chalk.gray("\nFor EACCES or EPERM, fix npm's global prefix or use the binary installer:"),
+      );
+      console.log(
+        chalk.cyan(
+          "   https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally/",
+        ),
+      );
+      console.log(
+        chalk.cyan(
+          isWindows()
+            ? "   irm https://flisk.sh/install.ps1 | iex"
+            : "   curl -fsSL https://flisk.sh/install.sh | sh",
+        ),
+      );
+    }
+    return false;
+  }
+}
+
+/** @internal Exported for unit tests only; not part of the package API. */
+export async function upgradeViaBun(): Promise<boolean> {
+  const spinner = startSpinner("Upgrading via bun...");
+
+  try {
+    removeLegacyInstallation("bun");
+    execFileSync(findOnPath("bun") ?? "bun", ["install", "-g", "@flisk-sh/flisk@latest"], {
+      stdio: "inherit",
+      timeout: 120000,
+    });
+    spinner.succeed("Upgraded successfully via bun");
+    return true;
+  } catch (err: unknown) {
+    logVerbose("bun upgrade error", err);
+    spinner.fail(`Bun upgrade failed: ${getErrorMessage(err)}`);
+    console.log(chalk.yellow("\nTo retry manually, install the latest published Bun release:"));
+    console.log(chalk.cyan("   bun install -g @flisk-sh/flisk@latest"));
+    return false;
+  }
+}
+
+/** @internal Exported for unit tests only; not part of the package API. */
+export async function upgradeAllInstallations(dryRun: boolean): Promise<boolean> {
+  const installations = detectAllInstallations();
+  if (!installations.length) {
+    console.error(chalk.red("Could not find any Flisk installations on PATH."));
+    return false;
+  }
+
+  console.log(
+    chalk.blue(
+      `Found ${installations.length} Flisk installation${installations.length === 1 ? "" : "s"}:`,
+    ),
+  );
+  for (const install of installations) {
+    console.log(chalk.gray(`   ${install.method}: ${install.path}`));
+  }
+  if (dryRun) {
+    console.log(chalk.yellow("\nDry run: no installations were changed."));
+    return true;
+  }
+
+  const binaryInstallations = installations.filter(
+    (install) => install.method === "binary" && install.path,
+  );
+  const release = binaryInstallations.length ? await getLatestBinaryRelease() : null;
+  if (binaryInstallations.length && !release) {
+    console.error(chalk.red("Could not find a compatible Flisk binary release for this platform."));
+    return false;
+  }
+
+  let success = true;
+  const completed = new Set<string>();
+  for (const install of installations) {
+    const key =
+      install.method === "npm" || install.method === "bun"
+        ? install.method
+        : `${install.method}:${install.path}`;
+    if (completed.has(key)) continue;
+    completed.add(key);
+    if (install.method === "git" && install.path) {
+      console.log(chalk.cyan(`\nUpdating git install at ${install.path}`));
+      success = (await upgradeViaGit(install.path)) && success;
+    } else if (install.method === "binary" && install.path && release) {
+      const latest = release.tag.replace(/^v/, "").split("-")[0];
+      let current = "";
+      try {
+        current = execFileSync(install.path, ["version"], {
+          encoding: "utf-8",
+          timeout: 10_000,
+        }).trim();
+      } catch {}
+      if (current === latest) {
+        console.log(chalk.green(`\n${install.path} is already current (${current}).`));
+      } else {
+        console.log(chalk.cyan(`\nUpdating ${install.path} (${current || "unknown"} → ${latest})`));
+        success = (await upgradeViaBinary(install.path, release)) && success;
+      }
+    } else if (install.method === "npm") {
+      console.log(chalk.cyan("\nUpdating the npm installation..."));
+      success = (await upgradeViaNpm()) && success;
+    } else if (install.method === "bun") {
+      console.log(chalk.cyan("\nUpdating the Bun installation..."));
+      success = (await upgradeViaBun()) && success;
+    } else if (install.method === "homebrew" || install.method === "scoop") {
+      console.log(chalk.yellow(`\n${install.path}: ${managedUpgradeMessage(install)}`));
+    }
+  }
+  if (success) console.log(chalk.green.bold("\nAll Flisk installations on PATH are up to date."));
+  else console.error(chalk.red("\nAt least one Flisk installation could not be updated."));
+  return success;
+}
+
+/** Resolve origin's default branch ref (origin/HEAD, then origin/main, then origin/master). */
+function resolveGitDefaultRef(path: string): string {
+  let defaultRef = "";
+  try {
+    defaultRef = execFileSync(
+      "git",
+      ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+      {
+        cwd: path,
+        encoding: "utf-8",
+        stdio: "pipe",
+      },
+    ).trim();
+  } catch {
+    for (const candidate of ["origin/main", "origin/master"]) {
+      try {
+        execFileSync("git", ["rev-parse", "--verify", candidate], { cwd: path, stdio: "pipe" });
+        defaultRef = candidate;
+        break;
+      } catch {}
+    }
+  }
+  if (!defaultRef?.startsWith("origin/")) {
+    throw new FliskError(
+      "Could not find the default branch for origin (expected origin/HEAD, origin/main, or origin/master).",
+      ["git remote set-head origin --auto", "flisk upgrade"],
+    );
+  }
+  return defaultRef;
+}
+
+/** @internal Exported for unit tests only; not part of the package API. */
+export async function upgradeViaGit(path: string): Promise<boolean> {
+  const spinner = startSpinner("Updating the git installation from the default branch...");
+  let rebaseInProgress = false;
+
+  try {
+    execFileSync("git", ["rev-parse", "--git-dir"], {
+      cwd: path,
+      stdio: "pipe",
+    });
+
+    spinner.text = "Fetching from origin...";
+    execFileSync("git", ["fetch", "origin"], {
+      cwd: path,
+      stdio: "pipe",
+      timeout: 30000,
+    });
+
+    const dirty = execFileSync("git", ["status", "--porcelain"], {
+      cwd: path,
+      encoding: "utf-8",
+    }).trim();
+    if (dirty) {
+      throw new FliskError(
+        "The Flisk source checkout has local changes. Commit or stash them, then run `flisk upgrade` again.",
+        ["git stash", "flisk upgrade"],
+      );
+    }
+
+    const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: path,
+      encoding: "utf-8",
+    }).trim();
+
+    const defaultRef = resolveGitDefaultRef(path);
+    const defaultBranch = defaultRef.slice("origin/".length);
+
+    if (branch === defaultBranch) {
+      spinner.text = `Fast-forwarding ${branch} from origin/${defaultBranch}...`;
+      execFileSync("git", ["pull", "--ff-only", "origin", defaultBranch], {
+        cwd: path,
+        stdio: "pipe",
+        timeout: 30000,
+      });
+    } else {
+      spinner.text = `Rebasing ${branch} onto origin/${defaultBranch}...`;
+      rebaseInProgress = true;
+      execFileSync("git", ["rebase", defaultRef], {
+        cwd: path,
+        stdio: "pipe",
+        timeout: 60000,
+      });
+      rebaseInProgress = false;
+    }
+
+    if (existsSync(join(path, "cli", PACKAGE_JSON))) {
+      spinner.text = "Rebuilding CLI...";
+      execFileSync(findOnPath("bun") ?? "bun", ["install"], {
+        cwd: join(path, "cli"),
+        stdio: "pipe",
+        timeout: 60000,
+      });
+      execFileSync(findOnPath("bun") ?? "bun", ["run", "build"], {
+        cwd: join(path, "cli"),
+        stdio: "pipe",
+        timeout: 60000,
+      });
+    }
+
+    spinner.text = "Re-linking CLI...";
+    execFileSync(findOnPath("bun") ?? "bun", ["link", "--force"], {
+      cwd: join(path, "cli"),
+      stdio: "pipe",
+      timeout: 30000,
+    });
+
+    spinner.succeed(`Upgraded successfully from origin/${defaultBranch}`);
+    return true;
+  } catch (err: unknown) {
+    if (rebaseInProgress) {
+      try {
+        execFileSync("git", ["rebase", "--abort"], { cwd: path, stdio: "pipe" });
+      } catch {}
+    }
+    spinner.fail(`Git upgrade failed: ${getErrorMessage(err)}`);
+    return false;
+  }
+}
+
+interface UpgradeDryRunOptions {
+  force?: boolean;
+  all?: boolean;
+  dryRun?: boolean;
+  yes?: boolean;
+  json?: boolean;
+}
+
+async function resolveUpgradeDryRunVersion(
+  installInfo: InstallInfo,
+  currentVersion: string,
+): Promise<{ latestVersion: string; upgradeAvailable: boolean }> {
+  if (installInfo.method === "binary" && installInfo.path) {
+    const release = await getLatestBinaryRelease();
+    if (!release) {
+      if (binaryAssetName()) {
+        throw new FliskError("Could not look up the latest Flisk binary release.", [
+          "Check your network connection and retry: flisk upgrade --dry-run --json",
+          "Or install manually: npm install -g @flisk-sh/flisk@latest",
+        ]);
+      }
+      if (process.platform === "win32" && process.arch === "arm64") {
+        throw new FliskError(
+          "Flisk Windows v1 supports AMD64 only. Use WSL2 Ubuntu or a 64-bit Intel/AMD PC.",
+          ["Run flisk upgrade inside WSL2 Ubuntu or on a 64-bit Intel/AMD PC"],
+        );
+      }
+      if (process.platform === "win32") {
+        throw new FliskError(
+          "No Windows AMD64 binary in this Flisk release. Need asset flisk-windows-amd64.exe.",
+          ["Run: irm https://flisk.sh/install.ps1 | iex"],
+        );
+      }
+      throw new FliskError(
+        `Unsupported OS: Flisk does not support this OS: ${process.platform}. Supported: linux, darwin, win32.`,
+        ["Install via npm install -g @flisk-sh/flisk@latest"],
+      );
+    }
+    const latestVersion = release.tag.replace(/^v/, "").split("-")[0] ?? release.tag;
+    return { latestVersion, upgradeAvailable: latestVersion !== currentVersion };
+  }
+
+  if (installInfo.method === "git" && installInfo.path) {
+    const gitPath = installInfo.path;
+    try {
+      execFileSync("git", ["fetch", "origin"], { cwd: gitPath, stdio: "pipe", timeout: 30000 });
+      const defaultRef = resolveGitDefaultRef(gitPath);
+      const localHash = execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd: gitPath,
+        encoding: "utf-8",
+      }).trim();
+      const remoteHash = execFileSync("git", ["rev-parse", defaultRef], {
+        cwd: gitPath,
+        encoding: "utf-8",
+      }).trim();
+      const latestVersion = remoteHash.substring(0, 7);
+      return { latestVersion, upgradeAvailable: localHash !== remoteHash };
+    } catch (err: unknown) {
+      logVerbose("Git remote check failed", err);
+      if (err instanceof FliskError) throw err;
+      throw new FliskError(
+        `Could not check the git installation for updates: ${getErrorMessage(err)}`,
+        [
+          "Check your network connection and retry: flisk upgrade --dry-run --json",
+          "Or check the checkout manually: git fetch origin",
+        ],
+      );
+    }
+  }
+
+  const latestVersion = await getLatestVersion({ quiet: true });
+  if (!latestVersion) {
+    throw new FliskError("Could not determine latest version", [
+      "Check your network connection and npm registry access, then retry: flisk upgrade --dry-run --json",
+      "Or install manually: npm install -g @flisk-sh/flisk@latest",
+      "For Bun: bun install -g @flisk-sh/flisk@latest",
+    ]);
+  }
+  return { latestVersion, upgradeAvailable: latestVersion !== currentVersion };
+}
+
+async function runUpgradeJson(options: UpgradeDryRunOptions): Promise<void> {
+  if (!options.dryRun) {
+    writeMachineError(
+      new FliskError(
+        "`flisk upgrade --json` requires `--dry-run` so an upgrade never runs silently",
+        ["Run: flisk upgrade --dry-run --json", "Or run without --json: flisk upgrade"],
+      ),
+    );
+  }
+
+  const currentVersion = getCurrentVersion();
+
+  let effective: InstallInfo;
+  let installations: Array<{ method: InstallInfo["method"]; path: string }>;
+  if (options.all) {
+    const allDetected = detectAllInstallations();
+    if (allDetected.length === 0) {
+      writeMachineError(
+        new FliskError("Could not find any Flisk installations on PATH.", [
+          "Install with: npm install -g @flisk-sh/flisk@latest",
+          "Or install with: bun install -g @flisk-sh/flisk@latest",
+        ]),
+      );
+    }
+    installations = allDetected.map((item) => ({
+      method: item.method,
+      path: item.path ?? "",
+    }));
+    const primary = detectInstallation();
+    effective = primary.method !== "unknown" ? primary : (allDetected[0] as InstallInfo);
+  } else {
+    const installInfo = detectInstallation();
+    if (installInfo.method === "unknown") {
+      writeMachineError(
+        new FliskError("Could not detect installation method", [
+          "npm install -g @flisk-sh/flisk@latest",
+          "bun install -g @flisk-sh/flisk@latest",
+        ]),
+      );
+    }
+    effective = installInfo;
+    installations = installInfo.path
+      ? [{ method: installInfo.method, path: installInfo.path }]
+      : [];
+  }
+
+  let latestVersion: string | null = null;
+  let upgradeAvailable = false;
+  try {
+    const resolved = await resolveUpgradeDryRunVersion(effective, currentVersion);
+    latestVersion = resolved.latestVersion;
+    upgradeAvailable = resolved.upgradeAvailable;
+  } catch (err: unknown) {
+    if (!options.all) writeMachineError(err);
+    logVerbose("Version check failed during --all --dry-run --json", err);
+  }
+
+  console.log(
+    JSON.stringify(
+      createMachineEnvelope({
+        dryRun: true,
+        currentVersion,
+        latestVersion,
+        upgradeAvailable,
+        method: effective.method,
+        path: effective.path ?? null,
+        installations,
+      }),
+    ),
+  );
+  process.exit(0);
+}
+
+/** @internal Exported for unit tests only; not part of the package API. */
+export function createUpgradeCommand(): Command {
+  return addYesOption(new Command("upgrade"))
+    .alias("update")
+    .description("Upgrade Flisk CLI to the latest version")
+    .option("-f, --force", "Upgrade even if already on the latest version", false)
+    .option("--all", "Upgrade every Flisk installation found on PATH", false)
+    .option("--dry-run", "Show what would be upgraded without actually doing it", false)
+    .option("--json", "Print the dry-run result as a JSON envelope", false)
+    .addHelpText(
+      "after",
+      "\nExamples:\n  flisk upgrade\n  flisk upgrade --dry-run\n  flisk upgrade --dry-run --json\n  flisk upgrade --all",
+    )
+    .action(async (options) => {
+      if (options.json) {
+        await runUpgradeJson(options);
+        return;
+      }
+
+      console.log(chalk.cyan("🚀 Flisk CLI Upgrade\n"));
+
+      const currentVersion = getCurrentVersion();
+      console.log(chalk.gray(`Current version: ${currentVersion}`));
+
+      const installInfo = detectInstallation();
+      console.log(chalk.gray(`Installation method: ${installInfo.method}`));
+      console.log();
+
+      if (options.all) {
+        const installations = detectAllInstallations();
+        if (!installations.length) {
+          console.error(chalk.red("Could not find any Flisk installations on PATH."));
+          process.exit(1);
+        }
+        if (!options.dryRun && !options.yes) {
+          const confirm = await promptConfirm({
+            message: `Upgrade all ${installations.length} Flisk installations on PATH?`,
+            initial: true,
+          });
+          if (!confirm) {
+            showCancelled();
+            process.exit(0);
+          }
+        }
+        const success = await upgradeAllInstallations(options.dryRun);
+        if (!success) process.exit(1);
+        return;
+      }
+
+      const windowsNpmMessage = windowsNpmUpgradeMessage(process.platform, installInfo);
+      if (windowsNpmMessage) {
+        console.log(windowsNpmMessage);
+        return;
+      }
+
+      const managedMessage = managedUpgradeMessage(installInfo);
+      if (managedMessage) {
+        console.log(managedMessage);
+        return;
+      }
+
+      if (installInfo.method === "unknown") {
+        console.error(chalk.red("Could not detect installation method"));
+        console.log(chalk.yellow("\nManual upgrade using a published package:"));
+        console.log(chalk.cyan("   npm install -g @flisk-sh/flisk@latest"));
+        console.log(chalk.cyan("   bun install -g @flisk-sh/flisk@latest"));
+        console.log(chalk.cyan("   git:  cd /path/to/flisk-cli && git pull && bun link --force"));
+        console.log(chalk.yellow("\nTo remove Flisk (run the one you installed with, or both):"));
+        console.log(chalk.cyan("   npm uninstall -g @flisk-sh/flisk"));
+        console.log(chalk.cyan("   bun remove -g @flisk-sh/flisk"));
+        process.exit(1);
+      }
+
+      let latestVersion: string | null = null;
+      let binaryRelease: BinaryRelease | null = null;
+
+      if (installInfo.method === "binary" && installInfo.path) {
+        if (!options.dryRun) {
+          cleanupStaleUpgradeArtifacts(dirname(installInfo.path), {
+            binaryName: basename(installInfo.path),
+          });
+        }
+        console.log(chalk.blue("📦 Standalone binary installation detected"));
+
+        binaryRelease = await getLatestBinaryRelease();
+
+        if (!binaryRelease) {
+          if (process.platform === "win32" && process.arch === "arm64") {
+            showErrorAndExit(
+              "Flisk Windows v1 supports AMD64 only. Use WSL2 Ubuntu or a 64-bit Intel/AMD PC.",
+            );
+          }
+          if (process.platform === "win32") {
+            showErrorAndExit(
+              "No Windows AMD64 binary in this Flisk release. Need asset flisk-windows-amd64.exe.",
+            );
+          }
+          showErrorAndExit(
+            `Unsupported OS: Flisk does not support this OS: ${process.platform}. Supported: linux, darwin, win32.`,
+          );
+        }
+
+        latestVersion = binaryRelease.tag.replace(/^v/, "").split("-")[0] ?? binaryRelease.tag;
+
+        if (latestVersion === currentVersion && !options.force) {
+          console.log(chalk.green("\n✅ You are already on the latest version!"));
+          console.log(chalk.gray(`   ${currentVersion} (current) = ${latestVersion} (latest)`));
+          process.exit(0);
+        }
+
+        if (latestVersion !== currentVersion) {
+          console.log(chalk.yellow(`\n⬆️  Upgrade available: ${currentVersion} → ${latestVersion}`));
+        } else if (options.force) {
+          console.log(chalk.yellow(`\n🔄 Force upgrade requested (currently ${currentVersion})`));
+        }
+      } else if (installInfo.method === "git" && installInfo.path) {
+        console.log(
+          chalk.blue("📦 Git installation detected - will update from origin's default branch"),
+        );
+
+        try {
+          execFileSync("git", ["fetch", "origin"], { cwd: installInfo.path, stdio: "pipe" });
+          const localHash = execFileSync("git", ["rev-parse", "HEAD"], {
+            cwd: installInfo.path,
+            encoding: "utf-8",
+          }).trim();
+          const remoteHash = execFileSync("git", ["rev-parse", "origin/main"], {
+            cwd: installInfo.path,
+            encoding: "utf-8",
+          }).trim();
+
+          if (localHash === remoteHash && !options.force) {
+            console.log(chalk.green("\n✅ Already up to date with origin/main!"));
+            console.log(chalk.gray(`   Current: ${localHash.substring(0, 7)}`));
+            console.log(chalk.gray("\n   Tip: Use --force to pull and rebuild anyway"));
+            process.exit(0);
+          }
+
+          if (localHash !== remoteHash) {
+            console.log(chalk.yellow(`\n⬆️  Updates available:`));
+            console.log(chalk.gray(`   Local:  ${localHash.substring(0, 7)}`));
+            console.log(chalk.gray(`   Remote: ${remoteHash.substring(0, 7)}`));
+          } else {
+            console.log(chalk.yellow(`\n🔄 Force upgrade requested`));
+          }
+
+          latestVersion = remoteHash.substring(0, 7);
+        } catch (err: unknown) {
+          console.warn(chalk.yellow("⚠️  Could not check git remote, will attempt upgrade anyway"));
+          logVerbose("Git remote check failed", err);
+          latestVersion = "latest";
+        }
+      } else {
+        latestVersion = await getLatestVersion();
+
+        if (!latestVersion) {
+          showErrorAndExit("Could not determine latest version");
+        }
+
+        if (currentVersion === latestVersion && !options.force) {
+          console.log(chalk.green("\n✅ You are already on the latest version!"));
+          console.log(chalk.gray(`   ${currentVersion} (current) = ${latestVersion} (latest)`));
+          process.exit(0);
+        }
+
+        if (currentVersion !== latestVersion) {
+          console.log(chalk.yellow(`\n⬆️  Upgrade available: ${currentVersion} → ${latestVersion}`));
+        } else if (options.force) {
+          console.log(chalk.yellow(`\n🔄 Force upgrade requested (currently ${currentVersion})`));
+        }
+      }
+
+      // The plan is a method and action list, not the standard pair, so it supplies its own printer.
+      if (
+        handleDryRun(options, "", "", () => {
+          console.log(chalk.blue("\n📋 Dry run mode - would perform:"));
+          console.log(chalk.gray(`   Method: ${installInfo.method}`));
+          if (installInfo.path) {
+            console.log(chalk.gray(`   Path: ${installInfo.path}`));
+          }
+          if (installInfo.method === "git") {
+            console.log(
+              chalk.gray("   Action: fetch origin, update from origin/HEAD, rebuild, and relink"),
+            );
+          } else if (installInfo.method === "binary" && binaryRelease) {
+            console.log(
+              chalk.gray(`   Action: Download and replace with ${binaryRelease.downloadUrl}`),
+            );
+            console.log(
+              chalk.gray(
+                `   Action: Refresh bundled engine from ${binaryRelease.engineDownloadUrl}`,
+              ),
+            );
+          } else {
+            console.log(chalk.gray(`   Action: Upgrade to ${latestVersion}`));
+          }
+          console.log(chalk.yellow("\n   (Not actually upgrading due to --dry-run)"));
+        })
+      ) {
+        process.exit(0);
+      }
+
+      if (!options.yes) {
+        console.log();
+        const confirm = await promptConfirm({
+          message: "Proceed with upgrade?",
+          initial: true,
+        });
+
+        if (!confirm) {
+          showCancelled();
+          process.exit(0);
+        }
+      } else {
+        console.log(chalk.gray("⚡ Auto-confirming (--yes flag)\n"));
+      }
+
+      console.log();
+
+      let success = false;
+
+      switch (installInfo.method) {
+        case "npm":
+          success = await upgradeViaNpm();
+          break;
+        case "bun":
+          success = await upgradeViaBun();
+          break;
+        case "git":
+          if (installInfo.path) {
+            success = await upgradeViaGit(installInfo.path);
+          }
+          break;
+        case "binary":
+          if (installInfo.path && binaryRelease) {
+            success = await upgradeViaBinary(installInfo.path, binaryRelease);
+          }
+          break;
+      }
+
+      if (!success) {
+        console.error(chalk.red("\nUpgrade failed"));
+        if (installInfo.method === "git") {
+          console.log(
+            chalk.cyan(`   Check local changes with: git -C ${installInfo.path} status --short`),
+          );
+          console.log(chalk.cyan("   Commit or stash them, then retry: flisk upgrade"));
+        } else if (installInfo.method === "binary" && binaryRelease && installInfo.path) {
+          const engineDir = join(dirname(installInfo.path), "flisk-cli");
+          if (isWindows()) {
+            console.log(chalk.cyan("   irm https://flisk.sh/install.ps1 | iex"));
+          } else {
+            console.log(
+              chalk.cyan(`   curl -fsSL -o ${installInfo.path} ${binaryRelease.downloadUrl}`),
+            );
+            console.log(chalk.cyan(`   chmod +x ${installInfo.path}`));
+            console.log(chalk.cyan(`   rm -rf ${engineDir} && mkdir -p ${engineDir}`));
+            console.log(
+              chalk.cyan(
+                `   curl -fsSL ${binaryRelease.engineDownloadUrl} | tar -xzf - -C ${engineDir} --strip-components=1`,
+              ),
+            );
+          }
+        }
+        process.exit(1);
+      }
+
+      console.log();
+      const verifySpinner = startSpinner("Verifying upgrade...");
+
+      try {
+        const newVersion = execFileSync(
+          findOnPath(executableName()) ?? executableName(),
+          ["version"],
+          {
+            encoding: "utf-8",
+            windowsHide: isWindows(),
+          },
+        ).trim();
+        verifySpinner.succeed(`Verified: now running ${chalk.green(newVersion)}`);
+
+        console.log();
+        console.log(chalk.green.bold("✨ Upgrade complete!"));
+        console.log(chalk.gray(`   Version: ${currentVersion} → ${newVersion}`));
+
+        console.log();
+        console.log(chalk.cyan.bold("📍 Installation Details:"));
+        if (installInfo.method === "git" && installInfo.path) {
+          console.log(chalk.gray(`   Location: ${installInfo.path}`));
+          console.log(chalk.gray(`   Method:   git clone + bun link`));
+        } else {
+          console.log(chalk.gray(`   Method:   ${installInfo.method}`));
+        }
+        console.log(
+          chalk.gray(
+            `   Binary:   ${installInfo.path ?? findOnPath(executableName()) ?? "unknown"}`,
+          ),
+        );
+
+        console.log();
+        console.log(chalk.cyan.bold("🚀 Quick Start:"));
+        console.log(chalk.white(`   flisk --help         Show all commands`));
+        console.log(chalk.white(`   flisk networks       View service URLs`));
+        console.log(chalk.white(`   flisk doctor         Check environment`));
+
+        if (newVersion === currentVersion && !options.force) {
+          console.log();
+          console.log(
+            chalk.yellow(
+              "💡 Tip: Version appears unchanged. You may need to restart your terminal.",
+            ),
+          );
+        }
+
+        console.log();
+        console.log(chalk.green("Happy coding! 🎉"));
+      } catch (err: unknown) {
+        verifySpinner.warn("Could not verify new version");
+        console.error(chalk.red(`Verification error: ${getErrorMessage(err)}`));
+        console.log();
+        console.log(chalk.yellow("⚠️  Upgrade status unknown - verification failed"));
+        console.log();
+        if (isPermissionError(err) && installInfo.method !== "git" && installInfo.path) {
+          console.log(chalk.yellow("💡 The installed binary isn't executable. Fix it with:"));
+          console.log(chalk.cyan(`   chmod +x ${installInfo.path}`));
+          console.log(chalk.white("   then run: flisk version"));
+        } else {
+          console.log(chalk.yellow("💡 Verify manually:"));
+          console.log(chalk.white("   1. Restart your terminal"));
+          console.log(chalk.white("   2. Run: flisk version"));
+          if (installInfo.method === "git" && installInfo.path) {
+            console.log(
+              chalk.white(`   3. Compare with: git -C ${installInfo.path} rev-parse HEAD`),
+            );
+          }
+        }
+      }
+    });
+}
+
+export const upgradeCommand = createUpgradeCommand();

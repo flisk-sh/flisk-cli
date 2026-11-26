@@ -1,0 +1,153 @@
+{
+  "group": "resource-types",
+  "suite": "bring-your-own",
+  "description": "A bring-your-own app, job, pair or Python service in each byoVariant on its own check: example (the container alone), flisk (through flisk up and Traefik with Flisk's Postgres), job (a one-shot through flisk up), pair (a dependency and an app through flisk up), python-dry-run (the resource contract and up --dry-run, no Docker) and python-boot (the Python fixture boots and answers its health route), hpc (GPUs, CPU and memory limits and IPC from the container block reach the container and the generated Compose file), infra (the redis, qdrant, minio, mlflow, nats and rabbitmq frameworks, reached by a service that depends on them through the settings they provide) and providers (an external provider falls back to a local simulator without its token and switches to remote after the token is added and the service is rebuilt with `flisk restart --rebuild`). ports (extraPorts publish takes its host binding from the project .env: the default of service.json, then a value from .env, on a real container). mixed (Postgres and Redis from images next to an API run as a local process, through one flisk up, status, logs and down, and a killed run). no-curl (a bring-your-own image without curl fails --wait with a readable message, #3107). The matrix runs one leg per variant (#1297).",
+  "paths": [
+    "docs/byo.md",
+    "cli/src/commands/resource.ts",
+    "cli/src/commands/restart.ts",
+    "runtime/engine/**",
+    "tests/e2e/lib/**",
+    "tests/e2e/resource-types/bring-your-own/**",
+    ".github/workflows/e2e-resource-types.yml",
+    "examples/byo/**",
+    "examples/byo/templates.json",
+    "scripts/sync-byo-templates.sh",
+    "examples/byo-jobs/**",
+    "cli/src/commands/up.ts",
+    "runtime/engine/schemas/service-schema.json",
+    "tests/e2e/fixtures/byo-python-health/**",
+    "tests/e2e/fixtures/byo-infra-probe/**",
+    "tests/e2e/fixtures/byo-provider-probe/**",
+    "tests/e2e/fixtures/byo-no-curl/**",
+    "cli/src/utils/infra-presets.ts",
+    "cli/src/utils/extra-port-publish.ts",
+    "cli/src/utils/status-ports.ts",
+    "cli/src/utils/native-container.ts",
+    "cli/src/utils/native-runtime.ts",
+    "cli/src/utils/native-runtime/**",
+    "cli/src/utils/native-up.ts"
+  ],
+  "cases": [
+    "BY1",
+    "BY2",
+    "BY3",
+    "BY4",
+    "BY5",
+    "BY6",
+    "BY7",
+    "BY8",
+    "BY9",
+    "BY10",
+    "BY11",
+    "BY12"
+  ],
+  "variants": [
+    {
+      "id": "example",
+      "case": "BY1",
+      "args": "echo /health"
+    },
+    {
+      "id": "example-lobster",
+      "case": "BY1",
+      "args": "lobster /health"
+    },
+    {
+      "id": "example-goose",
+      "case": "BY1",
+      "args": "goose /health"
+    },
+    {
+      "id": "template-vue",
+      "case": "BY1",
+      "args": "create-vue /"
+    },
+    {
+      "id": "template-next-app",
+      "case": "BY1",
+      "args": "create-next-app /"
+    },
+    {
+      "id": "template-adonisjs",
+      "case": "BY1",
+      "args": "create-adonisjs /"
+    },
+    {
+      "id": "template-analog",
+      "case": "BY1",
+      "args": "create-analog /"
+    },
+    {
+      "id": "template-bati",
+      "case": "BY1",
+      "args": "create-bati /"
+    },
+    {
+      "id": "flisk",
+      "case": "BY2",
+      "args": "full-stack-fastapi-template /api/v1/utils/health-check/"
+    },
+    {
+      "id": "job",
+      "case": "BY3",
+      "args": "dbmate"
+    },
+    {
+      "id": "pair",
+      "case": "BY4",
+      "args": "turso 4500 /health turso-app LIBSQL_URL /health"
+    },
+    {
+      "id": "python-dry-run",
+      "case": "BY5",
+      "args": ""
+    },
+    {
+      "id": "python-boot",
+      "case": "BY6",
+      "args": ""
+    },
+    {
+      "id": "hpc",
+      "case": "BY7",
+      "args": ""
+    },
+    {
+      "id": "infra",
+      "case": "BY8",
+      "args": "",
+      "inputs": [
+        "cli/src/utils/infra-presets.ts",
+        "tests/e2e/fixtures/byo-infra-probe/**"
+      ]
+    },
+    {
+      "id": "providers",
+      "case": "BY9",
+      "args": ""
+    },
+    {
+      "id": "ports",
+      "case": "BY10",
+      "args": ""
+    },
+    {
+      "id": "mixed",
+      "case": "BY11",
+      "args": ""
+    },
+    {
+      "id": "no-curl",
+      "case": "BY12",
+      "args": ""
+    }
+  ],
+  "triggers": [
+    "pr",
+    "nightly",
+    "manual"
+  ],
+  "timeoutMinutes": 30,
+  "needsSecrets": []
+}

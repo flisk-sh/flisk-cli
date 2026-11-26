@@ -1,0 +1,49 @@
+# Copyright (c) 2026 Flisk Landscape contributors
+# SPDX-License-Identifier: MIT
+load("./native_windows.star", "IS_NATIVE_WINDOWS", "list_subdirs")
+# =============================================================================
+# 📚 TOPOLOGIES - DISCOVERY LIBRARIES
+# =============================================================================
+# Libraries are always auto-discovered from the filesystem by scanning
+# shared library directories for matching prefix patterns.
+# This eliminates stale hardcoded lists that required manual updates.
+# =============================================================================
+
+
+def autodiscover_libraries(root_path, prefix):
+    libs = []
+    if IS_NATIVE_WINDOWS:
+        return list_subdirs(root_path, prefix)
+    result = str(local(["sh", "-c", 'ls -d "$1"/"$2"*/ 2>/dev/null || true', "sh", root_path, prefix], quiet=True, echo_off=True))
+
+    if result:
+        for line in result.strip().split("\n"):
+            if line:
+                lib_path = line.rstrip("/")
+                lib_name = lib_path.split("/")[-1]
+                if lib_name:
+                    libs.append(lib_name)
+
+    return libs
+
+
+def _log_autodiscovered(kind, discovered):
+    if len(discovered) > 0:
+        is_verbose = os.environ.get('TILT_LOG_LEVEL') == 'verbose'
+        if is_verbose or len(discovered) <= 5:
+            lib_list = ", ".join(discovered)
+        else:
+            lib_list = ", ".join(discovered[:5]) + ", ... and {} more".format(len(discovered) - 5)
+        print("  📚 Autodiscovered {} libraries: {}".format(kind, lib_list))
+
+
+def get_platform_libs():
+    discovered = autodiscover_libraries("shared-platform-engineering", "platform-")
+    _log_autodiscovered("platform", discovered)
+    return discovered
+
+
+def get_product_libs():
+    discovered = autodiscover_libraries("shared-product-engineering", "product-")
+    _log_autodiscovered("product", discovered)
+    return discovered

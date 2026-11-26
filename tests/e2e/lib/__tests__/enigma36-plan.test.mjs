@@ -1,0 +1,108 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+// Unit tests for tests/e2e/scale/enigma36/plan.mjs: the seeded draw and its diagonal board. Run by `make test-shell`.
+import assert from "node:assert/strict";
+import test from "node:test";
+import { COUNT, KINDS, STACKS, checkPlan, drawPlan, infraFrameworks, infraKindOf } from "../../scale/enigma36/plan.mjs";
+
+test("the same seed draws the same plan", () => {
+  assert.deepEqual(drawPlan(1936), drawPlan(1936));
+});
+
+test("different seeds draw different plans", () => {
+  const names = (seed) => drawPlan(seed).entries.map((e) => e.name).join(",");
+  assert.notEqual(names(1), names(2));
+});
+
+test("the diagonal board finds no contradiction in 500 seeds", () => {
+  for (let seed = 0; seed < 500; seed++) {
+    const plan = drawPlan(seed);
+    assert.equal(plan.entries.length, COUNT);
+    assert.deepEqual(checkPlan(plan), [], `seed ${seed}`);
+  }
+});
+
+test("every plan holds every kind and every stack", () => {
+  const plan = drawPlan(7);
+  for (const kind of KINDS) assert.ok(plan.entries.some((e) => e.kind === kind), kind);
+  for (const stack of STACKS) assert.ok(plan.entries.some((e) => e.stack === stack), stack);
+});
+
+test("the diagonal board rejects contradictory plans", () => {
+  const plan = drawPlan(3);
+  const twin = { ...plan, entries: [...plan.entries.slice(0, -1), { ...plan.entries[0] }] };
+  assert.ok(checkPlan(twin).some((p) => p.startsWith("duplicate names")));
+  const twoDatabases = {
+    ...plan,
+    entries: plan.entries.map((e, i) => (i < 2 ? { ...e, kind: "database", variant: "postgres", name: `db-${i}` } : e)),
+  };
+  assert.ok(checkPlan(twoDatabases).some((p) => p.includes("postgres database resources")));
+  const orphanAgent = {
+    ...plan,
+    entries: plan.entries.map((e) => (e.variant === "postgres" ? { ...e, kind: "agent", variant: "agent-postgres" } : e)),
+  };
+  assert.ok(checkPlan(orphanAgent).includes("an agent-postgres without a database resource"));
+  assert.ok(checkPlan({ entries: plan.entries.slice(1) }).some((p) => p.startsWith("plan has 35")));
+});
+
+test("a Postgres-checkpointed agent shares the database's stack", () => {
+  // The database resource provisions <project>_<stack>; an agent on another stack never answers /ready (nightly 42002912060).
+  // Seeds drift as the planner changes, so take the first seed that draws a Postgres-checkpointed agent.
+  let plan;
+  let agents = [];
+  for (let seed = 0; seed < 500 && agents.length === 0; seed++) {
+    plan = drawPlan(seed);
+    agents = plan.entries.filter((e) => e.variant === "agent-postgres");
+  }
+  assert.ok(agents.length > 0, "no seed in 0..499 draws a Postgres-checkpointed agent");
+  const db = plan.entries.find((e) => e.variant === "postgres");
+  for (const a of agents) assert.equal(a.stack, db.stack);
+  const stray = {
+    ...plan,
+    entries: plan.entries.map((e) => (e === agents[0] ? { ...e, stack: STACKS.find((s) => s !== db.stack) } : e)),
+  };
+  assert.ok(checkPlan(stray).some((p) => p.includes("but the database is on")));
+});
+
+test("a smaller count still draws a sound plan", () => {
+  const plan = drawPlan(42, { count: 12 });
+  assert.equal(plan.entries.length, 12);
+  assert.deepEqual(checkPlan(plan, 12), []);
+});
+
+test("every plan holds the Postgres and every other infrastructure framework, not one database", () => {
+  const frameworks = infraFrameworks();
+  assert.ok(frameworks.includes("minio") && frameworks.includes("redis"), frameworks.join(","));
+  for (let seed = 0; seed < 50; seed++) {
+    const variants = drawPlan(seed).entries.map((e) => e.variant);
+    for (const f of ["postgres", ...frameworks]) assert.equal(variants.filter((v) => v === f).length, 1, `seed ${seed} ${f}`);
+  }
+});
+
+test("an infrastructure framework is reported as bring-your-own, the shared Postgres as database", () => {
+  const byVariant = Object.fromEntries(drawPlan(9).entries.map((e) => [e.variant, e.type]));
+  assert.equal(byVariant.postgres, "database");
+  assert.equal(byVariant.minio, "bring-your-own");
+  assert.equal(byVariant.nats, "bring-your-own");
+});
+
+test("include forces the asked variants into the plan and rejects unknown ones", () => {
+  const plan = drawPlan(11, { include: ["go", "rust", "redis"] });
+  const variants = plan.entries.map((e) => e.variant);
+  for (const v of ["go", "rust", "redis"]) assert.ok(variants.includes(v), v);
+  assert.throws(() => drawPlan(11, { include: ["mongo"] }), /unknown variant "mongo"/);
+  assert.throws(() => drawPlan(11, { count: 9, include: ["redis"] }), /too small/);
+});
+
+test("each infrastructure framework is drawn under the --type its preset names, quoted keys included", () => {
+  const kinds = infraKindOf();
+  assert.equal(kinds.redis, "database");
+  assert.equal(kinds.nats, "queue");
+  assert.equal(kinds.minio, "storage");
+  assert.equal(kinds.mailpit, "mail");
+  assert.equal(kinds["stripe-mock"], "payment");
+  assert.deepEqual(Object.keys(kinds).sort(), [...infraFrameworks()].sort());
+  const byVariant = Object.fromEntries(drawPlan(3).entries.map((e) => [e.variant, e.kind]));
+  assert.equal(byVariant["stripe-mock"], "payment");
+  assert.equal(byVariant.mailpit, "mail");
+});

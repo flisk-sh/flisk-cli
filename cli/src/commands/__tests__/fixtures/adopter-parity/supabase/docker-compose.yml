@@ -1,0 +1,103 @@
+# Trimmed for Flisk exporter parity tests from supabase/supabase's
+# docker/docker-compose.yml (Apache-2.0), one of the adopters in
+# docs/project/ADOPTER-COVERAGE.md.
+# Kept: the default-network aliases, container_name, entrypoint, command,
+# SELinux volume flags, healthchecks and a variable host port. Dropped: the
+# kong/auth/rest/realtime/storage/meta/functions/supavisor services, the
+# analytics blocks and the nested ${A:-${B}} interpolation (not yet imported).
+
+name: supabase
+
+services:
+  studio:
+    container_name: supabase-studio
+    image: supabase/studio:2026.11.02-sha-a05e7ec
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'node -e "fetch(''http://localhost:3000/api/platform/profile'').then((r) => {if (r.status !== 200) throw new Error(r.status)})"',
+        ]
+      timeout: 10s
+      interval: 5s
+      retries: 3
+      start_period: 20s
+    environment:
+      HOSTNAME: "0.0.0.0"
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      SUPABASE_URL: http://api-gw:8000
+      SUPABASE_ANON_KEY: ${ANON_KEY}
+    volumes:
+      - ./volumes/snippets:/app/snippets:z
+
+  api-gw:
+    container_name: supabase-envoy
+    image: envoyproxy/envoy:v1.39.6
+    restart: unless-stopped
+    networks:
+      default:
+        aliases:
+          - envoy
+          - kong
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 1 bash -c '</dev/tcp/127.0.0.1/8000'"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      studio:
+        condition: service_healthy
+    ports:
+      - ${KONG_HTTP_PORT:-8000}:8000
+    volumes:
+      - ./volumes/api/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
+    environment:
+      ANON_KEY: ${ANON_KEY}
+      SUPABASE_PUBLIC_URL: ${SUPABASE_PUBLIC_URL}
+    entrypoint: ["/bin/sh", "/docker-entrypoint.sh"]
+
+  imgproxy:
+    container_name: supabase-imgproxy
+    image: darthsim/imgproxy:v4.0.21
+    restart: unless-stopped
+    volumes:
+      - ./volumes/storage:/var/lib/storage:z
+    healthcheck:
+      test: ["CMD", "imgproxy", "health"]
+      timeout: 5s
+      interval: 5s
+      retries: 3
+    environment:
+      IMGPROXY_BIND: ":5001"
+      IMGPROXY_USE_ETAG: "true"
+      IMGPROXY_MAX_SRC_RESOLUTION: 16.8
+
+  db:
+    container_name: supabase-db
+    image: supabase/postgres:17.6.1.136
+    restart: unless-stopped
+    volumes:
+      - ./volumes/db/data:/var/lib/postgresql/data:Z
+      - db-config:/etc/postgresql-custom
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    environment:
+      POSTGRES_HOST: /var/run/postgresql
+      PGPORT: ${POSTGRES_PORT}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    command:
+      [
+        "postgres",
+        "-c",
+        "config_file=/etc/postgresql/postgresql.conf",
+        "-c",
+        "log_min_messages=fatal",
+      ]
+
+volumes:
+  db-config:

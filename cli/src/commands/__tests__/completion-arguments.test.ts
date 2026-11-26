@@ -1,0 +1,148 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import { describe, expect, it, vi } from "vitest";
+import { captureExit, runCompletionCommand } from "../../test-support/index.js";
+
+interface CompletionOutput {
+  stdout: string;
+  stderr: string;
+}
+
+async function runCompletion(args: string[]): Promise<CompletionOutput> {
+  const log = vi.spyOn(console, "log").mockImplementation(() => {});
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  const { exit } = captureExit();
+
+  try {
+    await runCompletionCommand(args);
+    return {
+      stdout: log.mock.calls.map(([value]) => String(value)).join("\n"),
+      stderr: error.mock.calls.map(([value]) => String(value)).join("\n"),
+    };
+  } finally {
+    log.mockRestore();
+    error.mockRestore();
+    exit.mockRestore();
+  }
+}
+
+describe("flisk completion shell selection", () => {
+  it("accepts the shell as a positional argument", async () => {
+    const { stdout } = await runCompletion(["zsh"]);
+
+    expect(stdout).toContain("#compdef flisk");
+  });
+
+  it("detects the current shell when none is supplied", async () => {
+    const previousShell = process.env.SHELL;
+    process.env.SHELL = "/bin/zsh";
+
+    try {
+      const { stdout, stderr } = await runCompletion([]);
+
+      expect(stdout).toContain("#compdef flisk");
+      expect(stderr).toContain("Using zsh completion");
+    } finally {
+      if (previousShell === undefined) {
+        delete process.env.SHELL;
+      } else {
+        process.env.SHELL = previousShell;
+      }
+    }
+  });
+
+  it.each(["", "/bin/sh"])("falls back to bash for unsupported SHELL=%s", async (shell) => {
+    const previousShell = process.env.SHELL;
+    process.env.SHELL = shell;
+
+    try {
+      const { stdout, stderr } = await runCompletion([]);
+
+      expect(stdout).toContain("# Flisk CLI Bash Completion");
+      expect(stderr).toContain("Using bash completion");
+    } finally {
+      if (previousShell === undefined) {
+        delete process.env.SHELL;
+      } else {
+        process.env.SHELL = previousShell;
+      }
+    }
+  });
+
+  it("rejects a positional shell that conflicts with --shell", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { expectExit } = captureExit();
+
+    try {
+      await expect(runCompletionCommand(["bash", "--shell", "zsh"])).rejects.toThrow(
+        "process.exit",
+      );
+
+      expect(error).toHaveBeenCalledWith(expect.stringContaining("bash"));
+      expect(error).toHaveBeenCalledWith(expect.stringContaining("zsh"));
+      expect(log).not.toHaveBeenCalled();
+      expectExit(1);
+    } finally {
+      error.mockRestore();
+      log.mockRestore();
+    }
+  });
+
+  it("accepts a positional shell that matches --shell", async () => {
+    const { stdout } = await runCompletion(["zsh", "--shell", "zsh"]);
+
+    expect(stdout).toContain("#compdef flisk");
+  });
+
+  it.each([
+    ["bash", "zsh"],
+    ["zsh", "bash"],
+  ])("rejects conflicting shells (argument %s, --shell %s)", async (argument, option) => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { expectExit } = captureExit();
+
+    try {
+      await expect(runCompletionCommand([argument, "--shell", option])).rejects.toThrow(
+        "process.exit",
+      );
+
+      expect(error).toHaveBeenCalledWith(expect.stringContaining(`argument "${argument}"`));
+      expect(error).toHaveBeenCalledWith(expect.stringContaining(`--shell "${option}"`));
+      expectExit(1);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("accepts matching shells given as both argument and option", async () => {
+    const { stdout } = await runCompletion(["zsh", "--shell", "ZSH"]);
+
+    expect(stdout).toContain("#compdef flisk");
+  });
+
+  it.each([
+    ["positional argument", ["unknown-shell"]],
+    ["--shell option", ["--shell", "unknown-shell"]],
+  ])("rejects an unknown shell (%s) and reports the error", async (_, args) => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const { expectExit } = captureExit();
+
+    try {
+      await expect(runCompletionCommand(args)).rejects.toThrow("process.exit");
+
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining("Unsupported shell: unknown-shell"),
+      );
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining("Supported shells: bash, zsh, fish, powershell"),
+      );
+      expect(log).not.toHaveBeenCalled();
+      expectExit(1);
+    } finally {
+      error.mockRestore();
+      log.mockRestore();
+    }
+  });
+});

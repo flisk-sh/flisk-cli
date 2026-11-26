@@ -1,0 +1,51 @@
+# Reports a pull request workflow that fails for the head commit of a pull request that was already merged (#2897): a comment
+# on the pull request and one issue per pull request. Runs on the default branch only and never checks out pull request code.
+name: 🤖 BOT | CI | Report post-merge failures
+
+on:
+  workflow_run: # zizmor: ignore[dangerous-triggers] default-branch code only, no PR code checked out, token limited to comments and issues
+    workflows:
+      - "🔀 PR | CI | Checks"
+      - "🔀 PR | E2E | Journeys"
+      - "🔀 PR | E2E | Resource types"
+      - "🔀 PR | E2E | Examples gate"
+      - "🔀 PR | E2E | Platforms gate"
+      - "🔀 PR | E2E | Platforms hardware"
+      - "🔀 PR | Chaos | service.json"
+      - "🔀 PR | Security | Scans"
+      - "🔀 PR | Security | CodeQL"
+      - "♻️ REUSE | E2E | BYO template"
+    types: [completed]
+    # Only pull request runs are reported (shouldReport), so runs of main and of the merge queue
+    # would start a job that does nothing. A skipped job still counts as a run (#3910).
+    branches-ignore:
+      - main
+      - "gh-readonly-queue/**"
+
+permissions: {}
+
+concurrency:
+  group: report-post-merge-failures-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Report post-merge failures
+    if: github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Report
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/report-post-merge-failures.mjs

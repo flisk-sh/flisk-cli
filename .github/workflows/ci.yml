@@ -1,0 +1,795 @@
+# Checks for every PR and merge queue run. Not on push to main: the merge queue already ran them on the exact commit. Run manually from the Actions tab too.
+name: 🔀 PR | CI | Checks
+
+on:
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1" # weekly coverage badge refresh
+
+permissions:
+  contents: read
+
+concurrency:
+  # A push to main gets its own group per commit and is never cancelled: a newer merge must not leave an older main commit
+  # unverified (#2897). Pull request runs still cancel their superseded runs.
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+jobs:
+  # The only change-detection job in this run. Every other job reads its outputs.
+  changes:
+    name: 🔎 Detect Changes
+    runs-on: ubuntu-26.04
+    timeout-minutes: 2 # every job finishes in under 20s; fail fast if one hangs
+    permissions:
+      contents: read
+      pull-requests: read # paths-filter lists the files of a pull request
+    outputs:
+      # 'true' only when every changed file is documentation. Decided on pull requests; push and dispatch runs never
+      # report 'true', so they run every job.
+      docs_only: ${{ steps.docs.outputs.code == 'false' }}
+      lockfile: ${{ steps.filter.outputs.lockfile }}
+      workflows: ${{ steps.filter.outputs.workflows }}
+      # 'true' when the adopter table changed, so quick-checks can validate its rows only then.
+      adopters: ${{ steps.filter.outputs.adopters }}
+      # The matrix axis values the CLI's registries declare (tests/e2e/lib/registry-axes.mjs), as JSON. A matrix built from it
+      # cannot drift from the code.
+      axes: ${{ steps.axes.outputs.axes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # `code` is true when any changed file is outside the docs patterns. Same patterns as the docs-only check it replaces.
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
+        id: docs
+        if: github.event_name == 'pull_request'
+        with:
+          predicate-quantifier: every
+          filters: |
+            code:
+              - '**'
+              - '!**/*.md'
+              - '!docs/**'
+              - '!openspec/**'
+              - '!LICENSE'
+              # CodeQL has its own workflow and runs on its own path filters, so editing it cannot affect the CLI, runtime or tests.
+              - '!.github/workflows/codeql.yml'
+              # Claude Code's own config: no CLI, runtime or test code. .claude/skills stays code (the docs job checks it).
+              - '!.claude/hooks/**'
+              - '!.claude/memory/**'
+              - '!.claude/settings.json'
+
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
+        id: filter
+        with:
+          filters: |
+            lockfile:
+              - 'bun.lock'
+              - 'package.json'
+              - 'cli/package.json'
+            workflows:
+              - '.github/workflows/**'
+            adopters:
+              - 'docs/project/ADOPTERS.md'
+
+      - name: Read the matrix axes from the registries
+        id: axes
+        run: echo "axes=$(node tests/e2e/lib/registry-axes.mjs)" >> "$GITHUB_OUTPUT"
+
+  lint:
+    name: 🛡️ Lint, typecheck, fuzz and schema
+    runs-on: ubuntu-26.04
+    needs: changes
+    # Skip on docs-only PRs; a skipped job still satisfies required checks.
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
+    # Lint, typecheck, fuzz and the schema check share one runner and one `bun install`; each was its own job that ran for under
+    # 30 s and waited about 5 min for a runner (#3892).
+    # A hang guard: lint alone takes about 20s, but on a same-repo PR the autofix step also builds, a clean run took 37s, and
+    # on 2026-11-03 the runner's orphan-process cleanup waited 3 minutes after the last step (#3185). One minute cancelled it.
+    timeout-minutes: 5
+    permissions:
+      contents: write # push Biome fixes and a rebuilt cli/dist back to the PR branch
+      actions: write # start CI on the pushed fix commit
+    defaults:
+      run:
+        working-directory: cli
+    env:
+      # Only same-repo PRs can be pushed to; forks get a read-only token.
+      AUTOFIX: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # A same-repo PR checks out its own branch (not the merge commit), so fixes can be pushed to it.
+          # A fork's branch does not exist in this repository, so fork PRs use the default PR merge ref.
+          ref: ${{ (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref) || github.ref }}
+          persist-credentials: true # zizmor: ignore[artipacked] needed to push the autofix commit
+      - uses: ./.github/actions/setup-bun # zizmor: ignore[self-repository] composite action resolves from this commit
+      - run: bun install --frozen-lockfile --ignore-scripts
+      # Applies Biome's safe fixes and rebuilds cli/dist, then commits both.
+      # A push made with GITHUB_TOKEN doesn't start CI by itself, so the step
+      # dispatches a CI run on the branch to check the fix commit.
+      - name: Autofix lint and cli/dist
+        if: env.AUTOFIX == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          bun run lint:fix || true
+          bun run build
+          git add -A .
+          git add -f dist
+          if git diff --cached --quiet; then
+            echo "Nothing to fix."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+            git commit -m "Apply Biome fixes and rebuild cli/dist"
+            git push
+            gh workflow run ci.yml --ref "$BRANCH"
+            echo "::notice::Pushed a commit with Biome fixes and a rebuilt cli/dist; started CI on it."
+          fi
+      - run: bun run lint
+      # Fails when a test file re-declares a shared helper instead of importing it from test-support (#1402).
+      # Each step from here runs even when an earlier one failed, so one run reports every failure.
+      - name: Check test helpers are not duplicated
+        if: ${{ !cancelled() }}
+        run: node ../scripts/check-test-helper-allowlist.mjs
+      # tsc prints file(line,col) errors; rewrite them as ::error workflow commands so GitHub annotates the PR diff.
+      - name: Typecheck
+        if: ${{ !cancelled() }}
+        run: |
+          set -o pipefail
+          bunx --no-install tsc --project tsconfig.typecheck.json --pretty false | sed -E 's#^([^(]+)\(([0-9]+),([0-9]+)\): error (.*)$#::error file=cli/\1,line=\2,col=\3::\4#'
+      # The fuzz suite imports cli/src, which imports the CLI's own dependencies (chalk, via errors.ts), installed above.
+      - name: Install the fuzz suite
+        if: ${{ !cancelled() }}
+        working-directory: tests/fuzz
+        run: bun install --frozen-lockfile --ignore-scripts
+      - name: Fuzz
+        if: ${{ !cancelled() }}
+        working-directory: tests/fuzz
+        run: bun run fuzz
+      - name: Validate the service schema (offline, no live fetch)
+        if: ${{ !cancelled() }}
+        working-directory: .
+        run: node scripts/check-published-service-schema.mjs
+
+  # Spell check, docs checks, the DCO sign-off check and the secret scan share one runner (#3892). The first two run on docs-only PRs too: links and
+  # anchors (D3), the tab bars drawn from docs/tabs.json (D4), the fit calculator pages (D5), the Flisk plugin files from
+  # scripts/agent-plugin.mjs (D6).
+  quick-checks:
+    name: ⚡ Quick checks
+    runs-on: ubuntu-26.04
+    needs: changes # the adopters row check reads the change-detection output
+    if: ${{ !cancelled() }} # DCO and the secret scan still run when change detection fails
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0 # the secret scan reads the commits between the base and the head
+          persist-credentials: false
+      - uses: crate-ci/typos@276087d9a4f06398b3e04825487805e2d7375888 # v1.52.2
+        with:
+          config: ./.github/_typos.toml
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        if: ${{ !cancelled() }}
+        with:
+          node-version: 22.23.5
+      - if: ${{ !cancelled() }}
+        run: bash tests/e2e/static/skills-and-docs.sh
+      - if: ${{ !cancelled() }}
+        run: node --test scripts/docs/tabs.test.mjs scripts/docs/fit.test.mjs scripts/docs/llms-demo-links.test.mjs scripts/sync-llms-demos.test.mjs scripts/agent-plugin.test.mjs scripts/contributor-merged.test.mjs scripts/check-adopters.test.mjs
+      # Only when the table itself changed: the rows are checked against the npm registry and their links (#490).
+      - name: Validate ADOPTERS.md rows
+        if: ${{ !cancelled() && needs.changes.outputs.adopters == 'true' }}
+        run: node scripts/check-adopters.mjs
+      # The Since column of ADOPTER-COVERAGE.md must match the real tags and the real npm package (#3063). This job's
+      # fetch-depth: 0 is what lets `git tag --contains` see the merge commits; GH_TOKEN only raises the public pulls API limit.
+      - name: Check the Since column of ADOPTER-COVERAGE.md
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/check-adopter-coverage.mjs
+      # Every non-merge commit in a pull request must carry a Signed-off-by line (DCO, see CONTRIBUTING.md). Bot-authored
+      # commits are exempt. This was its own workflow (dco.yml) that used a runner for 8 s of work (#3894).
+      - name: DCO sign-off
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          failed=0
+          for sha in $(git rev-list --no-merges "$BASE_SHA..$HEAD_SHA"); do
+            author=$(git log -1 --format='%an' "$sha")
+            case "$author" in *"[bot]") continue ;; esac
+            if ! git log -1 --format='%B' "$sha" | grep -qE '^Signed-off-by: .+ <.+>$'; then
+              echo "::error::Commit $sha is missing a Signed-off-by line"
+              failed=1
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "Add a sign-off with: git commit --amend -s (or git rebase --signoff $BASE_SHA)"
+            exit 1
+          fi
+      - uses: trufflesecurity/trufflehog@3bd2b5887eb0efb8fa18bfd1d296032924e4ffdc # v3.99.9
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        with:
+          base: ${{ github.event.pull_request.base.sha }}
+          head: ${{ github.event.pull_request.head.sha }}
+          extra_args: --only-verified
+
+  # The same unit suite on a clean macOS runner (#2898): a test that only passes on Linux (a real ~/.flisk cache, a tool on PATH,
+  # a fixed port) is caught when it is added, not on a contributor's laptop. No Tilt (the Linux-only setup action), so the
+  # Tilt-gated tests skip here and still run in the Linux job. Not required until it has been green for a while.
+  test-macos:
+    name: 🍎 Test (macOS)
+    runs-on: macos-latest
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 2 # a queue entry is diffed against its first parent
+      - uses: ./.github/actions/setup-bun # zizmor: ignore[self-repository] composite action resolves from this commit
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.23.5
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - name: Build the CLI (the e2e-style tests spawn cli/bin/flisk.js, which imports dist/)
+        run: bun run build
+      # A pull request or queue entry runs the unit tests its change can affect, not the whole suite (scripts/ci/select-unit-tests.sh decides, and
+      # falls back to everything for any change outside cli/src and cli/dist); manual and scheduled runs run everything.
+      - name: Choose the unit tests for this event
+        id: select
+        working-directory: .
+        env:
+          EVENT: ${{ github.event_name }}
+        run: scripts/ci/select-unit-tests.sh "$RUNNER_TEMP/unit-select"
+      - name: Run TypeScript unit tests
+        if: ${{ steps.select.outputs.mode != 'selected' }}
+        run: bun run test
+      - name: Run the unit tests this queue entry affects
+        if: ${{ steps.select.outputs.mode == 'selected' }}
+        shell: bash
+        env:
+          SELECT_DIR: ${{ runner.temp }}/unit-select
+        run: |
+          related=()
+          while IFS= read -r line || [ -n "$line" ]; do
+            if [ -n "$line" ]; then related+=("$line"); fi
+          done < "$SELECT_DIR/related.txt"
+          files=()
+          while IFS= read -r line || [ -n "$line" ]; do
+            if [ -n "$line" ]; then files+=("$line"); fi
+          done < "$SELECT_DIR/files.txt"
+          status=0
+          # The tests that import a changed file, then the test files picked by name: the ones that start the built CLI (they run
+          # cli/dist as a child process, which the import graph cannot see) and the ones that read a changed docs, workflow or script file.
+          if [ "${#related[@]}" -gt 0 ]; then bun run test:related "${related[@]}" || status=$?; fi
+          if [ "${#files[@]}" -gt 0 ]; then bun run test:files "${files[@]}" || status=$?; fi
+          exit "$status"
+
+  # The repo's shell, static and Node script checks do not need the CLI build, coverage output or Docker. Running them here
+  # keeps the 38 to 45 s `make test-shell` step off the Test job's critical path (#3836).
+  repo-scripts:
+    name: 🧰 Repo script checks
+    runs-on: ubuntu-26.04
+    needs: changes
+    # Skip on docs-only PRs; a skipped job still satisfies required checks.
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
+    # A hang guard, not a speed target: make test-shell takes about 40 s on a runner, plus a clean install.
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-bun # zizmor: ignore[self-repository] composite action resolves from this commit
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.23.5
+      # The only install lifecycle script here installs developer git hooks; this job needs no hooks and the repo ships none.
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - name: Shell, static and Node script checks
+        run: make test-shell
+
+  test:
+    name: 🧪 Test
+    runs-on: ubuntu-26.04
+    needs: changes
+    # Skip on docs-only PRs; a skipped job still satisfies required checks.
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
+    # A hang guard, not a speed target: the suite (with every Starlark test that spawns tilt) takes 2 to 5 minutes on a runner (about 100 s on a laptop, with
+    # or without coverage), and a one-minute limit cancelled it in 3 of 19 recent runs with no failing step.
+    timeout-minutes: 10
+    permissions:
+      contents: write # push the refreshed coverage badge branch
+      pull-requests: write # open the coverage badge PR
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: true # needed to push the coverage badge branch
+          fetch-depth: 2 # a queue entry is diffed against its first parent
+      - uses: ./.github/actions/setup-bun # zizmor: ignore[self-repository] composite action resolves from this commit
+      - name: Install Tilt for Starlark generator tests
+        uses: ./.github/actions/setup-tilt # zizmor: ignore[self-repository] composite action resolves from this commit
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.23.5
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - name: Free host Postgres port before project integration tests
+        uses: ./.github/actions/free-postgres-port # zizmor: ignore[self-repository] composite action resolves from this commit
+      # One Vitest run does both jobs: the test verdict and the coverage output (text, HTML and JSON-summary reports in
+      # cli/coverage/). It fails below 57% lines, the floor the main ruleset used to hold through Code Quality, so the
+      # required Summary check enforces it for every PR, forks included, at no cost. It writes the JSON report with the failed test names for the PR summary (#1385) even
+      # when a test fails. Running the suite a second time for coverage doubled the slowest CI job.
+      # A pull request or queue entry runs the unit tests its change can affect, not the whole suite (scripts/ci/select-unit-tests.sh decides, and
+      # falls back to everything for any change outside cli/src and cli/dist); manual and scheduled runs run everything.
+      - name: Choose the unit tests for this event
+        id: select
+        working-directory: .
+        env:
+          EVENT: ${{ github.event_name }}
+        run: scripts/ci/select-unit-tests.sh "$RUNNER_TEMP/unit-select"
+      - name: Run TypeScript unit tests with coverage
+        if: ${{ steps.select.outputs.mode != 'selected' }}
+        working-directory: cli
+        run: bun run test:coverage
+        env:
+          FLISK_REQUIRE_TILT: '1'
+      - name: Run the unit tests this queue entry affects
+        if: ${{ steps.select.outputs.mode == 'selected' }}
+        shell: bash
+        env:
+          SELECT_DIR: ${{ runner.temp }}/unit-select
+          FLISK_REQUIRE_TILT: '1'
+        run: |
+          related=()
+          while IFS= read -r line || [ -n "$line" ]; do
+            if [ -n "$line" ]; then related+=("$line"); fi
+          done < "$SELECT_DIR/related.txt"
+          files=()
+          while IFS= read -r line || [ -n "$line" ]; do
+            if [ -n "$line" ]; then files+=("$line"); fi
+          done < "$SELECT_DIR/files.txt"
+          status=0
+          # The tests that import a changed file, then the test files picked by name: the ones that start the built CLI (they run
+          # cli/dist as a child process, which the import graph cannot see) and the ones that read a changed docs, workflow or script file.
+          if [ "${#related[@]}" -gt 0 ]; then bun run test:related "${related[@]}" || status=$?; fi
+          if [ "${#files[@]}" -gt 0 ]; then bun run test:files "${files[@]}" || status=$?; fi
+          exit "$status"
+      # The shell, static and Node script checks run in the parallel 🧰 Repo script checks job (#3836).
+      # Fails when a high-risk area drops below its baseline in cli/coverage-baseline.json (the ratchet).
+      - name: Coverage ratchet for high-risk areas
+        if: ${{ !cancelled() && steps.select.outputs.mode != 'selected' }}
+        run: node scripts/coverage-ratchet.mjs --json test-results/coverage-ratchet.json
+      - name: Coverage summary
+        if: ${{ always() && steps.select.outputs.mode != 'selected' }}
+        run: |
+          node -e '
+            const { total } = require("./coverage/coverage-summary.json");
+            const rows = ["lines", "statements", "functions", "branches"].map(
+              (k) => "| " + k + " | " + total[k].pct + "% | " + total[k].covered + "/" + total[k].total + " |",
+            );
+            console.log(["## Unit test coverage", "", "| Metric | Coverage | Covered |", "|---|---|---|", ...rows, ""].join("\n"));
+          ' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload coverage HTML report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: cli-coverage-html
+          path: cli/coverage/
+          retention-days: 3
+          if-no-files-found: warn
+      # The inputs of the PR summary (#1385): Vitest's JSON reporter output, the coverage summary and the ratchet's JSON report.
+      - name: Collect the unit test results for the PR summary
+        if: always()
+        run: |
+          mkdir -p test-results
+          cp -f coverage/coverage-summary.json coverage/coverage-final.json test-results/ || true
+      - name: Upload the unit test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: unit-test-results
+          path: cli/test-results/
+          retention-days: 1
+          if-no-files-found: warn
+      # main is behind a merge queue, so CI cannot push directly to it (GH013); refresh the badge via a PR instead.
+      - name: Regenerate coverage badge
+        if: ${{ !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+        working-directory: .
+        run: node scripts/coverage-badge.mjs
+      - name: Open PR with refreshed coverage badge
+        if: ${{ !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+        working-directory: . # the badge lives at the repo root, not under cli/
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet docs/assets/coverage.svg; then
+            echo "Coverage badge unchanged; no PR needed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          BRANCH="chore/refresh-coverage-badge"
+          git checkout -b "$BRANCH"
+          git add docs/assets/coverage.svg
+          git commit -m "chore: refresh coverage badge"
+          git push --force-with-lease origin "$BRANCH"
+          if [ "$(gh pr list --state open --head "$BRANCH" --json number --jq 'length')" = "0" ]; then
+            gh pr create --base main --head "$BRANCH" --title "chore: refresh coverage badge" --body "Auto-generated by CI from the latest main coverage run."
+          else
+            echo "PR already open for $BRANCH; pushed an update."
+          fi
+
+  # Writes the test summary to the job summary and creates or edits the one PR comment with it (#1385). Reads only the JSON the
+  # Test job uploads. A fork's token is read-only, so a fork PR gets the job summary and no comment.
+  pr-summary:
+    name: 📝 PR test summary
+    runs-on: ubuntu-26.04
+    needs: [changes, test]
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.outputs.docs_only != 'true' }}
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      actions: read # lists the E2E workflow runs of the pull request's head commit
+      pull-requests: write # creates or edits the summary comment
+    steps:
+      # Full history, so the base commit of the pull request is present for the changed-line coverage diff.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download the unit test results
+        id: unit
+        continue-on-error: true # the Test job may have stopped before its report step; the summary says so
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: unit-test-results
+          path: unit-results
+
+      - name: Write the test summary and the PR comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SAME_REPO: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          TEST_RESULT: ${{ needs.test.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          args=(--unit unit-results --test-result "$TEST_RESULT" --run-url "$RUN_URL" --repo "$REPO" --sha "$HEAD_SHA" --diff-base "$BASE_SHA")
+          if [ "$SAME_REPO" = "true" ]; then args+=(--pr "$PR_NUMBER" --post); fi
+          node scripts/test-summary.mjs "${args[@]}" > summary.md
+          cat summary.md >> "$GITHUB_STEP_SUMMARY"
+
+  # test-python remains a local target until the clean-checkout failures in #700 are resolved.
+
+  # Builds and packs the CLI once per run. package-smoke installs this tarball instead of packing its own. The same job installs the
+  # pinned published package from npm and checks it (npm-package-smoke was its own job; it needs no more than a checkout and Bun).
+  package:
+    name: 📦 Pack CLI and published package smoke test
+    runs-on: ubuntu-26.04
+    needs: changes
+    # Skip on docs-only PRs; a skipped job still satisfies required checks.
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-bun # zizmor: ignore[self-repository] composite action resolves from this commit
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.23.5
+
+      - name: Build
+        run: |
+          bun install --frozen-lockfile --ignore-scripts
+          npm run build
+
+      # cli/dist is committed so a source checkout runs without a build
+      # step, and prepack bundles it into the package's cli/dist-bundle.
+      # Fail if a source change was committed without rebuilding it.
+      # Locally: `npm run check:dist` in cli/ does both steps.
+      - name: Check committed cli/dist is up to date
+        run: scripts/check-cli-dist.sh
+
+      - name: Pack the CLI tarball
+        run: | # zizmor: ignore[adhoc-packages] packs our own checkout
+          mkdir -p "$RUNNER_TEMP/cli-tarball"
+          npm pack --pack-destination "$RUNNER_TEMP/cli-tarball"
+
+      # This tarball is what npm users install. Fail if it ships test files (1.4.0 did) or paths
+      # outside the allowlist, misses a required runtime path, or loses "type": "module",
+      # "engines.node" or its bin target.
+      - name: Check the npm package contents
+        run: |
+          node scripts/check-npm-package.mjs --tarball "$(compgen -G "$RUNNER_TEMP/cli-tarball/*.tgz" | head -1)"
+
+      # Fails when the packed tarball is more than 10% heavier than the install-weight baseline in
+      # scripts/scores/baseline.json. Raise the baseline in the same PR when the growth is intended.
+      - name: Check the npm package weight
+        run: |
+          node scripts/scores/run.mjs --only install-weight --check --tarball "$(compgen -G "$RUNNER_TEMP/cli-tarball/*.tgz" | head -1)"
+
+      - name: Upload the CLI tarball
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: cli-tarball
+          path: ${{ runner.temp }}/cli-tarball/*.tgz
+          retention-days: 1
+          if-no-files-found: error
+
+      # The published package runs on the oldest Node the package supports, not the Node that builds the tarball.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.12.0
+
+      # The pin lives in .github/npm-package-smoke/package-lock.json; npm ci installs exactly that tree.
+      - name: Install the pinned package from npm
+        run: |
+          npm ci --prefix .github/npm-package-smoke --ignore-scripts --no-audit --no-fund
+
+      - name: Verify the installed version
+        run: |
+          pinned="$(node -p "require('./.github/npm-package-smoke/package.json').dependencies['@flisk-sh/flisk']")"
+          # flisk --version prints the bare version on stdout (notices go to stderr); compare it whole,
+          # so a pin of 1.4.0 does not accept 11.4.0.
+          installed="$(./.github/npm-package-smoke/node_modules/.bin/flisk --version | tail -n 1 | tr -d '[:space:]')"
+          echo "Pinned: ${pinned}  Installed: ${installed}"
+          if [ "${installed}" != "${pinned}" ]; then
+            echo "::error::flisk --version (${installed}) does not match pinned ${pinned}"
+            exit 1
+          fi
+
+      # Registry sites such as bundlephobia size the package from its main entry. Fail when the
+      # installed package has no main, or when main names a file the tarball does not ship.
+      - name: Check the installed package has a shipped main entry
+        run: |
+          node -e '
+            const path = require("node:path");
+            const dir = path.resolve(".github/npm-package-smoke/node_modules/@flisk-sh/flisk");
+            const manifest = require(path.join(dir, "package.json"));
+            if (!manifest.main) {
+              console.error("::error::@flisk-sh/flisk has no main entry in package.json");
+              process.exit(1);
+            }
+            require("node:fs").statSync(path.join(dir, manifest.main));
+            console.log("main: " + manifest.main);
+          '
+
+      # Releases publish with --provenance from release-binaries.yml. Fail if the pinned
+      # version lacks an SLSA provenance attestation on the registry.
+      - name: Check the published version has provenance
+        run: |
+          pinned="$(node -p "require('./.github/npm-package-smoke/package.json').dependencies['@flisk-sh/flisk']")"
+          predicate="$(npm view "@flisk-sh/flisk@${pinned}" dist.attestations.provenance.predicateType)"
+          if [ "${predicate}" != "https://slsa.dev/provenance/v1" ]; then
+            echo "::error::@flisk-sh/flisk@${pinned} has no SLSA provenance on npm (got '${predicate}')"
+            exit 1
+          fi
+          echo "@flisk-sh/flisk@${pinned} provenance: ${predicate}"
+
+  # Installs the npm package the way users do (npm install -g) and runs it,
+  # so a release can't ship without the compiled CLI or its dependencies.
+  package-smoke:
+    name: 📦 Package Smoke Test
+    runs-on: ubuntu-26.04
+    needs: [changes, package]
+    # Skip on docs-only PRs; a skipped job still satisfies required checks. When package failed, this job still runs
+    # and the download below fails it, instead of skipping it.
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
+    timeout-minutes: 3 # install Tilt and free the host Postgres port before the package smoke test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      # The installed CLI's cold start needs Bun on PATH (the check fails without it).
+      - uses: ./.github/actions/setup-bun # zizmor: ignore[self-repository] composite action resolves from this commit
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.23.5
+
+      - name: Download the packed CLI
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: cli-tarball
+          path: ${{ runner.temp }}/cli-tarball
+
+      - name: Install globally
+        uses: ./.github/actions/install-flisk # zizmor: ignore[self-repository] composite action resolves from this commit
+        with:
+          tarball: ${{ runner.temp }}/cli-tarball/flisk-*.tgz
+
+      - name: Install Tilt
+        uses: ./.github/actions/setup-tilt # zizmor: ignore[self-repository] composite action resolves from this commit
+
+      - name: Free port 5432 (runner's preinstalled Postgres)
+        uses: ./.github/actions/free-postgres-port # zizmor: ignore[self-repository] composite action resolves from this commit
+
+      - name: Run the installed CLI
+        working-directory: ${{ runner.temp }}
+        run: |
+          flisk --version
+          mkdir smoke-project && cd smoke-project
+          flisk project --yes
+          flisk resource orders-api --type backend --stack shop --yes
+          test -f services/shop/orders-api/service.json
+          echo "✅ Installed package scaffolds a project and a resource"
+
+      # No stack runs in CI, so doctor exits 1 (not ready) by design. Fail only when doctor reports errors (2) or crashes.
+      - name: Run flisk doctor on the scaffolded project
+        working-directory: ${{ runner.temp }}/smoke-project
+        run: |
+          set +e
+          flisk doctor > doctor.log 2>&1
+          code=$?
+          cat doctor.log
+          if [ "$code" -ge 2 ]; then
+            echo "::error::flisk doctor reported errors (exit $code)"
+            exit 1
+          fi
+          echo "✅ flisk doctor ran on the scaffolded project (exit $code)"
+
+      # examples/flisk-example ships in the package for this command; fail if it stops working.
+      - name: Copy the bundled example
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir example-project && cd example-project
+          flisk project example --yes
+          test -f flisk-example/Tiltfile
+          test -f flisk-example/TILT_TECH_STACK.star
+          echo "✅ Installed package copies the bundled example"
+
+  # Audits the contents of the pinned version already on npm (what npmx.dev shows) with the
+  # same checks the package job runs on this branch's tarball. No pull request can change a
+  # published tarball, so this job is not in the summary gate: it stays red, visibly, until a
+  # fixed release is published and the pin in .github/npm-package-smoke moves to it.
+  npm-registry-audit:
+    name: 🔎 Published npm Package Audit
+    runs-on: ubuntu-26.04
+    needs: [changes]
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22.12.0
+
+      - name: Check the published tarball contents
+        run: |
+          pinned="$(node -p "require('./.github/npm-package-smoke/package.json').dependencies['@flisk-sh/flisk']")"
+          npm pack "@flisk-sh/flisk@${pinned}" --pack-destination "${RUNNER_TEMP}" --silent
+          # --published also accepts the pre-1.4.8 layout (cli/dist/, root CHANGELOG.md); drop it once the pin is past it.
+          node scripts/check-npm-package.mjs --published --tarball "${RUNNER_TEMP}/flisk-sh-flisk-${pinned}.tgz"
+
+  # Needs "Dependency graph" turned on in Settings > Code security, then the
+  # repository variable DEPENDENCY_REVIEW set to true (Settings > Variables).
+  dependency-review:
+    name: 🔒 Dependency Audit
+    runs-on: ubuntu-26.04
+    timeout-minutes: 1 # every job finishes in under 20s; fail fast if one hangs
+    needs: changes
+    if: vars.DEPENDENCY_REVIEW == 'true' && needs.changes.outputs.lockfile == 'true' && github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+
+  workflow-audit:
+    name: 🛠️ Workflow Audit
+    runs-on: ubuntu-26.04
+    # A hang guard: actionlint takes seconds, but zizmor's online audits call the GitHub API and took 90s on 2026-11-03, so a
+    # one-minute limit cancelled a clean run (#3185) twice.
+    timeout-minutes: 5
+    needs: changes
+    if: needs.changes.outputs.workflows == 'true' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2
+        with:
+          fail-on-error: true
+      - uses: zizmorcore/zizmor-action@45d7276c9ca790aabd705e31ca99c6185c3e76dd # v0.8.1
+        with:
+          inputs: .github/workflows/
+          advanced-security: false
+          annotations: true
+
+  pr-summary-review:
+    name: 🧐 PR summary review
+    # Also runs on merge queue entries: the queue is where the required check must still mean something. The merge queue reads the
+    # pull request named by its ref, so it checks the same description the pull request was checked with.
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 2
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Check summary and verification notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          node scripts/check-pr-review-readiness.mjs
+
+  # Aggregate gate. The e2e group gates live in their own workflows, so `needs:` cannot name them: this job reads their check runs
+  # on the head commit instead and fails when one is missing or failed. GitHub's check-runs endpoint includes skipped jobs, while
+  # the check-suites endpoint does not; query runs rather than suites. A skipped gate passes, as a skipped job does here.
+  summary:
+    name: 📋 Summary
+    runs-on: ubuntu-26.04
+    # Waits for the e2e gates for the event: a pull request waits for the light 3-service examples gate only, the merge queue for
+    # all three (tens of minutes). The wait is bounded by the script's 25-minute deadline; workflow-pr-speed caps pull request
+    # jobs at 30 minutes.
+    timeout-minutes: 30
+    if: always()
+    needs: [lint, quick-checks, repo-scripts, test, package, package-smoke, dependency-review, workflow-audit]
+    permissions:
+      contents: read
+      checks: read # reads the e2e gates' check runs on the head commit
+      actions: read # reads the gate workflows' runs for the head commit
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      # The gate list and the wait live in scripts/, so the workflow and the scripts cannot drift apart (#1816).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Render summary
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          {
+            echo "## CI Summary"
+            echo ""
+            echo "| Check | Result |"
+            echo "|---|---|"
+            echo "$NEEDS" | jq -r 'to_entries[] | "| \(.key) | \(
+              if .value.result == "success" then "✅ Passed"
+              elif .value.result == "skipped" then "⏭️ Skipped"
+              elif .value.result == "cancelled" then "🚫 Cancelled"
+              else "❌ Failed" end) |"'
+          } >> "$GITHUB_STEP_SUMMARY"
+          # The table alone passes the job, so a failed or cancelled job above would not fail the required check.
+          if echo "$NEEDS" | jq -e 'any(.[]; .result != "success" and .result != "skipped")' >/dev/null; then
+            echo "::error::A job above did not pass. See the CI Summary table."
+            exit 1
+          fi
+
+      # Waits for the gates that report for this event. Every gate waited for reports on every pull request (a gate whose paths
+      # did not change passes at once), so a missing name fails the summary. A push to main runs the journeys gate only, and a
+      # manual dispatch of ci.yml starts no gate workflow, so those runs wait for nothing instead of burning the deadline on a
+      # gate that can never report (#1816).
+      - name: Check the e2e group gates
+        run: node scripts/wait-for-e2e-gates.mjs --event "$GITHUB_EVENT_NAME" --sha "$HEAD_SHA" --repo "$REPO"

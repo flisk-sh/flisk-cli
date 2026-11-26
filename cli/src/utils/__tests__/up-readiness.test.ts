@@ -1,0 +1,677 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import { describe, expect, it } from "vitest";
+import { isStartupStalled } from "../startup-report.js";
+import {
+  checkExpectedResources,
+  evaluateTiltReadiness,
+  failureGraceFromEnv,
+  isAdvisoryResource,
+  waitForTiltResourcesReady,
+} from "../up-readiness.js";
+
+const item = (name: string, updateStatus: string, runtimeStatus: string) => ({
+  metadata: { name },
+  status: { updateStatus, runtimeStatus },
+});
+const json = (...items: unknown[]) => JSON.stringify({ items });
+const opts = { intervalMs: 1, deferred: new Set<string>(), failureGraceMs: 0 };
+
+describe("waitForTiltResourcesReady", () => {
+  const unhealthy = (name: string) => ({
+    metadata: { name },
+    status: {
+      updateStatus: "ok",
+      runtimeStatus: "ok",
+      composeResourceInfo: { healthStatus: "unhealthy" },
+    },
+  });
+  it("keeps waiting while a container that built is failing at runtime, and reports it ready once it recovers", async () => {
+    // First start of a database: its health check fails while it initialises, then it comes up.
+    let clock = 0;
+    const responses = [
+      json(item("api", "ok", "ok"), unhealthy("db")),
+      json(item("api", "ok", "ok"), unhealthy("db")),
+      json(item("api", "ok", "ok"), item("db", "ok", "ok")),
+    ];
+    const result = await waitForTiltResourcesReady(1, {
+      ...opts,
+      failureGraceMs: 60_000,
+      now: () => (clock += 1_000),
+      fetchJson: async () => responses.shift() ?? null,
+    });
+    expect(result.ready).toBe(true);
+    expect(result.failures).toEqual([]);
+  });
+  it("reports a runtime failure that has not recovered once the grace window is over", async () => {
+    let clock = 0;
+    let polls = 0;
+    const result = await waitForTiltResourcesReady(1, {
+      ...opts,
+      failureGraceMs: 5_000,
+      now: () => clock,
+      // One second per poll; the clock moves only here, so the poll count is the elapsed time.
+      fetchJson: async () => {
+        polls += 1;
+        clock = polls * 1_000;
+        return json(item("api", "ok", "ok"), unhealthy("db"));
+      },
+    });
+    expect(result).toMatchObject({ ready: false, timedOut: false });
+    expect(result.failures.map((f) => f.name)).toEqual(["db"]);
+    // db fails from the first poll (t=1s) and is given up on at the first poll 5s later (t=6s): exactly the window.
+    expect(clock).toBe(6_000);
+    expect(polls).toBe(6);
+  });
+  it("gives a container that turns unhealthy later its own grace window", async () => {
+    // db is unhealthy from t=1s; cache turns unhealthy at t=4s; db recovers at t=5s. With one shared timestamp cache
+    // inherited db's start and failed at t=6s (grace 5s); now it fails at t=9s.
+    let clock = 0;
+    const db = (t: number) => (t < 5_000 ? unhealthy("db") : item("db", "ok", "ok"));
+    const cache = (t: number) => (t < 4_000 ? item("cache", "ok", "ok") : unhealthy("cache"));
+    let reads = 0;
+    const result = await waitForTiltResourcesReady(1, {
+      ...opts,
+      failureGraceMs: 5_000,
+      now: () => clock,
+      fetchJson: async () => {
+        reads += 1;
+        clock = reads * 1_000;
+        return json(db(clock), cache(clock));
+      },
+    });
+    expect(result.failures.map((f) => f.name)).toEqual(["cache"]);
+    expect(clock).toBe(9_000);
+  });
+  it("gives no grace to an exited container that kept its last unhealthy status", async () => {
+    let clock = 0;
+    const exited = {
+      metadata: { name: "db" },
+      status: {
+        updateStatus: "ok",
+        runtimeStatus: "error",
+        composeResourceInfo: { healthStatus: "unhealthy" },
+      },
+    };
+    const result = await waitForTiltResourcesReady(1, {
+      ...opts,
+      failureGraceMs: 60_000,
+      now: () => (clock += 1_000),
+      fetchJson: async () => json(item("api", "ok", "ok"), exited),
+    });
+    expect(result.ready).toBe(false);
+    expect(clock).toBeLessThan(5_000);
+  });
+  it("stops at once on a build error: it cannot recover by itself", async () => {
+    let clock = 0;
+    const result = await waitForTiltResourcesReady(1, {
+      ...opts,
+      failureGraceMs: 60_000,
+      now: () => (clock += 1_000),
+      fetchJson: async () => json(item("api", "ok", "ok"), item("db", "error", "none")),
+    });
+    expect(result.ready).toBe(false);
+    expect(clock).toBeLessThan(5_000);
+  });
+  it("waits for pending resources, then reports ready", async () => {
+    const responses = [
+      json(item("api", "pending", "pending")),
+      json(item("api", "ok", "ok"), item("web", "ok", "not_applicable")),
+    ];
+    const result = await waitForTiltResourcesReady(1, {
+      ...opts,
+      fetchJson: async () => responses.shift() ?? null,
+    });
+    expect(result.ready).toBe(true);
+  });
+  it("is not ready when everything else settled but one resource errored", async () => {
+    const result = await waitForTiltResourcesReady(1, {
+      ...opts,
+      fetchJson: async () => json(item("api", "ok", "ok"), item("db", "error", "none")),
+    });
+    expect(result.ready).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(result.failures.map((f) => f.name)).toEqual(["db"]);
+  });
+  it("waits while a running container's health check is starting, then fails when it turns unhealthy", async () => {
+    const withHealth = (name: string, healthStatus: string) => ({
+      metadata: { name },
+      status: { updateStatus: "ok", runtimeStatus: "ok", composeResourceInfo: { healthStatus } },
+    });
+    const responses = [
+      json(withHealth("postgres", "starting"), item("api", "ok", "ok")),
+      json(withHealth("postgres", "unhealthy"), item("api", "ok", "ok")),
+    ];
+    const result = await waitForTiltResourcesReady(1, {
+      ...opts,
+      fetchJson: async () => responses.shift() ?? null,
+    });
+    expect(responses).toEqual([]);
+    expect(result).toMatchObject({ ready: false, timedOut: false });
+    expect(result.failures).toEqual([
+      {
+        name: "postgres",
+        message: "container is running, but its health check is failing",
+        runtime: true,
+      },
+    ]);
+  });
+  it("ignores deferred resources", async () => {
+    const result = await waitForTiltResourcesReady(1, {
+      ...opts,
+      deferred: new Set(["lazy"]),
+      fetchJson: async () => json(item("api", "ok", "ok"), item("lazy", "none", "none")),
+    });
+    expect(result.ready).toBe(true);
+  });
+  it("ignores resources Tilt reports as disabled, as in a partial or phased up", async () => {
+    const disabled = {
+      metadata: { name: "web-run-only" },
+      status: { updateStatus: "none", runtimeStatus: "none", disableStatus: { state: "Disabled" } },
+    };
+    const result = await waitForTiltResourcesReady(1, {
+      ...opts,
+      fetchJson: async () => json(item("api", "ok", "ok"), disabled),
+    });
+    expect(result.ready).toBe(true);
+  });
+  it("treats a serve-only resource (update not_applicable) as built", async () => {
+    const result = await waitForTiltResourcesReady(1, {
+      ...opts,
+      fetchJson: async () => json(item("api", "not_applicable", "ok")),
+    });
+    expect(result.ready).toBe(true);
+  });
+  it("reports an expected service that Tilt has disabled instead of filtering it out", async () => {
+    const disabled = {
+      metadata: { name: "catalog-api" },
+      status: { updateStatus: "none", runtimeStatus: "none", disableStatus: { state: "Disabled" } },
+    };
+    const result = await waitForTiltResourcesReady(1, {
+      ...opts,
+      expected: ["catalog-api"],
+      fetchJson: async () => json(item("postgres", "ok", "ok"), disabled),
+    });
+    expect(result.ready).toBe(false);
+    expect(result.failures).toEqual([{ name: "catalog-api", message: "disabled in Tilt" }]);
+  });
+  it("is not ready while an expected service is not listed yet", async () => {
+    const result = await waitForTiltResourcesReady(1, {
+      ...opts,
+      timeoutMs: 20,
+      expected: ["catalog-api"],
+      fetchJson: async () => json(item("postgres", "ok", "ok")),
+    });
+    expect(result).toMatchObject({ ready: false, timedOut: true });
+  });
+  it("is ready once every expected service is listed, enabled and running", async () => {
+    const result = await waitForTiltResourcesReady(1, {
+      ...opts,
+      expected: ["catalog-api"],
+      fetchJson: async () => json(item("postgres", "ok", "ok"), item("catalog-api", "ok", "ok")),
+    });
+    expect(result.ready).toBe(true);
+  });
+  it("keeps a not_applicable resource failed when its runtime status is an error", async () => {
+    const result = await waitForTiltResourcesReady(1, {
+      ...opts,
+      fetchJson: async () =>
+        json(item("api", "ok", "ok"), item("worker", "not_applicable", "error")),
+    });
+    expect(result.ready).toBe(false);
+    expect(result.failures.map((f) => f.name)).toEqual(["worker"]);
+  });
+  it("returns the names Tilt has enabled", async () => {
+    const disabled = {
+      metadata: { name: "other" },
+      status: { updateStatus: "none", runtimeStatus: "none", disableStatus: { state: "Disabled" } },
+    };
+    const result = await waitForTiltResourcesReady(1, {
+      ...opts,
+      fetchJson: async () => json(item("api", "ok", "ok"), disabled),
+    });
+    expect(result.enabled).toEqual(["api"]);
+  });
+  it("times out while resources stay pending", async () => {
+    const result = await waitForTiltResourcesReady(1, {
+      ...opts,
+      timeoutMs: 20,
+      fetchJson: async () => json(item("api", "pending", "pending")),
+    });
+    expect(result).toMatchObject({ ready: false, timedOut: true, pending: 1 });
+  });
+});
+
+describe("a host port publish refusal is final", () => {
+  const bindFailed = (name: string, port = 80) => ({
+    metadata: { name },
+    status: {
+      updateStatus: "error",
+      runtimeStatus: "none",
+      buildHistory: [
+        {
+          error: `Error response from daemon: Bind for 127.0.0.1:${port} failed: port is already allocated`,
+        },
+      ],
+    },
+  });
+
+  it("settles the wait at once even while other resources are still building (#4216)", async () => {
+    let polls = 0;
+    const result = await waitForTiltResourcesReady(1, {
+      ...opts,
+      fetchJson: async () => {
+        polls += 1;
+        // golden-layers-build is mid-build and traefik has failed on the port publish: without the
+        // final-failure shortcut this wait holds until the build finishes or the timeout hits.
+        return json(item("golden-layers-build", "in_progress", "none"), bindFailed("traefik"));
+      },
+    });
+    expect(polls).toBe(1);
+    expect(result).toMatchObject({ ready: false, timedOut: false });
+    expect(result.failures).toEqual([
+      {
+        name: "traefik",
+        message:
+          "Error response from daemon: Bind for 127.0.0.1:80 failed: port is already allocated",
+        final: true,
+      },
+    ]);
+  });
+
+  it("does not wait out the runtime-failure grace window on a bind error", async () => {
+    let polls = 0;
+    const result = await waitForTiltResourcesReady(1, {
+      ...opts,
+      failureGraceMs: 60_000,
+      fetchJson: async () => {
+        polls += 1;
+        return json(bindFailed("postgres", 15432), item("api", "ok", "ok"));
+      },
+    });
+    expect(polls).toBe(1);
+    expect(result.failures[0]?.name).toBe("postgres");
+    expect(result.failures[0]?.final).toBe(true);
+  });
+
+  it("still waits when the failure is a recoverable one, not a publish refusal", async () => {
+    const crashed = {
+      metadata: { name: "worker" },
+      status: {
+        updateStatus: "error",
+        runtimeStatus: "none",
+        buildHistory: [{ error: "exit status 1" }],
+      },
+    };
+    const responses = [
+      json(crashed, item("api", "in_progress", "none")),
+      json(crashed, item("api", "ok", "ok")),
+    ];
+    const result = await waitForTiltResourcesReady(1, {
+      ...opts,
+      fetchJson: async () => responses.shift() ?? json(crashed, item("api", "ok", "ok")),
+    });
+    expect(responses).toEqual([]);
+    expect(result.failures[0]?.final).toBeUndefined();
+  });
+
+  it("settles on a userland-proxy bind error phrasing too", async () => {
+    const proxyFailed = {
+      metadata: { name: "traefik" },
+      status: {
+        updateStatus: "error",
+        runtimeStatus: "none",
+        buildHistory: [
+          {
+            error:
+              "Error starting userland proxy: listen tcp4 127.0.0.1:80: bind: address already in use",
+          },
+        ],
+      },
+    };
+    const evaluation = evaluateTiltReadiness(
+      json(proxyFailed, item("api", "in_progress", "none")),
+      new Set(),
+    );
+    expect(evaluation.settled).toBe(true);
+    expect(evaluation.result.failures[0]?.final).toBe(true);
+  });
+
+  it("marks the failure final in parseTiltResourceFailures for single-shot evaluation", () => {
+    const evaluation = evaluateTiltReadiness(
+      json(bindFailed("postgres", 15432), item("api", "in_progress", "none")),
+      new Set(),
+    );
+    expect(evaluation.settled).toBe(true);
+    expect(evaluation.result.failures.map((f) => f.name)).toEqual(["postgres"]);
+  });
+});
+
+describe("evaluateTiltReadiness", () => {
+  it("gives a single-shot answer for polling callers", () => {
+    const building = evaluateTiltReadiness(json(item("api", "pending", "pending")), new Set());
+    expect(building.result).toMatchObject({ ready: false, pending: 1 });
+    expect(building.settled).toBe(false);
+    const done = evaluateTiltReadiness(json(item("api", "ok", "ok")), new Set());
+    expect(done.result.ready).toBe(true);
+    expect(done.settled).toBe(true);
+    const failed = evaluateTiltReadiness(json(item("api", "error", "none")), new Set());
+    expect(failed.result.failures.map((f) => f.name)).toEqual(["api"]);
+    expect(failed.settled).toBe(true);
+  });
+});
+
+describe("waitForTiltResourcesReady with a stalled failure", () => {
+  const stalled = json(item("postgres", "error", "none"), item("api", "pending", "pending"));
+
+  it("returns the failure at once when everything pending is blocked by it", async () => {
+    const started = Date.now();
+    const result = await waitForTiltResourcesReady(1, {
+      timeoutMs: 60_000,
+      intervalMs: 1,
+      fetchJson: async () => stalled,
+      deferred: new Set(),
+      isStalled: () => true,
+    });
+    expect(result).toMatchObject({ ready: false, timedOut: false });
+    expect(result.failures.map((f) => f.name)).toEqual(["postgres"]);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it("keeps waiting when the caller says progress is still possible", async () => {
+    const result = await waitForTiltResourcesReady(1, {
+      timeoutMs: 30,
+      intervalMs: 1,
+      fetchJson: async () => stalled,
+      deferred: new Set(),
+      isStalled: () => false,
+    });
+    expect(result).toMatchObject({ ready: false, timedOut: true });
+  });
+});
+
+describe("a resource that is building right now", () => {
+  // Shape captured from a real Tilt: the Tiltfile resource is ok, `slow` is mid-build.
+  const building = json(
+    item("(Tiltfile)", "ok", "not_applicable"),
+    item("slow", "in_progress", "not_applicable"),
+  );
+
+  it("is not ready, and not settled, while it builds", () => {
+    const { result, settled } = evaluateTiltReadiness(building, new Set());
+    expect(result).toMatchObject({ ready: false, pending: 1 });
+    expect(settled).toBe(false);
+  });
+
+  it("is ready once it finishes", () => {
+    const done = json(
+      item("(Tiltfile)", "ok", "not_applicable"),
+      item("slow", "ok", "not_applicable"),
+    );
+    expect(evaluateTiltReadiness(done, new Set()).result).toMatchObject({
+      ready: true,
+      pending: 0,
+    });
+  });
+});
+
+describe("a migrator, a one-shot job", () => {
+  // Tilt reports a compose container that exited 0 as runtime `ok` and one that exited non-zero as `error`. The
+  // migrator's health check is disabled, so Docker has no health for it: `composeResourceInfo` is `{}`. Shape captured
+  // from flisk-stack on Tilt 0.37.8, with `migrations` exited 0 and api and worker still building.
+  const migrator = (runtimeStatus: string) => ({
+    metadata: { name: "migrations" },
+    status: { updateStatus: "ok", runtimeStatus, composeResourceInfo: {} },
+  });
+  const dependsOn = { api: ["migrations"], worker: ["migrations"], migrations: ["postgres"] };
+
+  it("counts a migrator that exited 0 as done once its dependents are up", async () => {
+    const responses = [
+      json(
+        item("postgres", "ok", "ok"),
+        migrator("ok"),
+        item("api", "in_progress", "pending"),
+        item("worker", "in_progress", "pending"),
+      ),
+      json(
+        item("postgres", "ok", "ok"),
+        migrator("ok"),
+        item("api", "ok", "ok"),
+        item("worker", "ok", "ok"),
+      ),
+    ];
+    const result = await waitForTiltResourcesReady(1, {
+      ...opts,
+      fetchJson: async () => responses.shift() ?? null,
+    });
+    expect(responses).toEqual([]);
+    expect(result).toMatchObject({ ready: true, failures: [], pending: 0, timedOut: false });
+  });
+
+  it("fails on a migrator that exited non-zero, without waiting for the dependents it blocks", async () => {
+    // Tilt never starts api and worker: they wait on the migrator, which will not run again.
+    const stalled = json(
+      item("postgres", "ok", "ok"),
+      migrator("error"),
+      item("api", "pending", "pending"),
+      item("worker", "pending", "pending"),
+    );
+    const started = Date.now();
+    const result = await waitForTiltResourcesReady(1, {
+      timeoutMs: 60_000,
+      intervalMs: 1,
+      deferred: new Set(),
+      fetchJson: async () => stalled,
+      isStalled: (text) => isStartupStalled(text, dependsOn),
+    });
+    expect(result).toMatchObject({ ready: false, timedOut: false });
+    expect(result.failures).toEqual([{ name: "migrations", message: "ok/error" }]);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+});
+
+describe("failureGraceFromEnv", () => {
+  it("uses a finite, non-negative value and falls back to the default otherwise", () => {
+    expect(failureGraceFromEnv("30000")).toBe(30_000);
+    expect(failureGraceFromEnv("0")).toBe(0);
+    for (const bad of [undefined, "", "120000ms", "-5", "Infinity"]) {
+      expect(failureGraceFromEnv(bad)).toBe(120_000);
+    }
+  });
+});
+
+describe("isAdvisoryResource", () => {
+  it("treats the host typecheck resources as advisory", () => {
+    expect(isAdvisoryResource("floor-app-typecheck")).toBe(true);
+    expect(isAdvisoryResource("floor-app")).toBe(false);
+  });
+});
+
+describe("checkExpectedResources", () => {
+  it("reports no problems when all expected resources are present and enabled", () => {
+    const payload = json(
+      item("api", "ok", "ok"),
+      item("web", "ok", "ok"),
+      item("database", "ok", "ok"),
+    );
+    const expected = ["api", "web", "database"];
+    const result = checkExpectedResources(payload, expected);
+
+    expect(result).toEqual({ missing: [], disabled: [] });
+  });
+
+  it("reports no problems when all expected resources are present alongside unexpected ones", () => {
+    const payload = json(
+      item("api", "ok", "ok"),
+      item("web", "ok", "ok"),
+      item("internal-worker", "ok", "ok"),
+    );
+    const expected = ["api", "web"];
+    const result = checkExpectedResources(payload, expected);
+
+    expect(result.missing).toEqual([]);
+    expect(result.disabled).toEqual([]);
+  });
+
+  it("explicitly identifies a single missing expected resource", () => {
+    const payload = json(item("api", "ok", "ok"), item("database", "ok", "ok"));
+    const expected = ["api", "web", "database"];
+    const result = checkExpectedResources(payload, expected);
+
+    expect(result.missing).toEqual(["web"]);
+    expect(result.disabled).toEqual([]);
+  });
+
+  it("explicitly identifies multiple missing resources in expected order without duplicates", () => {
+    const payload = json(item("postgres", "ok", "ok"), item("redis", "ok", "ok"));
+    const expected = ["auth-api", "postgres", "billing-api", "frontend", "redis"];
+    const result = checkExpectedResources(payload, expected);
+
+    expect(result.missing).toEqual(["auth-api", "billing-api", "frontend"]);
+    expect(result.disabled).toEqual([]);
+    expect(result.missing).not.toContain("postgres");
+    expect(result.missing).not.toContain("redis");
+  });
+
+  it("handles empty expected resources list", () => {
+    const payload = json(item("api", "ok", "ok"));
+    const result = checkExpectedResources(payload, []);
+
+    expect(result).toEqual({ missing: [], disabled: [] });
+  });
+
+  it("reports all expected resources as missing when items list is empty or omitted", () => {
+    const expected = ["api", "worker"];
+
+    const emptyItems = JSON.stringify({ items: [] });
+    expect(checkExpectedResources(emptyItems, expected)).toEqual({
+      missing: ["api", "worker"],
+      disabled: [],
+    });
+
+    const omittedItems = JSON.stringify({});
+    expect(checkExpectedResources(omittedItems, expected)).toEqual({
+      missing: ["api", "worker"],
+      disabled: [],
+    });
+  });
+
+  it("categorizes disabled expected resources separately from missing ones", () => {
+    const payload = JSON.stringify({
+      items: [
+        item("api", "ok", "ok"),
+        {
+          metadata: { name: "catalog-service" },
+          status: {
+            updateStatus: "none",
+            runtimeStatus: "none",
+            disableStatus: { state: "Disabled" },
+          },
+        },
+      ],
+    });
+    const expected = ["api", "catalog-service", "missing-service"];
+    const result = checkExpectedResources(payload, expected);
+
+    expect(result.missing).toEqual(["missing-service"]);
+    expect(result.disabled).toEqual(["catalog-service"]);
+  });
+
+  it("does not mutate the expected resources array", () => {
+    const payload = json(item("api", "ok", "ok"));
+    const expected = ["api", "worker"];
+    const originalExpected = [...expected];
+
+    checkExpectedResources(payload, expected);
+
+    expect(expected).toEqual(originalExpected);
+  });
+});
+
+describe("progress-aware timeout in waitForTiltResourcesReady", () => {
+  it("does not time out while builds make progress through log output", async () => {
+    let tick = 0;
+    const nowFn = () => tick;
+    const buildingItem = json(item("api", "in_progress", "pending"));
+    const readyItem = json(item("api", "ok", "ok"));
+
+    const logs = [
+      "Step 1/5: FROM node:20",
+      "Step 2/5: COPY package.json",
+      "Step 3/5: RUN npm install",
+      "Step 4/5: COPY . .",
+      "Step 5/5: RUN npm run build",
+    ];
+
+    let logIndex = 0;
+    const result = await waitForTiltResourcesReady(1, {
+      intervalMs: 1,
+      timeoutMs: 50,
+      deferred: new Set(),
+      now: nowFn,
+      fetchJson: async () => {
+        tick += 20; // 20ms per poll
+        if (logIndex >= logs.length) return readyItem;
+        return buildingItem;
+      },
+      fetchLogs: async (_port, name) => {
+        if (name === "api" && logIndex < logs.length) {
+          return logs[logIndex++] as string;
+        }
+        return null;
+      },
+    });
+
+    // Total time elapsed is 6 * 20 = 120ms, which is > timeoutMs (50ms),
+    // but because logs progressed each poll, it never timed out!
+    expect(result.ready).toBe(true);
+    expect(result.timedOut).toBe(false);
+  });
+
+  it("times out with service name, stillBuilding, and last log lines when progress stops", async () => {
+    let tick = 0;
+    const nowFn = () => tick;
+    const buildingItem = json(item("api", "in_progress", "pending"));
+
+    const result = await waitForTiltResourcesReady(1, {
+      intervalMs: 1,
+      timeoutMs: 30,
+      deferred: new Set(),
+      now: nowFn,
+      fetchJson: async () => {
+        tick += 10;
+        return buildingItem;
+      },
+      fetchLogs: async () =>
+        "Step 1/3: RUN make slow\nCompiling module 1\nCompiling module 2\nStuck here...",
+    });
+
+    expect(result.ready).toBe(false);
+    expect(result.timedOut).toBe(true);
+    expect(result.stillBuilding).toEqual(["api"]);
+    expect(result.lastLogs?.api).toContain("Stuck here...");
+  });
+
+  it("times out a service that never becomes ready, capturing its last log lines", async () => {
+    let tick = 0;
+    const nowFn = () => tick;
+    // Built ok, but container never becomes ready (starting / none runtime)
+    const startingItem = json(item("postgres", "ok", "pending"));
+
+    const result = await waitForTiltResourcesReady(1, {
+      intervalMs: 1,
+      timeoutMs: 30,
+      deferred: new Set(),
+      now: nowFn,
+      fetchJson: async () => {
+        tick += 10;
+        return startingItem;
+      },
+      fetchLogs: async () => "PostgreSQL init...\nWaiting for connection on 5432...",
+    });
+
+    expect(result.ready).toBe(false);
+    expect(result.timedOut).toBe(true);
+    expect(result.lastLogs?.postgres).toBe("PostgreSQL init...\nWaiting for connection on 5432...");
+  });
+});

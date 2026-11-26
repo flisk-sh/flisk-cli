@@ -1,0 +1,128 @@
+# Flisk for AI agents
+
+[← Back to the README](../../README.md#pick-your-agent)
+
+One command gives your coding agent the Flisk runtime: the `flisk mcp` server and the Flisk skills. With them, Claude Code, Cursor, Codex or Gemini CLI can scaffold services, start the whole local stack, check it, read its logs and fix what fails, through Flisk, instead of writing Dockerfiles and Compose files by hand.
+
+## The one command
+
+Run it in your project folder (any folder works; a Flisk project is not required yet):
+
+| Agent | Command | MCP entry it writes | Skills it writes |
+| --- | --- | --- | --- |
+| Claude Code | `flisk connect claude` | `.mcp.json` | `.claude/skills/` |
+| Cursor | `flisk connect cursor` | `.cursor/mcp.json` | `.agents/skills/` |
+| Codex | `flisk connect codex` | `.codex/config.toml` (the new `flisk` entry has no machine path; an existing entry is kept without `--force`, so check the whole file before you commit it) | `.agents/skills/` |
+| Gemini CLI | `flisk connect gemini` | `.gemini/settings.json` | `.agents/skills/` |
+
+- `--dry-run` prints what it would write and writes nothing.
+- It merges: other MCP servers and other settings in those files stay as they are. Running it again changes nothing.
+- An existing, different `flisk` entry or a Flisk skill you edited is reported as `kept` and left alone. `--force` replaces it with the current one.
+- `--global` writes the MCP entry to your user config instead (`~/.cursor/mcp.json`, `~/.codex/config.toml`, `~/.gemini/settings.json`), without skills. For Claude Code, use `claude mcp add --scope user flisk -- flisk mcp`; `flisk connect claude --global` stops with that suggestion.
+- `--json` prints one `{schemaVersion, data, errors}` envelope with every file and its action (`create`, `update`, `unchanged`, `kept`).
+- An unknown host stops with exit code 2 and the list of supported hosts. Any other MCP client can still run `flisk mcp` as a stdio server; the [MCP setup guide](../agent-tooling/flisk-mcp-setup.md) has the format.
+
+The entries are the ones the [MCP setup guide](../agent-tooling/flisk-mcp-setup.md) describes for each client. The skills are the same files `flisk project` writes into a new project.
+
+## What the agent can then do
+
+The `flisk mcp` server gives the agent 25 tools. Each runs the matching Flisk command, so it behaves like the CLI:
+
+- **Check the machine:** `doctor` reports what would stop a stack from starting, with a fix for each problem.
+- **Build:** `project_templates` lists the starters `project_init` can clone, `project_init` creates a project or clones a starter, `resource_create` scaffolds a backend, frontend, worker, MCP server or agent, `tool_add` adds a tool by name (react, postgresql, rag…) and rejects cloud providers, `stack_assign` puts resources in a stack, `config_regenerate` rewrites the generated master files (a dry run unless `dryRun` is `false`).
+- **Run:** `up` starts the stack (or `only` some services and their dependencies), `status` reports readiness and URLs, `wait` blocks until the named services (or all of them) are healthy, `down` stops it, `resource_restart` restarts one service, and `resource_run` runs a one-off command (a seed script, `printenv`) with one service's environment.
+
+### Is it ready? The `state` field
+
+For services that run as local processes (those that declare a `command`), `up` and `resource_restart` say where the start stands in `data.state`, with `data.ready` as its boolean:
+
+| `state` | Meaning | What to do |
+| --- | --- | --- |
+| `ready` | Every service passed its readiness check. | Use the URLs. |
+| `starting` | The wait window ended; the run keeps going. `data.services` shows each service and `data.logs` its latest output. | Poll `status`; do not call `up` again. |
+| `failed` | A service exited or never became ready. `data.failures[].logs` holds its last lines (secrets masked, repeats folded, old runs left out). | Fix the cause (usually `.env` or `service.json`), then call `up` again. |
+| `timeout` | `waitForReady` ran out before every service was ready (an error, code `UP_NOT_READY_IN_TIME`). | Poll `status`, or call again with a longer `waitSeconds`. |
+
+Pass `waitForReady: true` to make `up` wait for readiness itself (default 120 s, up to 600 s through `waitSeconds`). Without it, `up` waits up to 15 s and only watches for an early failure. A Tilt run does not report `state`: use `status`.
+
+`resource_restart` restarts only the service you name. It reloads `.env` first, so a repaired value takes effect, and waits for its readiness check (`waitSeconds`, default 60). Dependents keep running. A change to `service.json` needs `down` and `up`. It fails with `NATIVE_NOT_RUNNING` when nothing is running and, for a service started with `docker run`, asks you to restart the whole run.
+- **Inspect:** `project_info`, `resource_list`, `stack_list` and `network_list` report the project, its services, its stacks and their URLs; `runtime_check` checks that the installed CLI has its bundled engine.
+- **Debug:** `logs` returns recent output (pass `source: "runtime"` to see only what a service printed, which is where a crash cause is, instead of image build steps), `config_verify` and `config_explain` check the generated files, `agent_list` and `agent_sessions` list agent resources and read their sessions. `project_import` adopts an existing Compose project and `project_eject` hands the generated Tilt files over (it needs `confirm: true`).
+
+The skills tell the agent when to use which: `flisk-build` turns "build me a shop" into Flisk steps, `flisk-up`, `flisk-status`, `flisk-doctor` and `flisk-troubleshoot` cover the run-check-fix loop, and the recipes (`flisk-recipe-shop`, `flisk-recipe-saas`, `flisk-recipe-ai-agent`, `flisk-recipe-blog`) start from a working shape.
+
+## A 60-second walkthrough
+
+```bash
+npm install -g @flisk-sh/flisk
+mkdir my-shop && cd my-shop
+flisk connect claude --dry-run   # see the files first
+flisk connect claude
+claude
+```
+
+In Claude Code, approve the project server `flisk` when it asks, and run `/mcp` to see it connected. Then ask:
+
+```text
+Build me a small online shop with a storefront and an orders API.
+Run Flisk doctor first, then start the stack and give me the URLs.
+```
+
+With the skills, the agent's plan is: `doctor`, scaffold the services, `up`, then poll `status` until the stack is ready. A first build pulls images and can take minutes. When a service fails, each `data.tilt.readiness.failures` entry names the `logs` call to make in `next`, and it has `logs` (with `source: "runtime"`) and `config_verify` to find out why, instead of guessing at Docker. For a stack of local processes (services with a `command`), readiness is `data.readiness` (there is no `tilt` block), and a failed `up` result carries each failed service's last output lines in `failures[].logs`, so the cause (a missing variable, a crash) is in the tool result itself. What it builds, and whether every fix lands, still depends on the agent and the model.
+
+For Cursor, run `flisk connect cursor` and open the folder in Cursor. For Codex, run `flisk connect codex` and start `codex` in the folder; Codex loads a project `.codex/config.toml` only for trusted projects. For Gemini CLI, run `flisk connect gemini`, start `gemini` in the folder and check `/mcp list`.
+
+## Prompts to try
+
+No project yet? Run `flisk connect claude` (or `cursor`, `codex`, `gemini`) in an empty folder and paste these in order. Each line names the tools the agent is expected to call.
+
+| You want to | Ask the agent | Tools |
+| --- | --- | --- |
+| Check the machine is ready | "Run Flisk doctor and tell me what's missing." | `doctor` |
+| Get a working stack from nothing | "Clone the Flisk agent-stack starter here, set it up, start it, and show me the URLs once everything is healthy." | `project_init` (`template: "agent-stack"`), then `project_init` again with `projectPath` set to the clone, then `up` and `status` with that `projectPath` |
+| Add services | "Add a backend called `api` and a worker called `jobs`, then start the stack again." | `stack_list`, `resource_create` (`type: "backend"`, then `type: "worker"`, with `stack` when the project has more than one), `up` |
+| Find and fix a failure | "Something in my stack is red. Find which service, read its logs, and fix it." | `status`, `logs`, `config_verify`, `resource_restart` |
+| See what is running | "List this project's services, stacks and URLs." | `resource_list`, `stack_list`, `network_list` |
+| Stop | "Stop the stack." | `down` |
+
+The template clones into a new folder (`flisk-agent-stack` by default) and the server keeps running in the folder you started it in, so every tool after the clone needs that folder as `projectPath`. To skip that, start your agent inside the clone after the first step.
+
+In a Flisk project (a folder with `.flisk/project.json`) that already has several services, the day-to-day use is the same loop without the setup: "start it", "why is `api` failing", "add a Redis". The agent reads the running stack through the tools instead of guessing at Docker. A repository that is not a Flisk project yet needs `project_init` first, or `project_import` when it has a root `docker-compose.yml`. For one-tool requests, see [Ask in outcomes](../agent-tooling/flisk-mcp-setup.md#5-ask-in-outcomes).
+
+## The flisk-skills catalog
+
+`flisk connect` and `flisk project` write the skills that drive the CLI. A larger, separate set lives in [flisk-sh/flisk-skills](https://github.com/flisk-sh/flisk-skills): skills such as `flisk-doctor` (check or repair the machine and project before `flisk up`), `flisk-troubleshoot` (diagnose a failed `flisk up`, Docker or Tilt run), `flisk-service-json`, `flisk-import-compose` and `layer-autoresearch` (a contributor loop for the L1 to L4 Docker layers). Install it into a project with:
+
+```bash
+npx skills add flisk-sh/flisk-skills
+
+# or, without npx: symlink the skills into your tool's skills folder
+curl -fsSL https://raw.githubusercontent.com/flisk-sh/flisk-skills/main/install.sh | sh -s -- --agent codex
+```
+
+The installer takes `--agent claude|codex|opencode|cursor|agents` and `--global` or `--project` (the default). It only creates symlinks to a cached clone, never copies the Markdown, and never uses `sudo`.
+
+| Agent | Where the skills go |
+| --- | --- |
+| Claude Code | `.claude/skills/<name>/SKILL.md` |
+| Codex, and `--agent agents` | `.agents/skills/<name>/SKILL.md` |
+| Cursor | `.cursor/skills/<name>/SKILL.md` |
+| OpenCode | `.opencode/skills/` in a project, `~/.config/opencode/skills/` with `--global` |
+
+For an agent that does not load skills, copy [`rules/AGENTS.landscape.md`](https://github.com/flisk-sh/flisk-skills/blob/main/rules/AGENTS.landscape.md) into your project as `AGENTS.md`. It tells the agent to treat each `service.json` as the source of truth, to run `flisk doctor` before starting a stack, to find URLs with `flisk networks`, and not to edit `.autogenerated/` files by hand. Install the skill catalog once; do not copy it into the project.
+
+## Running multiple agents across Git worktrees
+
+When running multiple coding agents simultaneously on one machine across Git worktrees (`git worktree add`):
+- Today, two worktrees of the same repository inherit the same project name and fixed ports (ingress 80/443, Tilt UI 10350, service ports). Starting `flisk up` in parallel causes container name conflicts and `EADDRINUSE` port collisions.
+- To safely run concurrent agents, assign a unique `project.name` in `.flisk/project.json` and distinct port overrides in `.env` per worktree, or run agent validation tasks sequentially.
+- If a tool result says another Claude session edited the file in the last minutes (the Run My Agents stopped-edit note), re-read the file and merge your change into the new content; do not retry the same edit blindly, and never delete the other session's changes to force your edit through.
+- See the complete [Agent Git Worktree Stack Isolation Guide](../agent-worktree-isolation.md) and [Findings Report](../reports/worktree-isolation-findings.md) for architecture details and recommendations.
+
+## What it is not
+
+- Not a hosted service: `flisk mcp` is a local process your agent starts over stdio. Nothing listens on a port and there is no account.
+- Not a deployment tool: it runs your stack on your machine with Docker and Tilt, and does not write Kubernetes manifests.
+- Not a replacement for Docker or Tilt: you still need them installed to start a stack (`doctor` says what is missing).
+- It does not touch secrets: `flisk connect` writes only the MCP config file and the skill files listed above, and never reads or writes `.env` files.
+- It does not install your agent: install Claude Code, Cursor or Codex first ([Claude Code](claude-code.md), [Cursor](cursor.md), [Codex](codex.md)).

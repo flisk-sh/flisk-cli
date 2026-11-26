@@ -1,0 +1,99 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import { LOCAL_FRONTEND_CORS_REASON, localFrontendOriginConst } from "../utils/generated-cors.js";
+import { portFromEnv } from "../utils/generated-port.js";
+import type { BackendLanguageProvider } from "./types.js";
+
+export function getBackendIndexTemplate(
+  name: string,
+  _durability?: string,
+  options: { port?: number } = {},
+) {
+  return renderBackendIndex(name, false, options);
+}
+
+/** The Bun + Hono backend with a `/health/db` route that runs a query through the Drizzle client. */
+export function getDrizzleBackendIndexTemplate(
+  name: string,
+  _durability?: string,
+  options: { port?: number } = {},
+) {
+  return renderBackendIndex(name, true, options);
+}
+
+function renderBackendIndex(name: string, drizzle: boolean, options: { port?: number }) {
+  const drizzleImports = drizzle
+    ? "import { sql } from 'drizzle-orm';\nimport { db } from './db.js';\n"
+    : "";
+  const drizzleRoute = drizzle
+    ? `// Database check: runs a trivial query through the Drizzle client (src/db.ts).
+app.get('/health/db', async (c) => {
+  try {
+    await db.execute(sql\`select 1\`);
+    return c.json({ status: 'ok', database: 'up' });
+  } catch (error) {
+    console.error('Database health check failed:', error);
+    return c.json({ status: 'error', database: 'down' }, 503);
+  }
+});
+
+`
+    : "";
+  return `import { Hono } from 'hono';
+import { cors } from 'hono/cors';
+${drizzleImports}
+const app = new Hono();
+
+// ${LOCAL_FRONTEND_CORS_REASON}
+${localFrontendOriginConst()}
+app.use('*', cors({ origin: (origin) => (LOCAL_FRONTEND_ORIGIN.test(origin) ? origin : undefined) }));
+
+// Health check: Flisk uses this endpoint to check service health
+app.get('/health', (c) => {
+  return c.json({ status: 'ok', service: '${name}' });
+});
+
+app.get('/health/live', (c) => {
+  return c.json({ status: 'alive', timestamp: Date.now() });
+});
+
+app.get('/health/ready', async (c) => {
+  const dependencies: Record<string, string> = {};
+  let allReady = true;
+
+  // Add dependency checks here (database, cache, etc.)
+  // Mark allReady = false if any dependency is unhealthy
+
+  const status = allReady ? 'ready' : 'not_ready';
+  return c.json({ status, dependencies }, allReady ? 200 : 503);
+});
+
+${drizzleRoute}app.get('/', (c) => {
+  return c.json({
+    service: '${name}',
+    version: '1.0.0',
+    endpoints: ['/health', '/health/live', '/health/ready'${drizzle ? ", '/health/db'" : ""}]
+  });
+});
+
+${portFromEnv("port", "", options.port)}
+console.log('\\n🚀 ${name} running on http://localhost:' + port);
+console.log('📊 Health check: http://localhost:' + port + '/health\\n');
+
+export default {
+  port,
+  fetch: app.fetch,
+};
+`;
+}
+
+/**
+ * The historical default. Package scripts, tsconfig, Dockerfile, and the Bun smoke test stay in
+ * the shared scaffold so omitted-language output is byte-identical to before providers existed.
+ */
+export const bunBackendProvider: BackendLanguageProvider = {
+  id: "bun",
+  label: "Bun + Hono",
+  gitignore: ["dist/", "coverage/", "*.tsbuildinfo"],
+  installHint: "bun install",
+};

@@ -1,0 +1,4 @@
+# OWASP ZAP rule overrides: <rule id>	<IGNORE|WARN|FAIL>	(<comment>)
+# The nightly scan fails on every finding that is not set to IGNORE here, so each line below is a reviewed, accepted finding.
+10109	IGNORE	(Modern Web Application: informational, the demo page is a small JavaScript app on purpose)
+90005	IGNORE	(Sec-Fetch-Dest Header is Missing: asks for a request header from the browser, nothing the server can set)

@@ -1,0 +1,150 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { onTestFinished } from "vitest";
+
+/** A `service.json` body. A string is written as given, which lets a test plant malformed JSON. */
+export type ServiceSpec = Record<string, unknown> | string;
+
+export interface TempProjectSpec {
+  /**
+   * `.flisk/project.json`. An object is serialized, a string is written as given. Defaults to `{}`.
+   * Pass `null` for a directory without a `.flisk` folder.
+   */
+  projectJson?: Record<string, unknown> | string | null;
+  /** `services/<stack>/<app>/service.json`, with `appName` and `stack` filled in. */
+  stacks?: Record<string, Record<string, ServiceSpec>>;
+  /** `services/<relative dir>/service.json`, with `appName` set to the last path segment. */
+  resources?: Record<string, ServiceSpec>;
+  /**
+   * Files under `.flisk/.flisk-out`. A list creates empty files, a record maps file name to content.
+   */
+  generated?: readonly string[] | Record<string, string>;
+  /** Any other files, keyed by path relative to the project root. */
+  files?: Record<string, string>;
+}
+
+/** Minimal valid `.flisk/project.json` for tests that only care about generated-file drift. */
+export function projectJsonFixture(name: string): Record<string, unknown> {
+  return {
+    version: "1.0",
+    project: { name, version: "1.0.0" },
+    phases: Object.fromEntries(
+      ["pre_alpha", "alpha", "beta", "out_of_scope"].map((phase) => [
+        phase,
+        { name: phase, description: "", enabledStacks: [] },
+      ]),
+    ),
+    optional_infra: {
+      monitoring: false,
+      elk: false,
+      debezium: false,
+      golden_image: false,
+      verdaccio: false,
+    },
+    discovery: { paths: ["services/*/*"] },
+  };
+}
+
+function write(file: string, content: string): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content);
+}
+
+function serialize(spec: ServiceSpec, defaults: Record<string, unknown>): string {
+  return typeof spec === "string" ? spec : JSON.stringify({ ...defaults, ...spec });
+}
+
+/** Best-effort removal: Windows can keep a fresh temp dir locked past the test (AV, Search indexer). */
+function removeTempTreeBestEffort(dir: string): void {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 200 });
+  } catch (error) {
+    if (process.platform !== "win32") throw error;
+  }
+}
+
+/**
+ * Creates a temporary flisk project on disk and returns its real path. It is removed when the current test finishes.
+ * Call it from inside a test or a `beforeEach`.
+ */
+export function createTempProject(spec: TempProjectSpec = {}): string {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "flisk-test-project-")));
+  onTestFinished(() => {
+    removeTempTreeBestEffort(root);
+  });
+
+  const { projectJson = {} } = spec;
+  if (projectJson !== null) {
+    write(
+      path.join(root, ".flisk", "project.json"),
+      typeof projectJson === "string" ? projectJson : `${JSON.stringify(projectJson)}\n`,
+    );
+  }
+  for (const [stack, apps] of Object.entries(spec.stacks ?? {})) {
+    for (const [app, service] of Object.entries(apps)) {
+      write(
+        path.join(root, "services", stack, app, "service.json"),
+        serialize(service, { appName: app, stack }),
+      );
+    }
+  }
+  for (const [dir, service] of Object.entries(spec.resources ?? {})) {
+    write(
+      path.join(root, "services", dir, "service.json"),
+      serialize(service, { appName: path.basename(dir) }),
+    );
+  }
+  const generated = spec.generated ?? {};
+  const generatedFiles: Record<string, string> = Array.isArray(generated)
+    ? Object.fromEntries(generated.map((name) => [name, ""]))
+    : (generated as Record<string, string>);
+  for (const [name, content] of Object.entries(generatedFiles)) {
+    write(path.join(root, ".flisk", ".flisk-out", name), content);
+  }
+  for (const [relative, content] of Object.entries(spec.files ?? {})) {
+    write(path.join(root, relative), content);
+  }
+  return root;
+}
+
+/**
+ * A `.flisk/project.json` body that passes validation: the four phases and the optional_infra
+ * flags with every discovery root covered by `discoveryPaths`.
+ */
+export function validProjectJson(options: {
+  name: string;
+  version?: string;
+  discoveryPaths: string[];
+}): Record<string, unknown> {
+  const { name, version = "1.0.0", discoveryPaths } = options;
+  return {
+    version,
+    project: { name, version: "1.0.0" },
+    phases: Object.fromEntries(
+      ["pre_alpha", "alpha", "beta", "out_of_scope"].map((phaseName) => [
+        phaseName,
+        { name: phaseName, description: "", enabledStacks: [] },
+      ]),
+    ),
+    optional_infra: {
+      monitoring: false,
+      elk: false,
+      debezium: false,
+      golden_image: false,
+      verdaccio: false,
+    },
+    discovery: { paths: discoveryPaths },
+  };
+}
+
+/** Creates an empty temporary directory that is removed when the current test finishes. */
+export function createTempDir(prefix = "flisk-test-dir-"): string {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+  onTestFinished(() => {
+    removeTempTreeBestEffort(dir);
+  });
+  return dir;
+}

@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Copyright (c) 2026 Flisk Landscape contributors
+# SPDX-License-Identifier: MIT
+# Bring-your-own apps, one byoVariant per matrix leg (#1297). The variant's arguments come from suite.json; the matrix sets
+# BYO_VARIANT, and this script runs only that variant's case:
+#
+#   BYO_VARIANT=example tests/e2e/resource-types/bring-your-own/run.sh all    the container alone (BY1)
+#   BYO_VARIANT=flisk tests/e2e/resource-types/bring-your-own/run.sh all        through flisk up and Traefik (BY2)
+#   BYO_VARIANT=job tests/e2e/resource-types/bring-your-own/run.sh all        a one-shot job through flisk up (BY3)
+#   BYO_VARIANT=pair tests/e2e/resource-types/bring-your-own/run.sh all       a dependency and an app through flisk up (BY4)
+#   BYO_VARIANT=hpc tests/e2e/resource-types/bring-your-own/run.sh all        GPU, CPU, memory and IPC options (BY7)
+#   BYO_VARIANT=infra tests/e2e/resource-types/bring-your-own/run.sh all      redis, qdrant, minio, mlflow, nats and rabbitmq frameworks (BY8)
+#   BYO_VARIANT=providers tests/e2e/resource-types/bring-your-own/run.sh all  external providers and their tokens (BY9)
+#   BYO_VARIANT=ports tests/e2e/resource-types/bring-your-own/run.sh all      extraPorts publish from .env (BY10)
+#   BYO_VARIANT=mixed tests/e2e/resource-types/bring-your-own/run.sh all      image containers next to a local process (BY11)
+#   tests/e2e/resource-types/bring-your-own/run.sh BY1                         a single case
+#
+# The verify scripts build images, run them and clean up after themselves, so this suite has no resources of its own.
+# Needs: Docker, curl, and (for the flisk, job and pair variants) the flisk CLI, Tilt and Node 22+.
+set -euo pipefail
+
+SUITE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SUITE_DIR/../../../.." && pwd)"
+BYO_VARIANT="${BYO_VARIANT:-example}"
+# shellcheck source=../../lib/lib.sh
+source "$SUITE_DIR/../../lib/lib.sh"
+e2e_init bring-your-own "byo-$BYO_VARIANT"
+# Read by e2e_diagnostics in tests/e2e/lib/lib.sh (container logs to collect).
+# shellcheck disable=SC2034
+RESOURCES=()
+
+# One field of this variant's entry in suite.json: id, case or args.
+variant_field() { node -e 'const s=require(process.argv[1]); const v=s.variants.find(x=>x.id===process.argv[2]); if(!v) process.exit(1); console.log(v[process.argv[3]])' "$SUITE_DIR/suite.json" "$BYO_VARIANT" "$1"; }
+
+# Each case runs its verify script with the variant's arguments (word-split on purpose: they are plain names and paths).
+run_verify() { # <verify script> <case label>
+  local script="$1" label="$2"
+  log "$label with arguments: $(variant_field args)"
+  local cold; cold="$(mktemp)"
+  # shellcheck disable=SC2046
+  BYO_COLD_START_FILE="$cold" bash "$SUITE_DIR/$script" $(variant_field args)
+  [ ! -s "$cold" ] || timing cold_start "$(cat "$cold")" || true
+  rm -f "$cold"
+}
+
+# A folder listed in examples/byo/templates.json comes from its own repository (#1965): sync it at the pinned tag first,
+# and fail if it is tracked here again. Scaffolders run at build time, so give them longer to start.
+sync_if_template() { # <folder>
+  node -e 'process.exit(require(process.argv[1]).templates.some(t=>t.folder===process.argv[2]) ? 0 : 1)' \
+    "$REPO_ROOT/examples/byo/templates.json" "$1" || return 0
+  bash "$REPO_ROOT/scripts/sync-byo-templates.sh" --check
+  bash "$REPO_ROOT/scripts/sync-byo-templates.sh" --folder "$1"
+  export VERIFY_WAIT_SECONDS="${VERIFY_WAIT_SECONDS:-120}"
+}
+BY1() {
+  local args; args="$(variant_field args)"
+  sync_if_template "${args%% *}"
+  run_verify verify-byo-example.sh "BY1 example runs alone and answers its health route with 200"
+}
+BY2() { run_verify verify-byo-flisk.sh "BY2 through flisk up and Traefik, with Flisk's Postgres and DATABASE_URL"; }
+BY3() { run_verify verify-byo-job.sh "BY3 one-shot job exits 0 and its query returns the expected row"; }
+BY4() { run_verify verify-byo-pair.sh "BY4 dependency and app round trip through flisk up and Traefik"; }
+# Both Python cases validate service.json with the ajv CLI. Install it from scripts/ajv-cli when the runner does not have it
+# (the old workflows did this too).
+ensure_ajv() {
+  if ! command -v ajv >/dev/null 2>&1; then
+    npm ci --prefix "$REPO_ROOT/scripts/ajv-cli" --ignore-scripts --no-audit --no-fund
+    PATH="$REPO_ROOT/scripts/ajv-cli/node_modules/.bin:$PATH"
+    export PATH
+  fi
+}
+BY5() {
+  log "BY5 python resource contract and up --dry-run (no Docker or Tilt)"
+  ensure_ajv
+  bash "$SUITE_DIR/verify-byo-python.sh"
+}
+BY6() {
+  log "BY6 python fixture boots through flisk up and answers its health route"
+  ensure_ajv
+  bash "$SUITE_DIR/verify-byo-python-boot.sh"
+}
+BY7() { run_verify verify-byo-hpc.sh "BY7 GPUs, CPU and memory limits and IPC reach the container and the generated Compose file"; }
+BY8() { run_verify verify-byo-infra.sh "BY8 the six infrastructure frameworks reached through the settings they provide"; }
+BY9() { run_verify verify-byo-providers.sh "BY9 an external provider falls back to a local simulator, then uses its rotated token"; }
+
+BY10() { run_verify verify-byo-ports.sh "BY10 extraPorts publish takes its host binding from .env: default, then an override"; }
+BY11() { run_verify verify-byo-mixed.sh "BY11 image containers next to a local process: one flisk up, status, logs, down, a killed run"; }
+BY12() { run_verify verify-byo-no-curl.sh "BY12 bring-your-own image without curl fails --wait with a readable message"; }
+
+# \`all\` runs only this variant's case: every leg of this suite is one variant, not every case in suite.json.
+args=()
+for a in "$@"; do
+  if [ "$a" = all ]; then args+=("$(variant_field case)"); else args+=("$a"); fi
+done
+e2e_main "${args[@]}"

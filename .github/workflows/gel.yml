@@ -1,0 +1,20 @@
+name: GEL
+on:
+  pull_request:
+  # the merge queue only runs workflows that listen for merge_group; GEL is a required check there
+  merge_group:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 5 * * 1" # weekly, so the dashboard record never expires (artifacts last 30 days)
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: gel-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  gel:
+    permissions: { contents: read, checks: read, pull-requests: read }
+    uses: flisk-sh/gel/.github/workflows/gel.yml@bb90f64cd7dae9744d3f5f79b54e30c7f49e68e4 # v1.16.0
+    with: { gel_ref: bb90f64cd7dae9744d3f5f79b54e30c7f49e68e4 }

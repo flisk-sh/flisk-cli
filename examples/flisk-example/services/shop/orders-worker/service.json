@@ -1,0 +1,13 @@
+{
+  "$schema": "https://flisk.sh/schema.service.json",
+  "schemaVersion": 1,
+  "appName": "orders-worker",
+  "appType": "worker",
+  "stack": "shop",
+  "port": 4001,
+  "featuresEnabled": ["nats"],
+  "params": {
+    "NATS_URL": "nats://flisk_example_nats:4222"
+  },
+  "dependsOn": ["orders-api"]
+}

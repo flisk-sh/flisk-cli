@@ -1,0 +1,60 @@
+name: Free host ports from the runner's Postgres
+description: Stop the Postgres preinstalled on the runner (mask it so it cannot restart), then fail unless every listed TCP port is free. Linux runners.
+inputs:
+  ports:
+    description: Space-separated TCP ports to free and check
+    required: false
+    default: "5432"
+runs:
+  using: composite
+  steps:
+    - name: Free host ports
+      shell: bash
+      env:
+        PORTS: ${{ inputs.ports }}
+      run: |
+        busy_ports() {
+          for port in $PORTS; do
+            if sudo ss -ltn 2>/dev/null | grep -q ":$port "; then echo "$port"; fi
+          done
+        }
+
+        # Fast path: if nothing is listening on the requested ports there is
+        # nothing to stop and no reason to touch apt or systemd. On runners
+        # where the preinstalled Postgres is not running this is the whole
+        # step, and it costs well under a second.
+        if [ -z "$(busy_ports)" ]; then
+          echo "ports $PORTS are free (nothing to free, ${SECONDS}s)"
+          exit 0
+        fi
+
+        # Stop the units (socket and service variants) and mask them so a
+        # postmaster cannot be started again later in the same job. Masking
+        # replaces the apt purge: no network, no mirror, no package removal.
+        sudo systemctl stop postgresql.socket 'postgresql@*.socket' postgresql.service 'postgresql@*.service' 2>/dev/null || true
+        sudo systemctl mask postgresql.service postgresql.socket 2>/dev/null || true
+        echo "stopped and masked postgres units (${SECONDS}s)"
+
+        # A postmaster can outlive its unit for a few seconds; retry the free
+        # and kill any stragglers by name before failing.
+        for attempt in 1 2 3 4 5 6; do
+          sudo pkill -KILL -f 'postgres' 2>/dev/null || true
+          for port in $PORTS; do sudo fuser -k "$port/tcp" 2>/dev/null || true; done
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            [ -z "$(busy_ports)" ] && break
+            sleep 0.5
+          done
+          busy="$(busy_ports)"
+          [ -z "$busy" ] && break
+          echo "attempt $attempt: still busy: $busy"
+        done
+
+        busy="$(busy_ports)"
+        if [ -n "$busy" ]; then
+          for port in $busy; do
+            echo "::error::port $port is still in use after stopping postgres"
+            sudo ss -ltnp | grep ":$port " || true
+          done
+          exit 1
+        fi
+        echo "ports $PORTS are free (${SECONDS}s)"

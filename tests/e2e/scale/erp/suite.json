@@ -1,0 +1,19 @@
+{
+  "group": "scale",
+  "suite": "erp",
+  "description": "The 100-service fixture bench (flisk-sh/flisk-erp-system) booted on a clean GitHub-hosted runner (moved from the retired erp-scale-e2e workflow, #1301): flisk project and doctor, flisk up, then every backend answering /health through Traefik, and the report with the time to all backends healthy. The full boot runs nightly and manual (e2e-scale-full.yml): it builds about 107 images. The merge queue gate (e2e-scale.yml) sets SCOPE=smoke and boots 5 services.",
+  "paths": [
+    "cli/**",
+    "runtime/engine/**",
+    "runtime/discovery/**",
+    "Tiltfile",
+    "tests/e2e/lib/**",
+    "tests/e2e/scale/erp/**",
+    ".github/workflows/e2e-scale.yml",
+    ".github/workflows/e2e-scale-full.yml"
+  ],
+  "cases": ["E1", "E2", "E3"],
+  "triggers": ["manual", "nightly"],
+  "timeoutMinutes": 100,
+  "needsSecrets": []
+}
