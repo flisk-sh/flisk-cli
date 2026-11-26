@@ -57,7 +57,7 @@ export function buildPost(version, bullets) {
     slug: SLUG,
     title: withHeadline.length <= TITLE_MAX ? withHeadline : `Flisk CLI ${version} release notes`,
     summary,
-    url: `https://github.com/flisk-sh/flisk/releases/tag/v${version}`,
+    url: `https://github.com/flisk-sh/flisk-cli/releases/tag/v${version}`,
   };
 }
 

@@ -189,7 +189,7 @@ That is why a release is about 40 minutes end to end and why a red candidate cos
 Two repositories carry a release per version, and both are linked from each other's notes:
 
 - [`flisk-sh/releases`](https://github.com/flisk-sh/releases/releases): the binaries, `checksums.txt`, signature and provenance. This is what `install.sh` downloads.
-- [`flisk-sh/flisk` releases](https://github.com/flisk-sh/flisk/releases): the signed checksums only, which is what Scorecard reads. Its notes link back to the binaries on `flisk-sh/releases`.
+- [`flisk-sh/flisk` releases](https://github.com/flisk-sh/flisk-cli/releases): the signed checksums only, which is what Scorecard reads. Its notes link back to the binaries on `flisk-sh/releases`.
 - The MCP Registry listing: `publish-mcp-registry.yml` starts by itself when the release run completes (it waits up to 15 minutes for npm to serve the version), so it shows as its own run. If `curl "https://registry.modelcontextprotocol.io/v0/servers?search=flisk"` lacks the new version, look at that run, or list it by hand: `gh workflow run publish-mcp-registry.yml -f version=<version>`.
 
 ## Verify a release
@@ -211,7 +211,7 @@ Signature and provenance (the two checks OpenSSF Scorecard's Signed-Releases rea
 mkdir -p verify && gh release download "v<version>" --repo flisk-sh/flisk \
   --pattern checksums.txt --pattern checksums.txt.sigstore.json --dir verify
 cosign verify-blob --bundle verify/checksums.txt.sigstore.json \
-  --certificate-identity-regexp 'https://github.com/flisk-sh/flisk/.github/workflows/(release-binaries|sign-release)\.yml@.*' \
+  --certificate-identity-regexp 'https://github.com/flisk-sh/flisk-cli/.github/workflows/(release-binaries|sign-release)\.yml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   verify/checksums.txt                                    # signature: Verified OK
 gh attestation verify verify/checksums.txt --repo flisk-sh/flisk   # provenance: only releases built by release-binaries.yml have it
@@ -234,7 +234,7 @@ What a finished release looks like on both repositories (screenshots are 1.4.34 
 
 ![flisk-sh/releases v1.4.34 release page](assets/releasing/4-binaries-release.png)
 
-[`flisk-sh/flisk` releases](https://github.com/flisk-sh/flisk/releases): not a draft, with `checksums.txt`, `.sigstore.json` and `.intoto.jsonl`. A **Draft** badge here means step 4 has not finished; see [repair](#repair-a-half-finished-release):
+[`flisk-sh/flisk` releases](https://github.com/flisk-sh/flisk-cli/releases): not a draft, with `checksums.txt`, `.sigstore.json` and `.intoto.jsonl`. A **Draft** badge here means step 4 has not finished; see [repair](#repair-a-half-finished-release):
 
 ![flisk-sh/flisk v1.4.34 release page with signed checksums](assets/releasing/5-checksums-release.png)
 
