@@ -53,7 +53,7 @@ test("checksumNotes keeps the cosign verify line byte-for-byte", () => {
 	assert.match(notes, /^Signed checksums for flisk 1\.4\.30\./);
 	assert.match(
 		notes,
-		/cosign verify-blob --bundle checksums\.txt\.sigstore\.json --certificate-identity-regexp 'https:\/\/github\.com\/flisk-sh\/flisk\/\.github\/workflows\/\(release-binaries\|sign-release\)\\\.yml@\.\*' --certificate-oidc-issuer https:\/\/token\.actions\.githubusercontent\.com checksums\.txt$/,
+		/cosign verify-blob --bundle checksums\.txt\.sigstore\.json --certificate-identity-regexp 'https:\/\/github\.com\/flisk-sh\/flisk-cli\/\.github\/workflows\/\(release-binaries\|sign-release\)\\\.yml@\.\*' --certificate-oidc-issuer https:\/\/token\.actions\.githubusercontent\.com checksums\.txt$/,
 	);
 });
 

@@ -201,7 +201,7 @@ function isSignedRelease(tag) {
     return true;
 }
 /** Workflows of this repository that sign checksums.txt (cosign, keyless). */
-const SIGNER_IDENTITY = /^https:\/\/github\.com\/flisk-sh\/flisk\/\.github\/workflows\/(release-binaries|sign-release)\.yml@.*$/;
+const SIGNER_IDENTITY = /^https:\/\/github\.com\/flisk-sh\/flisk-cli\/\.github\/workflows\/(release-binaries|sign-release)\.yml@.*$/;
 const SIGNER_ISSUER = "https://token.actions.githubusercontent.com";
 /** Parses `shasum -a 256` / `sha256sum` output ("<hash>  <name>" or "<hash> *<name>"). */
 /** @internal Exported for unit tests only; not part of the package API. */

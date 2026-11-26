@@ -211,7 +211,7 @@ Signature and provenance (the two checks OpenSSF Scorecard's Signed-Releases rea
 mkdir -p verify && gh release download "v<version>" --repo flisk-sh/flisk \
   --pattern checksums.txt --pattern checksums.txt.sigstore.json --dir verify
 cosign verify-blob --bundle verify/checksums.txt.sigstore.json \
-  --certificate-identity-regexp 'https://github.com/flisk-sh/flisk/.github/workflows/(release-binaries|sign-release)\.yml@.*' \
+  --certificate-identity-regexp 'https://github.com/flisk-sh/flisk-cli/.github/workflows/(release-binaries|sign-release)\.yml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   verify/checksums.txt                                    # signature: Verified OK
 gh attestation verify verify/checksums.txt --repo flisk-sh/flisk   # provenance: only releases built by release-binaries.yml have it

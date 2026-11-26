@@ -1,5 +1,5 @@
 # End-to-end check that template repositories (flisk-sh/flisk-template-<id>, #1965) call by commit SHA:
-#   uses: flisk-sh/flisk/.github/workflows/byo-template-e2e.yml@<sha>
+#   uses: flisk-sh/flisk-cli/.github/workflows/byo-template-e2e.yml@<sha>
 #   with: { flisk-ref: <same sha> }
 # It registers the calling repository's template in a throwaway Flisk project, runs a real `flisk up`, and expects
 # HTTP 200 on the template's healthCheckPath through Traefik (scripts/e2e/verify-byo-template.sh).
