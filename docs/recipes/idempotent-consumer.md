@@ -4,7 +4,7 @@ A broker promises **at-least-once**. After a crash or a rebalance your consumer 
 shows one pattern that makes that harmless, and five tests that force the awkward cases without a staging cluster. It came
 from [discussion #923](https://github.com/orgs/flisk-sh/discussions/923) and Pablo-aps's `PaymentCaptured` test.
 
-Producer side (commit, then publish) is a different problem: see [#1012](https://github.com/flisk-sh/flisk/issues/1012). For a
+Producer side (commit, then publish) is a different problem: see [#1012](https://github.com/flisk-sh/flisk-cli/issues/1012). For a
 webhook receiver over HTTP, see [Local webhooks](../local-webhooks.md).
 
 ## The pattern

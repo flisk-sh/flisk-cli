@@ -7,7 +7,7 @@
     "url": "https://flisk.sh"
   },
   "homepage": "https://flisk.sh",
-  "repository": "https://github.com/flisk-sh/flisk",
+  "repository": "https://github.com/flisk-sh/flisk-cli",
   "license": "MIT",
   "keywords": [
     "flisk",

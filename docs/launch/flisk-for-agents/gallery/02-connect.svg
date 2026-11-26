@@ -21,5 +21,5 @@
 <text x="280" y="456" xml:space="preserve" font-family="'JetBrains Mono','Hack',ui-monospace,Menlo,monospace" font-size="19" font-weight="400" fill="#edf5ff" text-anchor="start">flisk connect codex</text>
 <text x="280" y="488" xml:space="preserve" font-family="'JetBrains Mono','Hack',ui-monospace,Menlo,monospace" font-size="19" font-weight="400" fill="#91a8bf" text-anchor="start"># writes .codex/config.toml and the skills in .agents/skills/</text>
 <text x="64" y="566" xml:space="preserve" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="19" font-weight="400" fill="#91a8bf" text-anchor="start">Install first: npm install -g @flisk-sh/flisk  (or curl -fsSL https://flisk.sh/install.sh | sh)</text>
-<text x="64" y="740" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="16" fill="#91a8bf">github.com/flisk-sh/flisk · MIT · runs on your machine</text>
+<text x="64" y="740" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="16" fill="#91a8bf">github.com/flisk-sh/flisk-cli · MIT · runs on your machine</text>
 </svg>

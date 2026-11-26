@@ -9,7 +9,7 @@ mid-word (`/rs`). The project, management and stack routers now match on a path-
 priority wins (an unset priority is the rule's length), then its stripprefix middleware runs. The evaluator tests
 below need no Tilt; the generator tests evaluate the real Starlark and are skipped without the tilt CLI.
 
-Spec / Issue: https://github.com/flisk-sh/flisk/issues/3197
+Spec / Issue: https://github.com/flisk-sh/flisk-cli/issues/3197
 """
 
 from __future__ import annotations

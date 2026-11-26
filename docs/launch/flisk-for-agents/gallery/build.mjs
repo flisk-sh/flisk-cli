@@ -146,7 +146,7 @@ function frame(title, body) {
 <text x="64" y="76" font-family="${SANS}" font-size="16" font-weight="700" letter-spacing="3" fill="#91a8bf">FLISK FOR AI AGENTS</text>
 <rect x="64" y="90" width="72" height="4" rx="2" fill="url(#glow)"/>
 ${body}
-<text x="64" y="${H - 20}" font-family="${SANS}" font-size="16" fill="#91a8bf">github.com/flisk-sh/flisk · MIT · runs on your machine</text>
+<text x="64" y="${H - 20}" font-family="${SANS}" font-size="16" fill="#91a8bf">github.com/flisk-sh/flisk-cli · MIT · runs on your machine</text>
 </svg>
 `;
 }

@@ -4,7 +4,7 @@
 
 Kod yazmanıza veya cilalı bir hata raporu hazırlamanıza gerek yok. Bu sayfa Flisk'yi nasıl kuracağınızı, bir örneği nasıl çalıştıracağınızı ve kısa bir formla neler olduğunu nasıl bildireceğinizi gösterir. Ham notlar da olabilir: gerçek sayılar içeren yarım bir rapor, hiç rapor olmamasından çok daha yardımcıdır.
 
-[Formu açın](https://github.com/flisk-sh/flisk/issues/new?template=try-it-and-report.yml). Üç kısa zorunlu sorusu vardır (ne denediğiniz, nasıl gittiği ve ne gördüğünüz); geri kalanı isteğe bağlıdır.
+[Formu açın](https://github.com/flisk-sh/flisk-cli/issues/new?template=try-it-and-report.yml). Üç kısa zorunlu sorusu vardır (ne denediğiniz, nasıl gittiği ve ne gördüğünüz); geri kalanı isteğe bağlıdır.
 
 ## 1. Kurulum
 
@@ -20,7 +20,7 @@ flisk --version
 ## 2. Örneği alın
 
 ```bash
-git clone https://github.com/flisk-sh/flisk.git
+git clone https://github.com/flisk-sh/flisk-cli.git
 cd flisk/examples/one-backend-python
 ```
 
@@ -46,7 +46,7 @@ Bir şey başarısız olursa `flisk status` ve `flisk doctor` çalıştırın ve
 
 ## 4. İsteğe bağlı: eksik zamanlamalar
 
-Bu üç sayı, [issue 683](https://github.com/flisk-sh/flisk/issues/683) için beklediğimiz verilerdir. İstediğiniz kadarını yapın ve atladıklarınızı belirtin.
+Bu üç sayı, [issue 683](https://github.com/flisk-sh/flisk-cli/issues/683) için beklediğimiz verilerdir. İstediğiniz kadarını yapın ve atladıklarınızı belirtin.
 
 **İlk başlatma.** 3. adımdaki `time flisk up` sonucu.
 
@@ -84,7 +84,7 @@ Issue'daki Postgres kısmı önemliyse, Postgres başlarken API tarafından kayd
 
 ## 5. Formu doldurun
 
-[Formu](https://github.com/flisk-sh/flisk/issues/new?template=try-it-and-report.yml) açın ve cevapları kendi cümlelerinizle yazın. Faydalı bir raporun neye benzediğine dair iki örnek (sayılar uydurulmuş, sadece açıklama içindir):
+[Formu](https://github.com/flisk-sh/flisk-cli/issues/new?template=try-it-and-report.yml) açın ve cevapları kendi cümlelerinizle yazın. Faydalı bir raporun neye benzediğine dair iki örnek (sayılar uydurulmuş, sadece açıklama içindir):
 
 **İşe yaradı, sayılarla**
 

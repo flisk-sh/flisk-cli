@@ -20,13 +20,13 @@ Hoş geldiniz! Küçük düzeltmeler de büyük özellikler de faydalıdır. Ön
 Git, [Bun](https://bun.sh) ve Node.js 22.12 veya daha yenisi gerekir. Çoğu değişiklikte Docker ve Tilt gerekmez.
 
 ```bash
-git clone https://github.com/flisk-sh/flisk.git
+git clone https://github.com/flisk-sh/flisk-cli.git
 cd flisk
 bun install
 bun run typecheck && bun run lint && bun run test   # yaklaşık bir dakika; bir şeyi değiştirmeden önce hepsi geçmelidir
 ```
 
-Temiz bir checkout'ta bunlardan biri başarısız olursa bu sizin kurulumunuzun değil, projenin bir hatasıdır: lütfen [bir issue açın](https://github.com/flisk-sh/flisk/issues/new/choose). <!-- spellchecker:disable-line -->
+Temiz bir checkout'ta bunlardan biri başarısız olursa bu sizin kurulumunuzun değil, projenin bir hatasıdır: lütfen [bir issue açın](https://github.com/flisk-sh/flisk-cli/issues/new/choose). <!-- spellchecker:disable-line -->
 
 ## Hata bulmak
 
@@ -36,17 +36,17 @@ Kod yazmadan da yardım edebilirsiniz. Bir komut çalıştırın, çıktısını
 
 ## Pull request incelemek
 
-Açık [pull request'leri](https://github.com/flisk-sh/flisk/pulls) inceleyerek kod yazmadan da yardım edebilirsiniz. Her PR'ın sonunda **Grok**, **Claude** ve **Codex** düğmeleri vardır; tıklamak o PR'ı incelemesi istenmiş bir AI sohbeti açar. AI sizin yardımcınızdır: söylediklerini diff ile doğrulayın, sonra GitHub'da **Comment**, **Approve** veya **Request changes** olarak kendi incelemenizi gönderin. <!-- spellchecker:disable-line -->
+Açık [pull request'leri](https://github.com/flisk-sh/flisk-cli/pulls) inceleyerek kod yazmadan da yardım edebilirsiniz. Her PR'ın sonunda **Grok**, **Claude** ve **Codex** düğmeleri vardır; tıklamak o PR'ı incelemesi istenmiş bir AI sohbeti açar. AI sizin yardımcınızdır: söylediklerini diff ile doğrulayın, sonra GitHub'da **Comment**, **Approve** veya **Request changes** olarak kendi incelemenizi gönderin. <!-- spellchecker:disable-line -->
 
 İlk incelemenizden önce [zorunlu okumayı](04-review-a-pr-tr.md#i̇lk-incelemeden-önce-zorunlu-okuma) okuyun (yaklaşık bir saat, yalnızca bir kez). Ardından [pull request inceleme rehberi](04-review-a-pr-tr.md) düğmelerin nasıl kullanıldığını adım adım anlatır ve onay ile değişiklik isteği için yorum örnekleri gösterir.
 
 ## Üzerinde çalışılacak bir iş bulmak
 
 - 🗺️ [Flisk yolculuğu](../../journey/README.md): bir ada seçin, görevleri tamamlayın, rütbenizi yükseltin (8 kyu → 1 dan)
-- [Good first issues](https://github.com/flisk-sh/flisk/labels/good%20first%20issue)
-- [Help wanted](https://github.com/flisk-sh/flisk/labels/help%20wanted)
+- [Good first issues](https://github.com/flisk-sh/flisk-cli/labels/good%20first%20issue)
+- [Help wanted](https://github.com/flisk-sh/flisk-cli/labels/help%20wanted)
 - Adım adım kontrol listesiyle [hata bulun](../finding-bugs.md)
-- [Hata bildirin veya soru sorun](https://github.com/flisk-sh/flisk/issues/new/choose)
+- [Hata bildirin veya soru sorun](https://github.com/flisk-sh/flisk-cli/issues/new/choose)
 
 Bir issue seçtiyseniz `I'll take this` (veya `I would like this one`, `I'd like to work on this`, `Can I take this?`) yazarak yorum bırakın. Bir bot sizi atar ve iki kişinin aynı işi yapmaması için `claimed` etiketini ekler. Pull request olmadan 14 gün geçerse hatırlatma gelir, 21 günde atama kaldırılır. Taslak PR'lar da ilerleme sayılır. Hata bildirirken mümkünse `flisk doctor` çıktısını da ekleyin.
 
@@ -56,7 +56,7 @@ Bir issue seçtiyseniz `I'll take this` (veya `I would like this one`, `I'd like
 
 ## Etiketler
 
-Etiketler ilginize ve deneyiminize uyan işi bulmanızı sağlar. Bakımcılar ayıklarken etiket ekler; issue formları ve PR labeler da bazı etiketleri otomatik ekler. Güncel [etiket listesi](https://github.com/flisk-sh/flisk/labels) her etiketin açıklamasını içerir.
+Etiketler ilginize ve deneyiminize uyan işi bulmanızı sağlar. Bakımcılar ayıklarken etiket ekler; issue formları ve PR labeler da bazı etiketleri otomatik ekler. Güncel [etiket listesi](https://github.com/flisk-sh/flisk-cli/labels) her etiketin açıklamasını içerir.
 
 | Etiket | Anlamı | Ne zaman eklenir |
 | --- | --- | --- |
@@ -90,7 +90,7 @@ Her commit'te [Developer Certificate of Origin](../../project/DCO) imzası gerek
 
 ## Takımınızı benimseyenler listesine ekleyin
 
-Flisk'yi kendi deponuzda mı kullanıyorsunuz? [ADOPTERS.md](../../project/ADOPTERS.md) listesine iki yolla eklenebilirsiniz: [We use Flisk](https://github.com/flisk-sh/flisk/issues/new?template=we-use-flisk.yml) issue formunu açın ya da pull request ile tabloya bir satır ekleyin. [What counts](../../project/ADOPTERS.md#what-counts) neyin bağlanacağını ve neyin sayılmadığını açıklar.
+Flisk'yi kendi deponuzda mı kullanıyorsunuz? [ADOPTERS.md](../../project/ADOPTERS.md) listesine iki yolla eklenebilirsiniz: [We use Flisk](https://github.com/flisk-sh/flisk-cli/issues/new?template=we-use-flisk.yml) issue formunu açın ya da pull request ile tabloya bir satır ekleyin. [What counts](../../project/ADOPTERS.md#what-counts) neyin bağlanacağını ve neyin sayılmadığını açıklar.
 
 ## Yönetişim
 

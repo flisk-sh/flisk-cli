@@ -51,7 +51,7 @@ test("invocations stop at shell separators, comments and a trailing backslash", 
 });
 
 test("invocations need a standalone flisk word and split at each one", () => {
-	assert.deepEqual(invocations("git clone https://github.com/flisk-sh/flisk && open flisk.sh"), []);
+	assert.deepEqual(invocations("git clone https://github.com/flisk-sh/flisk-cli && open flisk.sh"), []);
 	assert.deepEqual(invocations('"command": "flisk", "args": ["mcp"]'), []);
 	assert.deepEqual(invocations("claude mcp add flisk -- flisk mcp"), [["--"], ["mcp"]]);
 	assert.deepEqual(invocations("Run flisk doctor, then flisk up."), [["doctor", "then"], ["up"]]);

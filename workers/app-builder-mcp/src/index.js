@@ -9,7 +9,7 @@ const bytesOf = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
 const json = (body, status = 200, headers = {}) =>
   new Response(JSON.stringify(body, null, 2), { status, headers: { "content-type": "application/json; charset=utf-8", "access-control-allow-origin": "*", ...headers } });
 
-const SOURCE = "https://github.com/flisk-sh/flisk/tree/main/workers/app-builder-mcp";
+const SOURCE = "https://github.com/flisk-sh/flisk-cli/tree/main/workers/app-builder-mcp";
 const PAGE = `<!doctype html>
 <html lang="en">
 <head>
@@ -64,7 +64,7 @@ const CARD = JSON.stringify(
     description: "Say what app you want and get a plan in plain words and the commands to run it locally. No key.",
     version: "1.0.0",
     websiteUrl: "https://build.flisk.si/",
-    repository: { url: "https://github.com/flisk-sh/flisk", source: "github", subfolder: "workers/app-builder-mcp" },
+    repository: { url: "https://github.com/flisk-sh/flisk-cli", source: "github", subfolder: "workers/app-builder-mcp" },
     remotes: [{ type: "streamable-http", url: MCP_URL }],
   },
   null,

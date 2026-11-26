@@ -1,6 +1,6 @@
 # Flisk overnight report
 
-PR: https://github.com/flisk-sh/flisk/pull/4482 (branch `feat/agent-runtime-weakness`). Not merged, not deployed.
+PR: https://github.com/flisk-sh/flisk-cli/pull/4482 (branch `feat/agent-runtime-weakness`). Not merged, not deployed.
 
 ## 1. Summary
 One improvement: `flisk logs --source runtime|build` and the MCP `logs` tool's `source` parameter, plus a `next` hint in `status --json` readiness failures that names the exact `logs` call. An agent can now read why a service crashed without wading through image-build output.

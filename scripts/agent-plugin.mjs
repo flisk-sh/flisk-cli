@@ -40,7 +40,7 @@ export const PLUGIN_DIR = "plugins/flisk";
 export const CLAUDE_PLUGIN_DIR = "plugins/flisk-claude";
 export const SKILLS_SOURCE = "cli/templates/agent-skills";
 const GENERATOR = "scripts/agent-plugin.mjs";
-const DOCS_URL = "https://github.com/flisk-sh/flisk/blob/main/docs/";
+const DOCS_URL = "https://github.com/flisk-sh/flisk-cli/blob/main/docs/";
 
 export const PLUGIN = {
   name: "flisk",
@@ -49,7 +49,7 @@ export const PLUGIN = {
     "Flisk App Builder. Tell your AI what app you want (an online shop, a website, a booking app, an AI helper) and it builds the whole app and runs it on your own computer with one command.",
   author: { name: "Flisk", url: "https://flisk.sh" },
   homepage: "https://flisk.sh",
-  repository: "https://github.com/flisk-sh/flisk",
+  repository: "https://github.com/flisk-sh/flisk-cli",
   license: "MIT",
   keywords: ["flisk", "local-development", "dev-environment", "microservices", "docker", "tilt", "mcp", "agents"],
 };
@@ -91,8 +91,8 @@ const CLAUDE_LISTING = {
   displayName: "Flisk App Builder",
   icon: "./.claude-plugin/icon.png",
   documentationUrl: "https://flisk.sh/docs",
-  supportUrl: "https://github.com/flisk-sh/flisk/issues",
-  privacyPolicyUrl: "https://github.com/flisk-sh/flisk/blob/main/docs/security.md#what-flisk-sends-over-the-network",
+  supportUrl: "https://github.com/flisk-sh/flisk-cli/issues",
+  privacyPolicyUrl: "https://github.com/flisk-sh/flisk-cli/blob/main/docs/security.md#what-flisk-sends-over-the-network",
 };
 
 // The Claude Code MCP config names the runtime, not a POSIX script: Node is already required by the CLI (22.12+).

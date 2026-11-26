@@ -25,7 +25,7 @@ const FINDING = {
 	key: "GHSA-698v-4r3x-3vcv|cli/pnpm-lock.yaml",
 	source: "dependabot",
 	alertNumber: 22,
-	alertUrl: "https://github.com/flisk-sh/flisk/security/dependabot/22",
+	alertUrl: "https://github.com/flisk-sh/flisk-cli/security/dependabot/22",
 	title: "launch-editor: escapeCmdArgs() omits % escaping on Windows",
 	severity: "medium",
 	ghsaId: "GHSA-698v-4r3x-3vcv",

@@ -23,7 +23,7 @@ Docker project with `flisk up` needs Ubuntu on WSL2. The step-by-step setup is i
 
 `flisk up` needs Flisk's shared base images ("golden layers"). They are pulled the first time and
 built locally only when the pull fails, so a first cold start can take 10+ minutes while they
-download or build ([#3201](https://github.com/flisk-sh/flisk/issues/3201)). Later starts reuse them;
+download or build ([#3201](https://github.com/flisk-sh/flisk-cli/issues/3201)). Later starts reuse them;
 measured timings are in [docs/claims.md](claims.md) and the [timing notes](benchmarks/quickstart-timing.md).
 
 ## A Compose import can drop or approximate features
@@ -33,7 +33,7 @@ have no Flisk equivalent or are approximated: a bind path from a variable withou
 `extra_hosts` entries that use a variable, and similar edges. What is kept and what is dropped is
 listed in the [flisk-import README](https://github.com/flisk-sh/flisk-import); printing that summary
 after each import is tracked in
-[#3108](https://github.com/flisk-sh/flisk/issues/3108). Check the plan with
+[#3108](https://github.com/flisk-sh/flisk-cli/issues/3108). Check the plan with
 `flisk import --dry-run` first.
 
 ## Docker and Tilt are still needed for the full path

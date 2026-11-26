@@ -340,7 +340,7 @@ test("the plugin ships every project skill, named after its folder, with no rela
 test("absoluteDocLinks turns docs/ links at any depth into GitHub URLs and leaves others alone", () => {
   assert.equal(
     absoluteDocLinks("[a](../../../docs/byo.md#x) [b](../docs/c.md) [c](https://e.com/docs/d.md)"),
-    "[a](https://github.com/flisk-sh/flisk/blob/main/docs/byo.md#x) [b](https://github.com/flisk-sh/flisk/blob/main/docs/c.md) [c](https://e.com/docs/d.md)",
+    "[a](https://github.com/flisk-sh/flisk-cli/blob/main/docs/byo.md#x) [b](https://github.com/flisk-sh/flisk-cli/blob/main/docs/c.md) [c](https://e.com/docs/d.md)",
   );
 });
 

@@ -38,4 +38,4 @@ You do not need to understand the whole repository. Pick one small change, follo
 
 ## Need a hand?
 
-Ask in the [Flisk Discord](https://discord.gg/qMu5Xn8Kaq), or [open an issue](https://github.com/flisk-sh/flisk/issues/new/choose) with what you tried, what you expected, and what happened. You do not need to solve the problem before asking.
+Ask in the [Flisk Discord](https://discord.gg/qMu5Xn8Kaq), or [open an issue](https://github.com/flisk-sh/flisk-cli/issues/new/choose) with what you tried, what you expected, and what happened. You do not need to solve the problem before asking.

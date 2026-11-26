@@ -117,7 +117,7 @@ export FLISK_LICENSE_KEY=<your-premium-key>
 flisk up
 ```
 
-To get a key, use the [request form on the website](https://flisk.sh/#waitlist) or open a [Premium license request](https://github.com/flisk-sh/flisk/issues/new?template=premium_license.yml).
+To get a key, use the [request form on the website](https://flisk.sh/#waitlist) or open a [Premium license request](https://github.com/flisk-sh/flisk-cli/issues/new?template=premium_license.yml).
 
 ---
 

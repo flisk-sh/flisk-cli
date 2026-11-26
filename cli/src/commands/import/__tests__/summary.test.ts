@@ -18,7 +18,7 @@ import { executeImport, runImport } from "../run.js";
 import { customNetworkNames, formatCoverageBlock, importCoverageSummary } from "../summary.js";
 
 const COVERAGE_LINK =
-  "https://github.com/flisk-sh/flisk/blob/main/docs/project/ADOPTER-COVERAGE.md";
+  "https://github.com/flisk-sh/flisk-cli/blob/main/docs/project/ADOPTER-COVERAGE.md";
 
 // The plan flisk-import prints for the Lychee docker-compose.yaml (trimmed to the services
 // whose notes and skips the summary must pick up).

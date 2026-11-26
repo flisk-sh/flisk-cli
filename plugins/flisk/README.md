@@ -15,7 +15,7 @@ npm install -g @flisk-sh/flisk
 | Claude Code | `/plugin marketplace add flisk-sh/flisk`, then `/plugin install flisk@flisk` |
 | Codex (CLI and app) | `codex plugin marketplace add flisk-sh/flisk`, then install Flisk from `/plugins` |
 | GitHub Copilot CLI | `copilot plugin marketplace add flisk-sh/flisk`, then `copilot plugin install flisk@flisk` |
-| Gemini CLI | `gemini extensions install https://github.com/flisk-sh/flisk` |
+| Gemini CLI | `gemini extensions install https://github.com/flisk-sh/flisk-cli` |
 | Cursor | Install Flisk from the Cursor marketplace once it is listed. Until then, run `flisk connect cursor` in your project |
 
 Just the MCP server, in one click: [Add to Cursor](https://cursor.com/en/install-mcp?name=flisk&config=eyJjb21tYW5kIjoiZmxpc2siLCJhcmdzIjpbIm1jcCJdfQ==) · [Install in VS Code](https://vscode.dev/redirect/mcp/install?name=flisk&config=%7B%22type%22%3A%22stdio%22%2C%22command%22%3A%22flisk%22%2C%22args%22%3A%5B%22mcp%22%5D%7D). Each link opens the editor's own prompt to add `flisk mcp`.

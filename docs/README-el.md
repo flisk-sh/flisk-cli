@@ -1,6 +1,6 @@
 # Flisk: ολόκληρη η εφαρμογή σας εκτελείται στον υπολογιστή σας με μία εντολή
 
-[![Test coverage](https://raw.githubusercontent.com/flisk-sh/flisk/main/docs/assets/coverage.svg)](https://github.com/flisk-sh/flisk/blob/main/docs/assets/coverage.svg)
+[![Test coverage](https://raw.githubusercontent.com/flisk-sh/flisk-cli/main/docs/assets/coverage.svg)](https://github.com/flisk-sh/flisk-cli/blob/main/docs/assets/coverage.svg)
 
 [English](../README.md) | [简体中文](README-zh_cn.md) | [繁體中文](README-zh_tw.md) | [日本語](README-ja.md) | [한국어](README-ko.md) | [Türkçe](README-tr.md) | [Tiếng Việt](README-vi.md) | [ไทย](README-th.md) | [Deutsch](README-de.md) | [Español](README-es.md) | [Français](README-fr.md) | [Українська](README-uk.md) | [Polski](README-pl.md) | [Português (Brasil)](README-pt-BR.md) | [العربية](README-ar.md) | [فارسی](README-fa.md) | [Bahasa Indonesia](README-id.md) | [Italiano](README-it.md) | Ελληνικά | [മലയാളം](README-ml.md) | [Română](README-ro.md)
 
@@ -62,7 +62,7 @@ flisk doctor
 Άλλοι τρόποι εγκατάστασης: [Bun](install/bun.md) | [προμεταγλωττισμένο binary, χωρίς Node.js ή Bun](install/binary.md) | [εικόνα container](install/container.md). Για εγκατάσταση μέσω GitHub Packages αντί του δημόσιου μητρώου npm: [εγκατάσταση από GitHub Packages](github-packages.md). Για ενημέρωση αργότερα χρησιμοποιήστε `flisk upgrade` (ή το alias του `flisk update`)· για να καρφιτσώσετε μία έκδοση δείτε [αναβάθμιση και καρφίτσωμα έκδοσης](upgrading.md).
 
 > [!IMPORTANT]
-> Αποκτήστε το Flisk από το αποθετήριο [flisk-sh/flisk](https://github.com/flisk-sh/flisk), από το πακέτο npm
+> Αποκτήστε το Flisk από το αποθετήριο [flisk-sh/flisk](https://github.com/flisk-sh/flisk-cli), από το πακέτο npm
 > [`@flisk-sh/flisk`](https://www.npmjs.com/package/@flisk-sh/flisk) ή από τον [επίσημο ιστότοπο](https://flisk.sh/).
 > Ακολουθήστε τους συνδέσμους εγκατάστασης αυτών των επίσημων πηγών. Ένα παρόμοιο όνομα αποθετηρίου
 > ή ένα αντιγραμμένο README δεν αποδεικνύει ότι μία λήψη είναι επίσημη.

@@ -17,35 +17,35 @@ import {
 // Modeled on the real merged pull requests between v1.4.29 and v1.4.30 (git log v1.4.29..v1.4.30):
 // 24 squash-merged pulls across feat, fix, test, docs, ci, refactor and chore types.
 const GENERATED_BODY_1_4_30 = `## What's Changed
-* Release 1.4.30 (automatic version bump) (#3023) by @app/flisk-release-bot in https://github.com/flisk-sh/flisk/pull/3023
-* docs(readme): match translated quickstart and show demo result (#3029) by @draarivpatel-ui in https://github.com/flisk-sh/flisk/pull/3029
-* fix(cli): read FLISK_HTTP_PORT, FLISK_HTTPS_PORT and FLISK_POSTGRES_PORT from the project .env (#2971) (#3028) by @draarivpatel-ui in https://github.com/flisk-sh/flisk/pull/3028
-* test(e2e): swarm chaos case S3 retries when the kill misses the claim (#3027) by @octocat in https://github.com/flisk-sh/flisk/pull/3027
-* feat(cli): start the router and the shared Postgres only when a resource uses them (#2963) (#3025) by @draarivpatel-ui in https://github.com/flisk-sh/flisk/pull/3025
-* fix(status): a native project's services answer on localhost, not a Traefik route (#3024) by @draarivpatel-ui in https://github.com/flisk-sh/flisk/pull/3024
-* test(e2e): agent starters through a real flisk up, with kill -9 chaos cases (#3022) by @octocat in https://github.com/flisk-sh/flisk/pull/3022
-* fix(templates): swarm recovers failed tasks; template tests ask the OS for ports (#3018) by @draarivpatel-ui in https://github.com/flisk-sh/flisk/pull/3018
-* feat(templates): security-agent starter, scanner, triage and reporter as local processes (#3016) by @draarivpatel-ui in https://github.com/flisk-sh/flisk/pull/3016
-* feat(templates): swarm starter, a coordinator and three pulling workers as local processes (#3015) by @draarivpatel-ui in https://github.com/flisk-sh/flisk/pull/3015
-* fix(doctor): align NATS project name fallback (#2960) by @octocat in https://github.com/flisk-sh/flisk/pull/2960
-* ci: cancel the runs of merge queue batches that no longer exist (#3014) by @octocat in https://github.com/flisk-sh/flisk/pull/3014
-* feat(project): clone missing service repositories safely (#2910) by @draarivpatel-ui in https://github.com/flisk-sh/flisk/pull/2910
-* test(e2e): cover diffing a PR against its merge commit's parent (#3013) by @octocat in https://github.com/flisk-sh/flisk/pull/3013
-* ci(e2e): diff a PR against its merge commit's parent so unrelated legs stay skipped (#3012) by @octocat in https://github.com/flisk-sh/flisk/pull/3012
-* feat(engine): pass migrator outputs to dependent services (#2919) by @draarivpatel-ui in https://github.com/flisk-sh/flisk/pull/2919
-* refactor(cli): centralize Compose project naming (#2961) by @octocat in https://github.com/flisk-sh/flisk/pull/2961
-* chore(scores): raise the install-weight baseline to the current main size (#3011) by @octocat in https://github.com/flisk-sh/flisk/pull/3011
-* fix(engine): a databaseName discovery computed is not a request for the shared Postgres (#3010) by @draarivpatel-ui in https://github.com/flisk-sh/flisk/pull/3010
-* feat(cli): add repository-pinned version evaluator (#2951) by @draarivpatel-ui in https://github.com/flisk-sh/flisk/pull/2951
-* fix(discovery): resolve no-op cache persistence callback (#2958) by @octocat in https://github.com/flisk-sh/flisk/pull/2958
-* test(chaos): validate generated Compose and Dockerfiles without a Docker daemon (#2954) by @octocat in https://github.com/flisk-sh/flisk/pull/2954
-* docs(docker): explain L1-L4 golden image build failures (#2953) by @octocat in https://github.com/flisk-sh/flisk/pull/2953
-* feat(doctor): identify busy port owners and configuration (#2952) by @draarivpatel-ui in https://github.com/flisk-sh/flisk/pull/2952
+* Release 1.4.30 (automatic version bump) (#3023) by @app/flisk-release-bot in https://github.com/flisk-sh/flisk-cli/pull/3023
+* docs(readme): match translated quickstart and show demo result (#3029) by @draarivpatel-ui in https://github.com/flisk-sh/flisk-cli/pull/3029
+* fix(cli): read FLISK_HTTP_PORT, FLISK_HTTPS_PORT and FLISK_POSTGRES_PORT from the project .env (#2971) (#3028) by @draarivpatel-ui in https://github.com/flisk-sh/flisk-cli/pull/3028
+* test(e2e): swarm chaos case S3 retries when the kill misses the claim (#3027) by @octocat in https://github.com/flisk-sh/flisk-cli/pull/3027
+* feat(cli): start the router and the shared Postgres only when a resource uses them (#2963) (#3025) by @draarivpatel-ui in https://github.com/flisk-sh/flisk-cli/pull/3025
+* fix(status): a native project's services answer on localhost, not a Traefik route (#3024) by @draarivpatel-ui in https://github.com/flisk-sh/flisk-cli/pull/3024
+* test(e2e): agent starters through a real flisk up, with kill -9 chaos cases (#3022) by @octocat in https://github.com/flisk-sh/flisk-cli/pull/3022
+* fix(templates): swarm recovers failed tasks; template tests ask the OS for ports (#3018) by @draarivpatel-ui in https://github.com/flisk-sh/flisk-cli/pull/3018
+* feat(templates): security-agent starter, scanner, triage and reporter as local processes (#3016) by @draarivpatel-ui in https://github.com/flisk-sh/flisk-cli/pull/3016
+* feat(templates): swarm starter, a coordinator and three pulling workers as local processes (#3015) by @draarivpatel-ui in https://github.com/flisk-sh/flisk-cli/pull/3015
+* fix(doctor): align NATS project name fallback (#2960) by @octocat in https://github.com/flisk-sh/flisk-cli/pull/2960
+* ci: cancel the runs of merge queue batches that no longer exist (#3014) by @octocat in https://github.com/flisk-sh/flisk-cli/pull/3014
+* feat(project): clone missing service repositories safely (#2910) by @draarivpatel-ui in https://github.com/flisk-sh/flisk-cli/pull/2910
+* test(e2e): cover diffing a PR against its merge commit's parent (#3013) by @octocat in https://github.com/flisk-sh/flisk-cli/pull/3013
+* ci(e2e): diff a PR against its merge commit's parent so unrelated legs stay skipped (#3012) by @octocat in https://github.com/flisk-sh/flisk-cli/pull/3012
+* feat(engine): pass migrator outputs to dependent services (#2919) by @draarivpatel-ui in https://github.com/flisk-sh/flisk-cli/pull/2919
+* refactor(cli): centralize Compose project naming (#2961) by @octocat in https://github.com/flisk-sh/flisk-cli/pull/2961
+* chore(scores): raise the install-weight baseline to the current main size (#3011) by @octocat in https://github.com/flisk-sh/flisk-cli/pull/3011
+* fix(engine): a databaseName discovery computed is not a request for the shared Postgres (#3010) by @draarivpatel-ui in https://github.com/flisk-sh/flisk-cli/pull/3010
+* feat(cli): add repository-pinned version evaluator (#2951) by @draarivpatel-ui in https://github.com/flisk-sh/flisk-cli/pull/2951
+* fix(discovery): resolve no-op cache persistence callback (#2958) by @octocat in https://github.com/flisk-sh/flisk-cli/pull/2958
+* test(chaos): validate generated Compose and Dockerfiles without a Docker daemon (#2954) by @octocat in https://github.com/flisk-sh/flisk-cli/pull/2954
+* docs(docker): explain L1-L4 golden image build failures (#2953) by @octocat in https://github.com/flisk-sh/flisk-cli/pull/2953
+* feat(doctor): identify busy port owners and configuration (#2952) by @draarivpatel-ui in https://github.com/flisk-sh/flisk-cli/pull/2952
 
 ## New Contributors
-* @octocat made their first contribution in https://github.com/flisk-sh/flisk/pull/2952
+* @octocat made their first contribution in https://github.com/flisk-sh/flisk-cli/pull/2952
 
-**Full Changelog**: https://github.com/flisk-sh/flisk/compare/v1.4.29...v1.4.30
+**Full Changelog**: https://github.com/flisk-sh/flisk-cli/compare/v1.4.29...v1.4.30
 `;
 
 test("checksumNotes keeps the cosign verify line byte-for-byte", () => {
@@ -73,7 +73,7 @@ test("parsePulls reads title, author and link from What's Changed only", () => {
 	assert.deepEqual(pulls[1], {
 		title: "docs(readme): match translated quickstart and show demo result (#3029)",
 		login: "draarivpatel-ui",
-		url: "https://github.com/flisk-sh/flisk/pull/3029",
+		url: "https://github.com/flisk-sh/flisk-cli/pull/3029",
 	});
 	// New Contributors entries are not pull titles.
 	assert.ok(!pulls.some((p) => p.title.includes("made their first contribution")));
@@ -139,7 +139,7 @@ test("releaseBody puts the cosign line first and the grouped pulls under it", ()
 	);
 	assert.ok(
 		body.trimEnd().endsWith(
-			"**Full Changelog**: https://github.com/flisk-sh/flisk/compare/v1.4.29...v1.4.30",
+			"**Full Changelog**: https://github.com/flisk-sh/flisk-cli/compare/v1.4.29...v1.4.30",
 		),
 	);
 	// No notes for the range: just the checksum paragraph, no empty heading.

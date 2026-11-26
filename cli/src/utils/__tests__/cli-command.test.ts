@@ -29,7 +29,7 @@ describe("cli-command", () => {
   it("names the command and the package that installs it", () => {
     expect(CLI_COMMAND).toBe("flisk");
     expect(CLI_PACKAGE).toBe("@flisk-sh/flisk");
-    expect(CLI_REPOSITORY).toBe("https://github.com/flisk-sh/flisk");
+    expect(CLI_REPOSITORY).toBe("https://github.com/flisk-sh/flisk-cli");
     expect(LEGACY_PACKAGE).toBe("@tdk-landscape/tdk-cli-core");
   });
 
@@ -50,7 +50,7 @@ describe("cli-command", () => {
     expect(step).toContain("not on PATH");
     expect(step).toContain("npm install -g @flisk-sh/flisk");
     expect(step).toContain("npm uninstall -g @tdk-landscape/tdk-cli-core");
-    expect(step).toContain("https://github.com/flisk-sh/flisk");
+    expect(step).toContain("https://github.com/flisk-sh/flisk-cli");
     expect(step).toContain("flisk project --yes");
     expect(step).not.toBe("Next: flisk project --yes");
   });

@@ -83,7 +83,7 @@ PANELS.forEach((p, i) => {
 	});
 	out.push(`<line x1="${x0 + 16}" x2="${x0 + panelW - 16}" y1="${baseY}" y2="${baseY}" stroke="${C.grid}" stroke-width="2"/>`);
 });
-out.push(`<text x="60" y="${H - 40}" fill="${C.muted}" font-size="17">Raw runs, transcripts and the harness: github.com/flisk-sh/flisk · docs/benchmarks/results</text>`);
+out.push(`<text x="60" y="${H - 40}" fill="${C.muted}" font-size="17">Raw runs, transcripts and the harness: github.com/flisk-sh/flisk-cli · docs/benchmarks/results</text>`);
 out.push("</svg>");
 writeFileSync(join(dir, "chart.svg"), out.join("\n"));
 const r = spawnSync("rsvg-convert", ["-w", String(W), "-h", String(H), "-o", join(dir, "chart.png"), join(dir, "chart.svg")]);

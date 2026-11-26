@@ -112,7 +112,7 @@ describe("check-adopters", () => {
 	});
 
 	it("rejects a link into the benchmark results", async () => {
-		const { errors } = await check(doc(row("Acme", "https://github.com/flisk-sh/flisk/tree/main/docs/benchmarks/results", "1.4.0")));
+		const { errors } = await check(doc(row("Acme", "https://github.com/flisk-sh/flisk-cli/tree/main/docs/benchmarks/results", "1.4.0")));
 		assert.equal(errors.length, 1);
 		assert.match(errors[0], /benchmarks\/results/);
 	});

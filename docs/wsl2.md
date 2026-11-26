@@ -165,7 +165,7 @@ All should succeed without errors. If not, see [Troubleshooting](#troubleshootin
 
 Flisk runs automated WSL2 smoke tests on GitHub-hosted `windows-2022` runners with Ubuntu 24.04 WSL2 and Docker Engine inside the distro. The workflow runs on every push to `main` and is a required check.
 
-- Workflow: [🐧 Platforms WSL2 E2E](https://github.com/flisk-sh/flisk/actions/workflows/e2e-platforms-wsl2.yml)
+- Workflow: [🐧 Platforms WSL2 E2E](https://github.com/flisk-sh/flisk-cli/actions/workflows/e2e-platforms-wsl2.yml)
 - **Note**: CI uses **Docker Engine inside WSL2**, not Docker Desktop WSL integration. The guide above describes Docker Desktop integration; the two paths are functionally similar but not identical.
 
 ## See also
@@ -173,4 +173,4 @@ Flisk runs automated WSL2 smoke tests on GitHub-hosted `windows-2022` runners wi
 - [Windows hardware checks](windows-hardware.md): Evidence from real Windows machines
 - [Troubleshooting](troubleshooting.md): General troubleshooting guide
 - [Requirements and support](../README.md#requirements-and-support): Platform support matrix
-- [Issue #107](https://github.com/flisk-sh/flisk/issues/107): Windows/WSL2 quickstart test tracking
+- [Issue #107](https://github.com/flisk-sh/flisk-cli/issues/107): Windows/WSL2 quickstart test tracking
