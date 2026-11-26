@@ -31,7 +31,7 @@
 
 要新增一个读取运行中 agent 的 MCP 工具？它属于 `agent` 套件（MCP 资源则属于 `mcp` 套件）。参照用例 C1 到 C3 的结构。
 
-目前只有 `resource-types/agent` 完成了迁移。其他 e2e 测试仍位于 `.github/workflows/*-e2e.yml`、`scripts/e2e/`、`scripts/verify-*.sh` 和 `tests/e2e/*.test.sh`。它们按 [`openspec/changes/organize-e2e-suites`](../../../openspec/changes/organize-e2e-suites/tasks.md) 中的说明，每个 pull request 迁移一个套件。如果你的改动涉及其中某个位置，就在它当前的位置扩展，或者先完成迁移。
+目前只有 `resource-types/agent` 完成了迁移。其他 e2e 测试仍位于 `.github/workflows-disabled/*-e2e.yml`、`scripts/e2e/`、`scripts/verify-*.sh` 和 `tests/e2e/*.test.sh`。它们按 [`openspec/changes/organize-e2e-suites`](../../../openspec/changes/organize-e2e-suites/tasks.md) 中的说明，每个 pull request 迁移一个套件。如果你的改动涉及其中某个位置，就在它当前的位置扩展，或者先完成迁移。
 
 ---
 

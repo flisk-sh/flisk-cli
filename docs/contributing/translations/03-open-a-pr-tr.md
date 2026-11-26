@@ -78,4 +78,4 @@ GitHub ayrıca PR açıklamanızın sonuna **Grok**, **Claude** ve **Codex** dü
 - **Framework örneği:** Vue, React veya başka bir provider eklemek `cli/` ve `runtime/engine/` dosyalarını değiştirir; bu yüzden her zaman çalışan CI ve Quickstart E2E birlikte çalışır.
 - **Yalnızca dokümantasyon değişikliği:** Her zaman çalışan CI yine çalışır. Quickstart E2E, PR listelenen yollardan birini de değiştirmedikçe çalışmaz.
 
-Diğer örnek uygulamalar ve 100 servisli fixture-bench kontrolleri her PR'da değil, bir zamanlamaya göre veya manuel istekle çalışır. Bir iş akışının tetikleyici yollarını `.github/workflows/` içindeki dosyanın en üstünde görebilirsiniz.
+Diğer örnek uygulamalar ve 100 servisli fixture-bench kontrolleri her PR'da değil, bir zamanlamaya göre veya manuel istekle çalışır. Bir iş akışının tetikleyici yollarını `.github/workflows-disabled/` içindeki dosyanın en üstünde görebilirsiniz.

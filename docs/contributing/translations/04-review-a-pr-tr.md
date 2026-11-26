@@ -57,7 +57,7 @@ AI düğmeleri bir AI asistanıyla sohbet açar. Bu asistan size aittir: kendi h
 
 ## AI inceleme düğmeleri nasıl çalışır
 
-Biri bir PR'ı açtığında, yeniden açtığında veya düzenlediğinde [AI inceleme düğmeleri iş akışı](../../../.github/workflows/ai-review-buttons.yml) PR açıklamasının sonuna bu bölümü ekler:
+Biri bir PR'ı açtığında, yeniden açtığında veya düzenlediğinde [AI inceleme düğmeleri iş akışı](../../../.github/workflows-disabled/ai-review-buttons.yml) PR açıklamasının sonuna bu bölümü ekler:
 
 > **Review this PR in**
 > \[Grok\] \[Claude\] \[Codex\]
@@ -94,7 +94,7 @@ Bilmeniz gerekenler:
 
 ### Birleştirme çakışması düğmeleri
 
-Bir PR `main` ile çakışırsa [AI çakışma düğmeleri iş akışı](../../../.github/workflows/ai-conflict-buttons.yml) PR'a Grok, Claude ve Codex için **Resolve conflict** düğmeleri olan tek bir yorum bırakır. Bu düğmeler AI'ye `main`'i dala birleştirmek ve düzeltmeyi göndermek için adım adım talimatlar verir. AI o dala gönderemezse (örneğin sahibi olmadığınız bir fork), talimatlar bunun yerine bir `fix/<PR numarası>-conflict` dalına göndermesini ve bir yedek PR açmasını söyler. Orijinal PR `Fixes #N` içeriyorsa yedek PR da bunu içerir. Sonucu diğer değişiklikler gibi kontrol edin ve orijinal PR'a yedek PR'ın bağlantısını içeren bir yorum bırakın. Çakışma çözüldüğünde aynı yorum bunu belirtecek şekilde değişir ve düğmeler kaybolur.
+Bir PR `main` ile çakışırsa [AI çakışma düğmeleri iş akışı](../../../.github/workflows-disabled/ai-conflict-buttons.yml) PR'a Grok, Claude ve Codex için **Resolve conflict** düğmeleri olan tek bir yorum bırakır. Bu düğmeler AI'ye `main`'i dala birleştirmek ve düzeltmeyi göndermek için adım adım talimatlar verir. AI o dala gönderemezse (örneğin sahibi olmadığınız bir fork), talimatlar bunun yerine bir `fix/<PR numarası>-conflict` dalına göndermesini ve bir yedek PR açmasını söyler. Orijinal PR `Fixes #N` içeriyorsa yedek PR da bunu içerir. Sonucu diğer değişiklikler gibi kontrol edin ve orijinal PR'a yedek PR'ın bağlantısını içeren bir yorum bırakın. Çakışma çözüldüğünde aynı yorum bunu belirtecek şekilde değişir ve düğmeler kaybolur.
 
 ## Neye bakmalısınız
 

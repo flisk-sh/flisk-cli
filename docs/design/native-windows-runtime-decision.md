@@ -109,7 +109,7 @@ If user demand or upstream ecosystem shifts (e.g., Tilt native Starlark executio
 | **G3** | **Filesystem** | Volume mounts must reliably map Windows paths (including paths with spaces) to Linux container targets without file lock contention. | Live reload test verifying bidirectional sync. |
 | **G4** | **Networking** | Wildcard `*.localhost` routing must resolve cleanly to ingress ports without requiring administrator privileges or manual `hosts` editing. | End-to-end HTTP routing verification test. |
 | **G5** | **Ports** | Automatic port fallback must cleanly navigate Hyper-V excluded port ranges and IIS collisions without hanging. | Dynamic port allocation verification test. |
-| **G6** | **CI Gate** | A dedicated Windows live-stack CI workflow on a real or self-hosted Windows 11 AMD64 machine must run `flisk up` and pass all service health checks. | Not implemented by the current workflow; `.github/workflows/e2e-platforms-hardware.yml` currently runs the WH1–WH6 installation, refusal, and path checks. |
+| **G6** | **CI Gate** | A dedicated Windows live-stack CI workflow on a real or self-hosted Windows 11 AMD64 machine must run `flisk up` and pass all service health checks. | Not implemented by the current workflow; `.github/workflows-disabled/e2e-platforms-hardware.yml` currently runs the WH1–WH6 installation, refusal, and path checks. |
 
 ---
 

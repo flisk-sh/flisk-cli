@@ -78,4 +78,4 @@ GitHub 还会在你的 PR 描述末尾添加 **Grok**、**Claude** 和 **Codex**
 - **框架示例：** 添加 Vue、React 或其他 provider 会改动 `cli/` 和 `runtime/engine/`，因此始终运行的 CI 和 Quickstart E2E 都会运行。
 - **仅文档改动：** 始终运行的 CI 仍会运行。除非 PR 同时修改了 Quickstart E2E 所列出的路径之一，否则 Quickstart E2E 不会运行。
 
-其他示例应用以及 100 个服务的夹具基准检查是按计划运行或通过手动请求运行的，并非每个 PR 都会运行。你可以在 `.github/workflows/` 中每个工作流文件的顶部查看其触发路径。
+其他示例应用以及 100 个服务的夹具基准检查是按计划运行或通过手动请求运行的，并非每个 PR 都会运行。你可以在 `.github/workflows-disabled/` 中每个工作流文件的顶部查看其触发路径。

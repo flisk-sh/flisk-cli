@@ -1,22 +1,22 @@
 # Running Flisk in CI (GitHub Actions)
 
-A copy-paste GitHub Actions workflow for **your own repository**, with two jobs: a light one that checks the committed Flisk files, and a heavier one that boots a stack and waits for `/health`. It is adapted from this repository's own workflows ([`e2e-examples.yml`](../.github/workflows/e2e-examples.yml), [`e2e-journeys.yml`](../.github/workflows/e2e-journeys.yml), [`ci.yml`](../.github/workflows/ci.yml)). Scope reminder: CI is a throwaway environment for Flisk, not a deployment path; see [scope](scope.md#local-only-or-also-staging-and-ci).
+A copy-paste GitHub Actions workflow for **your own repository**, with two jobs: a light one that checks the committed Flisk files, and a heavier one that boots a stack and waits for `/health`. It is adapted from this repository's own workflows ([`e2e-examples.yml`](../.github/workflows-disabled/e2e-examples.yml), [`e2e-journeys.yml`](../.github/workflows-disabled/e2e-journeys.yml), [`ci.yml`](../.github/workflows/ci.yml)). Scope reminder: CI is a throwaway environment for Flisk, not a deployment path; see [scope](scope.md#local-only-or-also-staging-and-ci).
 
 ## What was and was not checked
 
 - **Checked by running** (Flisk 1.3.86 from a checkout of `main`, macOS, no `flisk up`): the commands of the first job, `flisk project --yes`, `flisk doctor --no-ping` and `flisk config verify`, in a scratch git repository and in a fresh clone of it. Results are under [what each command does](#what-each-command-does-in-the-first-job).
 - **Checked by running** (CLI 1.3.186 built from the `feature/issue-1735-project-without-docker` branch, macOS, Docker and Tilt removed from `PATH`): `flisk project --yes` in a scratch git repository, and `flisk up` in the project it created. Results are under [what the first job needs from the machine](#what-the-first-job-needs-from-the-machine).
 - **Not run anywhere:** the workflow file itself on GitHub, and the second job. Booting a stack needs Docker networks, which could not be created on the machine this page was written on. The second job reuses the logic of `e2e-journeys.yml`, which runs daily in this repository, but the exact script below was **not executed**. Run it once in a throwaway branch before you rely on it.
-- **Linting:** the YAML parses and every `run:` block passes `bash -n`. `actionlint` was not installed, so it was not run; this repository's `ci.yml` runs it on `.github/workflows/`, not on `docs/`.
+- **Linting:** the YAML parses and every `run:` block passes `bash -n`. `actionlint` was not installed, so it was not run; this repository's `ci.yml` runs it on `.github/workflows-disabled/`, not on `docs/`.
 - **GitLab CI and other systems:** not tried. The commands are plain shell, but nothing here was tested outside GitHub Actions.
 - **Timings:** none are claimed. The timeouts below are quoted from this repository's workflows or marked as a choice.
 
 ## The workflow
 
-Save it as `.github/workflows/flisk-ci.yml`. The same file lives in the repository as [`docs/examples/ci/flisk-ci.yml`](examples/ci/flisk-ci.yml).
+Save it as `.github/workflows-disabled/flisk-ci.yml`. The same file lives in the repository as [`docs/examples/ci/flisk-ci.yml`](examples/ci/flisk-ci.yml).
 
 ```yaml
-# Copy to .github/workflows/flisk-ci.yml in your own repository.
+# Copy to .github/workflows-disabled/flisk-ci.yml in your own repository.
 # Two jobs: `verify` checks the committed Flisk files without starting any
 # container; `boot` runs a real `flisk up` and waits for every service's /health.
 # Adapted from flisk's e2e-examples.yml and e2e-journeys.yml.
@@ -265,7 +265,7 @@ From [machine-readable CLI](reference/machine-readable-cli.md): for `flisk confi
 
 ## What the second job does
 
-Mirrors [`e2e-journeys.yml`](../.github/workflows/e2e-journeys.yml), reduced to one stack:
+Mirrors [`e2e-journeys.yml`](../.github/workflows-disabled/e2e-journeys.yml), reduced to one stack:
 
 1. Install Tilt and free port 5432. The runner's preinstalled Postgres can hold the port. The step exits in under a second when nothing listens on 5432; otherwise it stops and masks the systemd units (no apt purge). This matches `.github/actions/free-postgres-port` since #4087.
 2. Start `flisk up <stack>` in the background, with its output in a log file, and wait for it to print one `/health` URL for every `HEALTH_SERVICES` entry.

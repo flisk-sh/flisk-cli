@@ -2,14 +2,14 @@
 
 Live-stack tests run as a GitHub Actions matrix. Each suite is one leg, and each leg boots its own stack. Legs run in parallel, so a new suite adds a leg without making the others wait. This page explains how the matrix is built, how to add a suite to it, and how to add a new group of suites in the same way. It is the model for every e2e item in the [test-quality initiative](https://github.com/flisk-sh/flisk-cli/issues/1388).
 
-The worked example is the `resource-types` group, which runs from [`e2e-resource-types.yml`](../../.github/workflows/e2e-resource-types.yml). Read [write an e2e test](05-write-e2e.md) first for how a suite's `run.sh` is written.
+The worked example is the `resource-types` group, which runs from [`e2e-resource-types.yml`](../../.github/workflows-disabled/e2e-resource-types.yml). Read [write an e2e test](05-write-e2e.md) first for how a suite's `run.sh` is written.
 
 ## The three pieces
 
 ```text
 tests/e2e/<group>/<suite>/suite.json   one file per suite: what it is, when it runs, its timeout
 tests/e2e/lib/suite-matrix.mjs         reads every suite.json in a group and prints the matrix
-.github/workflows/<group>-e2e.yml      a plan job (runs the builder) and a matrix job (one leg per entry)
+.github/workflows-disabled/<group>-e2e.yml      a plan job (runs the builder) and a matrix job (one leg per entry)
 ```
 
 Nothing in the workflow lists suites by name. Adding a folder with a `suite.json` adds a leg, once its `triggers` include the event.
@@ -96,7 +96,7 @@ No workflow edit is needed when the group workflow already exists.
 Use this when a new family of tests (for example `packaging` or `failure-recovery`) needs its own parallel run.
 
 1. Create `tests/e2e/<group>/` and one folder per suite, as above. Use the group name the table in [write an e2e test](05-write-e2e.md#pick-the-group) gives, or add a row there in the same change.
-2. Copy `.github/workflows/e2e-resource-types.yml` to `.github/workflows/<group>-e2e.yml`. Change the name, the `paths` filter, the `concurrency` group, and the `suite-matrix.mjs` group argument in the `plan` job. Keep the `plan` job, `fail-fast: false`, and the `gate` job.
+2. Copy `.github/workflows-disabled/e2e-resource-types.yml` to `.github/workflows-disabled/<group>-e2e.yml`. Change the name, the `paths` filter, the `concurrency` group, and the `suite-matrix.mjs` group argument in the `plan` job. Keep the `plan` job, `fail-fast: false`, and the `gate` job.
 3. Add a `gate` job that always runs and fails when the plan or any leg failed. This is the one check to make required in branch protection, so a skipped matrix cannot pass unnoticed.
 4. Set `max-parallel` to a number the runner pool can handle (the resource-types group uses 4; the release candidate uses 15, because its 30 short legs at 10 at a time took 3 waves and 10 minutes).
 5. Upload failure evidence from each leg with the same `if: failure()` step that `e2e-resource-types.yml` uses.

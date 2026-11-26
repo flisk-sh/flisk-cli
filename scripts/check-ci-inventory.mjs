@@ -10,7 +10,7 @@
 // request runs need no admin token. --live reads the live ruleset with `gh api` (needs administration read; only the
 // scheduled drift job on main uses it). Branch protection is not used: the ruleset is the single source of required checks.
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";
@@ -84,7 +84,9 @@ export function checkRequiredContexts({ inventory, jobs, contexts, source, exact
 }
 
 // Every problem with the inventory against the jobs and the required check names. Returns messages; an empty list passes.
-export function checkInventory({ inventory, jobs, contexts }) {
+// `disabled` names workflow files parked in .github/workflows-disabled/. Their entries are kept
+// for when they return, so a missing job in one of them is expected, not a stale entry.
+export function checkInventory({ inventory, jobs, contexts, disabled = new Set() }) {
 	const problems = [];
 	const entries = Array.isArray(inventory?.jobs) ? inventory.jobs : [];
 	const jobKey = (workflow, job) => `${workflow}:${job}`;
@@ -134,6 +136,7 @@ export function checkInventory({ inventory, jobs, contexts }) {
 		if (
 			entry.workflow &&
 			entry.job &&
+			!disabled.has(entry.workflow) &&
 			!jobsByKey.has(jobKey(entry.workflow, entry.job))
 		) {
 			problems.push(
@@ -253,7 +256,9 @@ function main(argv) {
 		);
 		return 1;
 	}
-	const problems = checkInventory({ inventory, jobs, contexts });
+	const disabledDir = path.join(args.root, ".github", "workflows-disabled");
+	const disabled = new Set(existsSync(disabledDir) ? readdirSync(disabledDir) : []);
+	const problems = checkInventory({ inventory, jobs, contexts, disabled });
 	for (const problem of problems)
 		console.error(`check-ci-inventory: ${problem}`);
 	if (problems.length > 0) {

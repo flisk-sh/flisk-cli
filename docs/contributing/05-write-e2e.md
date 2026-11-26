@@ -30,7 +30,7 @@ Every live-stack suite lives at `tests/e2e/<group>/<suite>/`, in exactly one gro
 Adding an MCP tool that reads a running agent? It belongs in the `agent` suite (or the `mcp` suite for MCP resources). Copy the shape of cases C1 to C3.
 
 The `resource-types` group has 10 moved suites: `agent`, `backend`, `bring-your-own`, `combined`, `frontend`, `library`, `mcp`, `migrator`, `sdk`, `worker`.
-The other e2e tests still live in `.github/workflows/*-e2e.yml`, `scripts/e2e/`, `scripts/verify-*.sh` and `tests/e2e/*.test.sh`. They move one suite per pull request, as [`openspec/changes/organize-e2e-suites`](../../openspec/changes/organize-e2e-suites/tasks.md) describes. If your change touches one of those, extend it where it is now, or move it first.
+The other e2e tests still live in `.github/workflows-disabled/*-e2e.yml`, `scripts/e2e/`, `scripts/verify-*.sh` and `tests/e2e/*.test.sh`. They move one suite per pull request, as [`openspec/changes/organize-e2e-suites`](../../openspec/changes/organize-e2e-suites/tasks.md) describes. If your change touches one of those, extend it where it is now, or move it first.
 
 ## Anatomy of a suite
 
@@ -94,7 +94,7 @@ Most suites boot a stack. A `platforms` suite checks a host environment instead,
 Two things make it different from the other suites:
 
 - **The case logic is in PowerShell**, not in bash, because a Windows machine need not have Git Bash. `run.sh` is a thin wrapper that calls `windows-hardware.ps1` once per case, so CI and a developer run the same code.
-- **It runs on a self-hosted runner, by hand.** The workflow [`e2e-platforms-hardware.yml`](../../.github/workflows/e2e-platforms-hardware.yml) runs the suite on `windows-latest` as a reference, and on a self-hosted Windows machine when a maintainer dispatches it. A pull request never reaches the self-hosted runner.
+- **It runs on a self-hosted runner, by hand.** The workflow [`e2e-platforms-hardware.yml`](../../.github/workflows-disabled/e2e-platforms-hardware.yml) runs the suite on `windows-latest` as a reference, and on a self-hosted Windows machine when a maintainer dispatches it. A pull request never reaches the self-hosted runner.
 
 The findings report the suite writes (host facts, one row per case, the SHA-256 of the tested exe) is the artifact an issue links to. See [Windows hardware checks](../../docs/windows-hardware.md) for the checklist and the gaps it covers.
 
@@ -149,7 +149,7 @@ Without `CASES`, `make test-e2e` runs every case in order, collects diagnostics 
 
 Today `e2e-resource-types.yml` runs each suite as one matrix leg that calls `run.sh all`: on pull requests that touch the suite's paths, nightly, after each release, and by hand. On a pull request it tests that pull request's own packed CLI. The group workflow reads `suite.json` for triggers and timeout (through `tests/e2e/lib/suite-matrix.mjs`), so adding a resource-type suite does not need YAML.
 
-The `platforms` group is wired by hand instead: `e2e-platforms.yml` calls one step per case of [`platforms/windows`](../../tests/e2e/platforms/windows/), and [`e2e-platforms-hardware.yml`](../../.github/workflows/e2e-platforms-hardware.yml) runs the hardware suite on `windows-latest` and, when a maintainer dispatches it, on a self-hosted Windows machine. A suite that needs a machine of its own also names the workflow in its `paths`, so the validator can check the two against each other.
+The `platforms` group is wired by hand instead: `e2e-platforms.yml` calls one step per case of [`platforms/windows`](../../tests/e2e/platforms/windows/), and [`e2e-platforms-hardware.yml`](../../.github/workflows-disabled/e2e-platforms-hardware.yml) runs the hardware suite on `windows-latest` and, when a maintainer dispatches it, on a self-hosted Windows machine. A suite that needs a machine of its own also names the workflow in its `paths`, so the validator can check the two against each other.
 
 ## Prove it can fail
 

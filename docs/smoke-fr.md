@@ -33,6 +33,6 @@ Les enregistrements sont ignorés par défaut : `flisk up` s'assure que le `.git
 
 Les enregistrements survivent à `flisk down`, donc un échec reste lisible après l'arrêt des conteneurs. Ils restent jusqu'à ce qu'une exécution ultérieure les écrase ou que vous les supprimiez : `rm -rf .flisk/smoke/`. <!-- spellchecker:disable-line -->
 
-En CI, la suite `smoke` de `.github/workflows/e2e-journeys.yml` téléverse les enregistrements de son projet de vérification jetable comme artefact `smoke-records-*` (14 jours), même quand l'exécution échoue. Un artefact de workflow est lisible par quiconque peut lire l'exécution, donc ne pointez pas un workflow vers une étape smoke dont la réponse renvoie un identifiant que le `.env` ne contient pas. <!-- spellchecker:disable-line -->
+En CI, la suite `smoke` de `.github/workflows-disabled/e2e-journeys.yml` téléverse les enregistrements de son projet de vérification jetable comme artefact `smoke-records-*` (14 jours), même quand l'exécution échoue. Un artefact de workflow est lisible par quiconque peut lire l'exécution, donc ne pointez pas un workflow vers une étape smoke dont la réponse renvoie un identifiant que le `.env` ne contient pas. <!-- spellchecker:disable-line -->
 
 Chaque champ, les règles de nouvelle tentative et ce qui n'est pas couvert sont dans [Configuration : `smoke`](configuration.md#smoke-check-the-public-url-after-flisk-up). `tests/e2e/journeys/smoke/verify-smoke.sh` exécute les deux résultats à travers un vrai `flisk up`.

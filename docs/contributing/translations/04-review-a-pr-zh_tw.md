@@ -57,7 +57,7 @@ AI 按鈕會開啟一個與 AI 助手的對話。這個助手屬於你：它在�
 
 ## AI 審查按鈕如何運作
 
-當有人開啟、重新開啟或編輯 PR 時，[AI 審查按鈕工作流程](../../../.github/workflows/ai-review-buttons.yml)會在 PR 描述末尾加入這一段：
+當有人開啟、重新開啟或編輯 PR 時，[AI 審查按鈕工作流程](../../../.github/workflows-disabled/ai-review-buttons.yml)會在 PR 描述末尾加入這一段：
 
 > **Review this PR in**
 > \[Grok\] \[Claude\] \[Codex\]
@@ -94,7 +94,7 @@ Review this pull request. Read the title and diff at https://github.com/flisk-sh
 
 ### 合併衝突按鈕
 
-如果 PR 與 `main` 發生衝突，[AI 衝突按鈕工作流程](../../../.github/workflows/ai-conflict-buttons.yml)會在 PR 上發布一則留言，其中包含 Grok、Claude 和 Codex 的 **Resolve conflict** 按鈕。這些按鈕會給 AI 逐步指示，讓它把 `main` 合併到分支並推送修正。如果 AI 無法推送到該分支（例如你不擁有的 fork），指示會告訴它改為推送到 `fix/<PR 編號>-conflict` 分支，並開啟一個替代 PR。如果原 PR 寫有 `Fixes #N`，替代 PR 也會寫。請像檢查其他改動一樣檢查結果，並在原 PR 上留言，附上替代 PR 的連結。衝突解決後，同一則留言會改為說明已解決，按鈕也會消失。
+如果 PR 與 `main` 發生衝突，[AI 衝突按鈕工作流程](../../../.github/workflows-disabled/ai-conflict-buttons.yml)會在 PR 上發布一則留言，其中包含 Grok、Claude 和 Codex 的 **Resolve conflict** 按鈕。這些按鈕會給 AI 逐步指示，讓它把 `main` 合併到分支並推送修正。如果 AI 無法推送到該分支（例如你不擁有的 fork），指示會告訴它改為推送到 `fix/<PR 編號>-conflict` 分支，並開啟一個替代 PR。如果原 PR 寫有 `Fixes #N`，替代 PR 也會寫。請像檢查其他改動一樣檢查結果，並在原 PR 上留言，附上替代 PR 的連結。衝突解決後，同一則留言會改為說明已解決，按鈕也會消失。
 
 ## 檢查什麼
 

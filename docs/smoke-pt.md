@@ -33,6 +33,6 @@ Os registros são ignorados por padrão: o `flisk up` garante que o `.gitignore`
 
 Os registros sobrevivem ao `flisk down`, então uma falha ainda pode ser lida depois que os contêineres param. Eles ficam até uma execução posterior sobrescrevê-los ou você apagá-los: `rm -rf .flisk/smoke/`. <!-- spellchecker:disable-line -->
 
-Na CI, a suíte `smoke` de `.github/workflows/e2e-journeys.yml` envia os registros do seu projeto de verificação descartável como artefato `smoke-records-*` (14 dias), mesmo quando a execução falha. Um artefato de workflow pode ser lido por qualquer pessoa que consiga ler a execução, então não aponte um workflow para um passo de smoke cuja resposta repita uma credencial que o `.env` não contém. <!-- spellchecker:disable-line -->
+Na CI, a suíte `smoke` de `.github/workflows-disabled/e2e-journeys.yml` envia os registros do seu projeto de verificação descartável como artefato `smoke-records-*` (14 dias), mesmo quando a execução falha. Um artefato de workflow pode ser lido por qualquer pessoa que consiga ler a execução, então não aponte um workflow para um passo de smoke cuja resposta repita uma credencial que o `.env` não contém. <!-- spellchecker:disable-line -->
 
 Todos os campos, as regras de repetição e o que não é coberto estão em [Configuração: `smoke`](configuration.md#smoke-check-the-public-url-after-flisk-up). O `tests/e2e/journeys/smoke/verify-smoke.sh` executa os dois resultados através de um `flisk up` real.
