@@ -331,7 +331,7 @@ class TestVerifyPublishedImages:
 
 
 SIGN = REPO_ROOT / "scripts" / "golden" / "sign-golden-images.sh"
-IDENTITY = "https://github.com/flisk-sh/flisk/.github/workflows/publish-golden-images.yml@.*"
+IDENTITY = "https://github.com/flisk-sh/flisk-cli/.github/workflows/publish-golden-images.yml@.*"
 ISSUER = "https://token.actions.githubusercontent.com"
 
 

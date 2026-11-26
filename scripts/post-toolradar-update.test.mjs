@@ -64,7 +64,7 @@ test("buildPost stays inside Toolradar's limits", () => {
   const post = buildPost("1.4.44", ["x".repeat(200) + ". Rest.", "y".repeat(200) + "."]);
   assert.ok(post.title.length <= 80);
   assert.ok(post.summary.length <= 280);
-  assert.equal(post.url, "https://github.com/flisk-sh/flisk/releases/tag/v1.4.44");
+  assert.equal(post.url, "https://github.com/flisk-sh/flisk-cli/releases/tag/v1.4.44");
   assert.equal(buildPost("1.4.44", ["Short."]), null);
 });
 
