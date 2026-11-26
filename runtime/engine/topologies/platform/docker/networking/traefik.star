@@ -394,8 +394,6 @@ def get_backend_traefik_labels(
         # Calculate priority based on path length (more specific = higher priority)
         router_priority = TRAEFIK_FRONTEND_PRIORITY_BASE + len(api_path)
 
-        # Generate old path pattern for redirect (e.g., /{stack}-management/api/v1/)
-        old_path_pattern = "/{stack}-management/api/v1".format(stack=stack) if stack else ""
         management_path = get_api_path(stack, manifest) if stack else ""
 
         labels += """
@@ -442,18 +440,6 @@ def get_backend_traefik_labels(
                 # with that name wins. Segment-boundary matching (#3197) means two different paths only overlap when one
                 # is an ancestor of the other, so they differ by at least 2 characters and no other ordering changes.
                 mgmt_priority=TRAEFIK_FRONTEND_PRIORITY_BASE + len(management_path) - 1,
-            )
-
-        if old_path_pattern:
-            labels += """
-      # Redirect middleware for URL restructuring: old path -> new path
-      - "traefik.http.middlewares.{router_name}-redirect.redirectregex.regex=^`{old_path_pattern}/(.*)`"
-      - "traefik.http.middlewares.{router_name}-redirect.redirectregex.replacement=`{api_path}/$$1`"
-      - "traefik.http.middlewares.{router_name}-redirect.redirectregex.permanent=true"
-""".format(
-                router_name=router_name,
-                old_path_pattern=old_path_pattern,
-                api_path=api_path,
             )
 
     return labels
