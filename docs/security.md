@@ -38,7 +38,7 @@ Every third-party image that Flisk generates or ships, with the tag in the sourc
 | `traefik` | `v3.7.14` | Ingress (`traefik_standalone.star`) | Version tag; official |
 | `postgres` | `16-alpine` | Database (`infra-loader.star`, `next-postgres` template) | Major line; official |
 | `oven/bun` | `1.3.11-alpine` | Golden Bun runtime layer | Exact version plus digest; official |
-| `oven/bun` | `1.4.4-alpine` | `wake-gateway` image | Exact version plus digest, refreshed by Dependabot (the one Dockerfile it covers); official |
+| `oven/bun` | `1.4.5-alpine` | `wake-gateway` image | Exact version plus digest, refreshed by Dependabot (the one Dockerfile it covers); official |
 | `oven/bun` | `1.4.4-slim` | Release image (`scripts/release/flisk-image.Dockerfile`) | Exact version plus digest; official |
 | `oven/bun` | `1.3` | Scaffolded `Dockerfile` that `flisk up` does not build | Minor line, no digest (the user owns the file); official |
 | `node` | `22-alpine` | Golden Node backend layer | Major line plus digest; official |

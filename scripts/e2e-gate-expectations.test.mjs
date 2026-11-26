@@ -32,10 +32,12 @@ function gateJob(gate) {
 	);
 }
 
+// Skipped: reads disabled workflows (.github/workflows-disabled/). Re-enable with the workflow.
 test.skip("a pull request waits for the light examples gate only", () => {
 	assert.deepEqual(gatesForEvent("pull_request"), ["e2e-examples"]);
 });
 
+// Skipped: reads disabled workflows (.github/workflows-disabled/). Re-enable with the workflow.
 test.skip("a merge queue entry waits for every gate", () => {
 	assert.deepEqual(gatesForEvent("merge_group"), [
 		"e2e-journeys",
@@ -45,21 +47,25 @@ test.skip("a merge queue entry waits for every gate", () => {
 	]);
 });
 
+// Skipped: reads disabled workflows (.github/workflows-disabled/). Re-enable with the workflow.
 test.skip("a push to main waits for the journeys gate only", () => {
 	// The examples and platforms workflows have no push trigger, so their gates never report on main.
 	assert.deepEqual(gatesForEvent("push"), ["e2e-journeys"]);
 });
 
+// Skipped: reads disabled workflows (.github/workflows-disabled/). Re-enable with the workflow.
 test.skip("a manual dispatch of the CI workflow waits for nothing", () => {
 	// Dispatching ci.yml starts no sibling workflow, so no gate reports for that run.
 	assert.deepEqual(gatesForEvent("workflow_dispatch"), []);
 });
 
+// Skipped: reads disabled workflows (.github/workflows-disabled/). Re-enable with the workflow.
 test.skip("an event the CI workflow does not have waits for nothing", () => {
 	assert.deepEqual(gatesForEvent("schedule"), []);
 	assert.deepEqual(gatesForEvent(""), []);
 });
 
+// Skipped: reads disabled workflows (.github/workflows-disabled/). Re-enable with the workflow.
 test.skip("every gate names a workflow and every workflow exists", () => {
 	for (const [gate, meta] of Object.entries(GATES)) {
 		assert.equal(typeof meta.workflow, "string");
@@ -69,11 +75,13 @@ test.skip("every gate names a workflow and every workflow exists", () => {
 	assert.equal(workflowForGate("e2e-nothing"), null);
 });
 
+// Skipped: reads disabled workflows (.github/workflows-disabled/). Re-enable with the workflow.
 test.skip("every gate is waited for by at least one event", () => {
 	const waited = new Set(Object.values(GATES_BY_EVENT).flat());
 	for (const gate of Object.keys(GATES)) assert.ok(waited.has(gate), `${gate} is never waited for`);
 });
 
+// Skipped: reads disabled workflows (.github/workflows-disabled/). Re-enable with the workflow.
 test.skip("a gate is only waited for when its workflow triggers on that event", () => {
 	for (const [event, gates] of Object.entries(GATES_BY_EVENT)) {
 		for (const gate of gates) {
@@ -87,6 +95,7 @@ test.skip("a gate is only waited for when its workflow triggers on that event", 
 	}
 });
 
+// Skipped: reads disabled workflows (.github/workflows-disabled/). Re-enable with the workflow.
 test.skip("the gate workflow has the job that reports the gate name", () => {
 	for (const gate of Object.keys(GATES)) {
 		assert.ok(gateJob(gate), `${workflowForGate(gate)} has no job named ${GATES[gate].job}`);
@@ -102,6 +111,7 @@ test.skip("the push trigger of the journeys workflow matches the CI workflow", (
 	if (ci.on.push) assert.deepEqual(ci.on.push.branches, journeys.on.push.branches);
 });
 
+// Skipped: reads disabled workflows (.github/workflows-disabled/). Re-enable with the workflow.
 test.skip("the CI summary job reads the gate list from the script", () => {
 	// The list must not be written into the workflow a second time, or the two can drift apart.
 	const ci = readFileSync(path.join(WORKFLOWS, "ci.yml"), "utf8");
