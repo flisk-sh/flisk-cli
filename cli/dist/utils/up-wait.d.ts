@@ -1,0 +1,129 @@
+import { type ChildProcess } from "node:child_process";
+import { formatWaitFailures } from "./startup-report-format.js";
+import type { UnhealthyService } from "./status-groups.js";
+import { type UpWaitServiceHealth } from "./up-wait-health.js";
+/** Seconds `flisk up --wait` waits for a healthy stack when `--wait-timeout` is not given. */
+export declare const DEFAULT_WAIT_TIMEOUT_SECONDS = 1800;
+/** Lines of each unhealthy service's log a failed `flisk up --wait` prints, and the most it prints in all. */
+export declare const UNHEALTHY_LINES_PER_SERVICE = 5;
+export declare const UNHEALTHY_LINES_TOTAL = 20;
+/** The last log lines of one service that was not healthy when `flisk up --wait` gave up. */
+export interface UnhealthyLogTail extends UnhealthyService {
+    lines: string[];
+}
+/** The one-line verdict of an unhealthy service: the blocker "is not healthy (why)", a dependent "not started, waiting for". */
+export declare function unhealthyHeadline(tail: Pick<UnhealthyLogTail, "reason" | "didStart" | "status">): string;
+/**
+ * The lines `flisk logs --unhealthy --json` returned, grouped by service: every unhealthy service it named (with
+ * its reason, and whether it ever started, so a dependent waiting on a down dependency is not blamed for the
+ * outage), then any other service that has lines. Each keeps the last `perService` lines, and no more than
+ * `total` lines print over all of them (a service past that keeps its name with no lines, so it is still named).
+ */
+export declare function unhealthyLogTails(lines: Array<{
+    resource: string | null;
+    text: string;
+}>, options?: {
+    unhealthy?: readonly UnhealthyService[];
+    perService?: number;
+    total?: number;
+}): UnhealthyLogTail[];
+/** The human lines for those tails, under the failure message: each service, its lines, and how to see more. */
+export declare function formatUnhealthyLogTails(tails: UnhealthyLogTail[]): string[];
+/** What `flisk logs --unhealthy --json` said: the log lines, and the unhealthy services it named. */
+export interface UnhealthyLogReport {
+    lines: Array<{
+        resource: string | null;
+        text: string;
+    }>;
+    unhealthy: UnhealthyService[];
+}
+/**
+ * Runs `flisk logs --unhealthy --json` the same way `flisk up --wait` runs `flisk up`, so the lookup (Tilt or local
+ * processes, and secret redaction) is the one `flisk logs` does. Resolves to null when it cannot run or says nothing.
+ */
+export declare function fetchUnhealthyReport(invocation: () => string[], cwd?: string, timeoutMs?: number): Promise<UnhealthyLogReport | null>;
+/**
+ * The lines `flisk up --wait` prints for a failed `flisk up --json` result: each failure with its fix and, under it,
+ * its service's log lines, then any other unhealthy service. A result with no service failures (an env file refused,
+ * drift) keeps its error messages first, so the log lines never hide why `flisk up` stopped.
+ */
+export declare function failedWaitMessages(result: {
+    data?: {
+        failures?: Parameters<typeof formatWaitFailures>[0];
+    } | null;
+    errors?: Array<{
+        message?: string;
+    }>;
+}, unhealthy: UnhealthyLogTail[]): string[];
+/**
+ * The `flisk up --json` result with each failure that names an unhealthy service given its log lines as `logs`, and
+ * any other unhealthy service added as a failure of its own.
+ */
+export declare function withUnhealthyLogs(failures: Array<{
+    name: string;
+    [key: string]: unknown;
+}>, tails: UnhealthyLogTail[]): Array<{
+    name: string;
+    [key: string]: unknown;
+}>;
+/**
+ * The `flisk up --json` result line with the wait report added: `data.services` as one entry per service
+ * (`healthy`, `unhealthy` or `exited`, with `reason` when it is not healthy) and `data.unhealthy` naming
+ * the non-healthy ones (#3102). A result with no `data` object is returned unchanged.
+ */
+export declare function withServiceHealthReport(json: string, services: UpWaitServiceHealth[]): string;
+export interface UpWaitDeps {
+    /** Starts `flisk up` detached with its output going to a log file. */
+    spawnUp: (args: string[], logFile: string, cwd?: string) => ChildProcess;
+    readLog: (logFile: string) => string;
+    sleep: (ms: number) => Promise<void>;
+    now: () => number;
+    logFile: () => string;
+}
+export type UpWaitOutcome = {
+    kind: "ready";
+    json: string;
+} | {
+    kind: "failed";
+    json: string;
+} | {
+    kind: "exited";
+    exitCode: number | null;
+    logTail: string;
+} | {
+    kind: "timeout";
+    logTail: string;
+    logFile: string;
+} | {
+    kind: "spawn-error";
+    message: string;
+};
+/** The arguments of the detached child: the caller's own, without the wait options, asking for one JSON result. */
+export declare function detachedUpArgs(argv: string[]): string[];
+/** Parses a wait timeout: a whole number of seconds from 1 to 21600 (6 hours), or the default when omitted. */
+export declare function parseTimeoutSeconds(value: unknown, flag: string): {
+    ok: true;
+    seconds: number;
+} | {
+    ok: false;
+    message: string;
+};
+/** Parses `--wait-timeout` with the same rule every other wait timeout uses. */
+export declare function parseWaitTimeout(value: unknown): {
+    ok: true;
+    seconds: number;
+} | {
+    ok: false;
+    message: string;
+};
+/**
+ * The last LOG_TAIL_CHARS of a log, masked before it is cut: cutting first could keep the end of a secret without its start,
+ * and the shortened value would no longer match.
+ */
+export declare function logTailOf(log: string, cwd?: string): string;
+/**
+ * Starts the stack detached and waits for the JSON result `flisk up --json` prints when the stack is ready or the
+ * command fails. The stack keeps running afterwards, also on a timeout (`flisk down` stops it).
+ */
+export declare function upAndWait(argv: string[], timeoutSeconds: number, deps: UpWaitDeps, cwd?: string): Promise<UpWaitOutcome>;
+export declare const defaultUpWaitDeps: (invocation: () => string[]) => UpWaitDeps;

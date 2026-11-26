@@ -1,0 +1,44 @@
+import { type ArrowChoice } from "./input.js";
+/** Thrown when the person presses Ctrl-C or Escape, so the caller can stop without a stack trace. */
+export declare class PromptCancelled extends Error {
+    constructor();
+}
+/** The streams a prompt needs; process.stdin and process.stdout by default. */
+export interface PromptStreams {
+    input: NodeJS.ReadStream;
+    output: NodeJS.WriteStream;
+}
+interface MenuFrame<T extends string> {
+    message: string;
+    choices: readonly ArrowChoice<T>[];
+    cursor: number;
+    /** Multi-select: the ticked values. Undefined for a single choice. */
+    ticked?: ReadonlySet<T>;
+    /** The text typed to narrow a long menu; undefined when the menu does not filter. */
+    filter?: string;
+    /** The terminal height. A menu taller than this shows a window of its choices that follows the cursor. */
+    terminalRows?: number;
+}
+/** The rows of a menu, plain text for the caller to colour. Pure, so the layout is testable. */
+export declare function renderMenu<T extends string>(frame: MenuFrame<T>): string[];
+/** The line left behind once an answer is given. */
+export declare function renderAnswered(message: string, answer: string): string;
+/** Pick one: arrows to move, Enter to choose. With `filterable`, typing narrows a long list. */
+export declare function arrowSelect<T extends string>(options: {
+    message: string;
+    choices: readonly ArrowChoice<T>[];
+    initial?: T;
+    filterable?: boolean;
+}, streams?: PromptStreams): Promise<T>;
+/** Pick any number: arrows to move, space to tick, Enter to confirm (nothing ticked is fine). */
+export declare function arrowMultiSelect<T extends string>(options: {
+    message: string;
+    choices: readonly ArrowChoice<T>[];
+}, streams?: PromptStreams): Promise<T[]>;
+/** A line of text with a default: press Enter to take it, or type to replace it. */
+export declare function arrowText(options: {
+    message: string;
+    initial: string;
+    validate?: (value: string) => true | string;
+}, streams?: PromptStreams): Promise<string>;
+export {};

@@ -1,0 +1,228 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import { BRING_YOUR_OWN_TYPE, getCheckoutDomain } from "./constants.js";
+import { findProjectRoot } from "./paths.js";
+import { readProjectNameWithFallback } from "./project-reader.js";
+import { isApiServiceType } from "./resource-kind.js";
+import { trimEndChars } from "./trim-chars.js";
+/**
+ * A bring-your-own service with a Traefik route (the default; `exposeViaProxy: false` turns it off). The engine routes it like a
+ * backend, at the API host under /api/<name>, and publishes nothing on the host, so this route is the only address it has.
+ */
+export function isRoutedBringYourOwn(resource) {
+    return (resource.config?.appType === BRING_YOUR_OWN_TYPE && resource.config?.exposeViaProxy !== false);
+}
+/**
+ * A routed bring-your-own service that serves a web UI (`webUi: true`). Its pages and assets live at `/`, which no path prefix can
+ * serve, so the engine routes it on its own host name, `<name>.<project>.localhost` (#2997).
+ */
+export function isWebUiBringYourOwn(resource) {
+    return isRoutedBringYourOwn(resource) && resource.config?.webUi === true;
+}
+/** Routed at the API host: backends, MCP servers, agents and routed bring-your-own services that are not a web UI. */
+export function routesAsApi(resource) {
+    return (isApiServiceType(resource.config?.appType) ||
+        (isRoutedBringYourOwn(resource) && !isWebUiBringYourOwn(resource)));
+}
+/** `/api/vote` → `/api/vote/`: the URL a browser should open for a page served under a stripped prefix. */
+export function withTrailingSlash(path) {
+    return path.endsWith("/") ? path : `${path}/`;
+}
+/**
+ * A service that has a Traefik ingress route: frontends, backends, MCP servers, agents, and proxied bring-your-own services.
+ */
+export function isRoutableService(resource) {
+    return (resource.config?.appType === "frontend" ||
+        routesAsApi(resource) ||
+        isWebUiBringYourOwn(resource));
+}
+/**
+ * The base URL of a web UI service: `http://<name>.<project>.localhost[:port]`. It follows the app host of
+ * `resolveSubdomainBases` (`app.<project>.localhost`) when there is one, and the project name otherwise. Keep in step with
+ * byo_ui_host in runtime/engine/topologies/platform/docker/networking/traefik_helpers.star.
+ */
+export function resolveUiBase(resource, ingressPort, projectRoot) {
+    const { appBase } = resolveSubdomainBases(ingressPort, projectRoot);
+    try {
+        const u = new URL(appBase);
+        if (u.hostname.startsWith("app.")) {
+            u.hostname = `${resource.name}.${u.hostname.slice("app.".length)}`;
+            return u.origin;
+        }
+        const project = getProjectNameFor(projectRoot ?? findProjectRoot());
+        return `${u.protocol}//${resource.name}.${project}.localhost${u.port ? `:${u.port}` : ""}`;
+    }
+    catch {
+        return `http://${resource.name}.${getProjectNameFor(projectRoot ?? findProjectRoot())}.localhost`;
+    }
+}
+/** The base URL a routed service answers on, before its path: the app host, the API host, or a web UI's own host. */
+export function resolveRouteBase(resource, ingressPort, projectRoot) {
+    if (isWebUiBringYourOwn(resource))
+        return resolveUiBase(resource, ingressPort, projectRoot);
+    const { appBase, apiBase } = resolveSubdomainBases(ingressPort, projectRoot);
+    return routesAsApi(resource) ? apiBase : appBase;
+}
+/** The project name of the project containing the current directory. */
+export function getProjectName() {
+    return getProjectNameFor(findProjectRoot());
+}
+/** The project name of a specific project root, for tools that work outside the current directory. */
+export function getProjectNameFor(root) {
+    return readProjectNameWithFallback(root, "flisk-project");
+}
+/**
+ * The domain a local stack answers on: the checkout-specific domain in a
+ * linked worktree (or with `FLISK_CHECKOUT_HOST=always`), and the project
+ * domain otherwise. This keeps main-checkout URLs byte-identical (#4697).
+ */
+function resolveLocalDomain(projectRoot, projectName) {
+    return (projectRoot && getCheckoutDomain(projectRoot)) || `${projectName}.localhost`;
+}
+/** The app and api base URLs (scheme, host, port) from FLISK_SERVICE_BASE_URL, or from the project/checkout and ingress port. */
+export function resolveSubdomainBases(ingressPort, projectRoot) {
+    const root = projectRoot ?? findProjectRoot();
+    const projectName = getProjectNameFor(root);
+    const localDomain = resolveLocalDomain(root, projectName);
+    const raw = process.env.FLISK_SERVICE_BASE_URL ??
+        process.env.FLISK_PUBLIC_HOST ??
+        `http://${localDomain}${ingressPort ? `:${ingressPort}` : ""}`;
+    try {
+        const u = new URL(raw.includes("://") ? raw : `http://${raw}`);
+        const host = u.hostname;
+        // URL drops a default port (80 for http, 443 for https), so u.port is empty
+        // for http://x.localhost:80. Keep it empty instead of re-adding ingressPort.
+        const defaultPort = u.protocol === "https:" ? "443" : "80";
+        const explicitPort = u.port || (ingressPort ? String(ingressPort) : "");
+        const port = explicitPort === defaultPort ? "" : explicitPort;
+        if (host === "localhost" || /^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+            return {
+                appBase: `${u.protocol}//${host}${port ? `:${port}` : ""}`,
+                apiBase: `${u.protocol}//${host}${port ? `:${port}` : ""}`,
+            };
+        }
+        const bare = host.replace(/^(app|api)\./, "");
+        return {
+            appBase: `${u.protocol}//app.${bare}${port ? `:${port}` : ""}`,
+            apiBase: `${u.protocol}//api.${bare}${port ? `:${port}` : ""}`,
+        };
+    }
+    catch {
+        return {
+            appBase: `http://app.${localDomain}`,
+            apiBase: `http://api.${localDomain}`,
+        };
+    }
+}
+/** `/api/x` or `/api/x/` → `/api/x/health`, without doubling the slash. */
+export function appendHealthPath(path) {
+    return `${trimEndChars(path, "/")}/health`;
+}
+/** The route `flisk up` advertises for a service, without the /health suffix. */
+export function resolveServicePath(resource) {
+    // A web UI owns its host name, so its route has no path.
+    if (isWebUiBringYourOwn(resource))
+        return "";
+    if (routesAsApi(resource)) {
+        const servicePathName = resource.name.replace(/-api$/, "");
+        const path = resource.config?.apiPath ?? `/api/${servicePathName}`;
+        return path.startsWith("/") ? path : `/${path}`;
+    }
+    const path = resource.config?.basePath ?? `/${resource.name}`;
+    return path.startsWith("/") ? path : `/${path}`;
+}
+/**
+ * The ingress URL of one service (no /health suffix), or undefined for services with no Traefik route. This is where the service
+ * answers, unlike the Tilt UI port, which serves its own page for any path.
+ */
+export function resolveServiceUrl(resource, ingressPort, baseDomain, projectRoot) {
+    if (!isRoutableService(resource))
+        return undefined;
+    if (baseDomain) {
+        const bareDomain = baseDomain.replace(/^(app|api)\./, "");
+        const portPart = ingressPort ? `:${ingressPort}` : "";
+        if (isWebUiBringYourOwn(resource)) {
+            return `http://${resource.name}.${bareDomain}${portPart}`;
+        }
+        const isBackend = routesAsApi(resource);
+        const host = isBackend ? `api.${bareDomain}` : `app.${bareDomain}`;
+        const resolvedPath = resolveServicePath(resource);
+        const basePath = resolvedPath.startsWith("/") ? resolvedPath : `/${resolvedPath}`;
+        const path = isRoutedBringYourOwn(resource) && !isWebUiBringYourOwn(resource)
+            ? withTrailingSlash(basePath)
+            : basePath;
+        return `http://${host}${portPart}${path}`;
+    }
+    const base = resource.config?.appType === "frontend"
+        ? resolveSubdomainBases(ingressPort, projectRoot ?? findProjectRoot()).appBase
+        : resolveRouteBase(resource, ingressPort, projectRoot ?? findProjectRoot());
+    const path = resolveServicePath(resource);
+    const formattedPath = isRoutedBringYourOwn(resource) && !isWebUiBringYourOwn(resource)
+        ? withTrailingSlash(path)
+        : path;
+    return `${base}${formattedPath}`;
+}
+/**
+ * Health URLs for every routable service, matching what `flisk up` prints.
+ * Workers, libraries, SDKs and migrators have no Traefik route, so they are
+ * skipped rather than reported as unreachable.
+ */
+export function buildHealthTargets(resources, ingressPort) {
+    return routableTargets(resources, ingressPort, (path) => appendHealthPath(path));
+}
+/**
+ * The URL `flisk up` and `flisk networks` advertise for each routable service, with no suffix. A service can answer /health while
+ * this URL is a 404 (nothing handles the bare path), which is the dead link users click.
+ */
+export function buildAdvertisedTargets(resources, ingressPort) {
+    // A routed bring-your-own service is advertised too: its route is the only address it has. It is not a health target, because
+    // its health path is its own (often /), not /health.
+    return routableTargets(resources, ingressPort, (path) => path, true);
+}
+/** Maps each routed service to a target whose URL is its route base plus `toPath(path)`. */
+function routableTargets(resources, ingressPort, toPath, includeBringYourOwn = false) {
+    return resources
+        .filter((resource) => resource.config?.appType === "frontend" ||
+        isApiServiceType(resource.config?.appType) ||
+        (includeBringYourOwn && isRoutedBringYourOwn(resource)))
+        .map((resource) => {
+        const base = resolveRouteBase(resource, ingressPort);
+        const rawPath = resolveServicePath(resource);
+        const path = includeBringYourOwn && isRoutedBringYourOwn(resource) && !isWebUiBringYourOwn(resource)
+            ? withTrailingSlash(rawPath)
+            : rawPath;
+        return {
+            name: resource.name,
+            appType: resource.config.appType,
+            url: `${base}${toPath(path)}`,
+        };
+    });
+}
+/** GET one target and report its status, or why the request never completed. */
+export async function pingHealthTarget(target, timeoutMs) {
+    try {
+        const response = await fetch(target.url, {
+            method: "GET",
+            redirect: "manual",
+            signal: AbortSignal.timeout(timeoutMs),
+        });
+        return { ...target, ok: response.ok, status: response.status };
+    }
+    catch (err) {
+        let error;
+        if (err instanceof Error && err.name === "TimeoutError") {
+            error = `no response within ${timeoutMs}ms`;
+        }
+        else if (err instanceof Error) {
+            error = err.message;
+        }
+        else {
+            error = String(err);
+        }
+        return { ...target, ok: false, error };
+    }
+}
+/** Probe every target in parallel. */
+export async function pingHealthTargets(targets, timeoutMs) {
+    return Promise.all(targets.map((target) => pingHealthTarget(target, timeoutMs)));
+}

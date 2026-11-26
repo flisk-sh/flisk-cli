@@ -56,7 +56,7 @@ In a client's JSON config that is `{ "command": "docker", "args": ["run", "-i", 
 ```bash
 cosign verify ghcr.io/flisk-sh/flisk:1.4.28 \
   --certificate-identity-regexp \
-  'https://github.com/flisk-sh/flisk-cli/.github/workflows/publish-cli-image\.yml@.*' \
+  'https://github.com/flisk-sh/flisk/.github/workflows/publish-cli-image\.yml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
 

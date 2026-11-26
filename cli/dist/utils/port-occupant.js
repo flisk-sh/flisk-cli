@@ -1,0 +1,74 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import { execFileSync } from "node:child_process";
+import { basename } from "node:path";
+const run = (command, args) => execFileSync(command, args, {
+    encoding: "utf-8",
+    stdio: "pipe",
+    timeout: 5000,
+    windowsHide: true,
+});
+/**
+ * The process listening on `port`, or null when it cannot be told (no lsof, Windows, nothing listens, or the process
+ * exited before ps could read it). Callers must treat null as "unknown", not as "free".
+ */
+export function findPortOccupant(port, platform = process.platform, commandRunner = run) {
+    if (platform === "win32") {
+        const script = `$port=${port}; $c=Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; ` +
+            `if ($c) { $p=Get-Process -Id $c.OwningProcess -ErrorAction SilentlyContinue; if ($p) { "$($p.Id)"; $p.ProcessName } }`;
+        try {
+            const [pidRaw, name] = commandRunner("powershell.exe", ["-NoProfile", "-Command", script])
+                .split(/\r?\n/)
+                .map((line) => line.trim())
+                .filter(Boolean);
+            const pid = Number(pidRaw);
+            if (!Number.isInteger(pid) || pid <= 0 || !name)
+                return null;
+            return { pid, command: name };
+        }
+        catch {
+            // PowerShell may be missing or the query may fail; treat as "unknown".
+            return null;
+        }
+    }
+    try {
+        const [first] = commandRunner("lsof", ["-nP", "-t", `-iTCP:${port}`, "-sTCP:LISTEN"])
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean);
+        if (!first)
+            return null;
+        const pid = Number(first);
+        const name = commandRunner("ps", ["-p", first, "-o", "comm="]).trim();
+        if (!Number.isInteger(pid) || !name)
+            return null;
+        return { pid, command: basename(name) };
+    }
+    catch {
+        // lsof exits 1 when nothing listens, and may be missing.
+        return null;
+    }
+}
+/**
+ * The Docker container that publishes `port` on the host, or null when none does or Docker cannot be read. A published
+ * port shows up in `lsof` as Docker's own helper (`ssh`, `com.docker.backend`, `limactl`), which names no one; the
+ * container is the answer the user can act on (#4124).
+ */
+export function findPortContainer(port, commandRunner = run) {
+    try {
+        const [name] = commandRunner("docker", [
+            "ps",
+            "--filter",
+            `publish=${port}`,
+            "--format",
+            "{{.Names}}",
+        ])
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean);
+        return name ? { pid: 0, command: "docker", container: name } : null;
+    }
+    catch {
+        return null;
+    }
+}
