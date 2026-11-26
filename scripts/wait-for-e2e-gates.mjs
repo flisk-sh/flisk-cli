@@ -11,7 +11,7 @@
 //
 // Reads the token from GITHUB_TOKEN or GH_TOKEN, writes the gate table to GITHUB_STEP_SUMMARY and exits 1 when a gate is
 // missing, unfinished or failed.
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { gatesForEvent, workflowForGate } from "./e2e-gate-expectations.mjs";
@@ -54,6 +54,20 @@ export function gateStates(checkRuns, gates) {
 			conclusion,
 			reason: conclusion === "success" || conclusion === "skipped" ? "" : `the gate reported ${conclusion}`,
 		};
+	});
+}
+
+// The gates whose workflow is parked in .github/workflows-disabled/ (the snapshot of this repository keeps every workflow but
+// ci.yml there). A parked workflow never starts, so its gate can never report: waiting for it only burns the grace period and
+// then fails the summary. A gate whose workflow is in neither folder is not parked, so a deleted workflow still fails.
+export function parkedGates(gates, root, exists = existsSync) {
+	return gates.filter((gate) => {
+		const workflow = workflowForGate(gate);
+		if (!workflow) return false;
+		return (
+			!exists(path.join(root, ".github", "workflows", workflow)) &&
+			exists(path.join(root, ".github", "workflows-disabled", workflow))
+		);
 	});
 }
 
@@ -199,7 +213,15 @@ function parseArgs(argv) {
 async function main(argv) {
 	const args = parseArgs(argv);
 	const token = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? "";
-	const gates = gatesForEvent(args.event);
+	const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+	const parked = parkedGates(gatesForEvent(args.event), root);
+	for (const gate of parked) {
+		const message = `The ${gate} gate is not waited for: ${workflowForGate(gate)} is parked in .github/workflows-disabled/.`;
+		console.log(message);
+		if (process.env.GITHUB_STEP_SUMMARY)
+			appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${message}\n`);
+	}
+	const gates = gatesForEvent(args.event).filter((gate) => !parked.includes(gate));
 	if (gates.length === 0) {
 		const message = `No e2e group gate reports for a ${args.event} run; there is nothing to wait for.`;
 		console.log(message);

@@ -8,6 +8,7 @@ import {
 	gateStates,
 	latestAttempt,
 	neverReporting,
+	parkedGates,
 	pendingGates,
 	renderTable,
 	waitForGates,
@@ -101,6 +102,21 @@ test("a missing gate whose workflow never started can never report", () => {
 	const lost = neverReporting(states, []);
 	assert.deepEqual(
 		lost.map((state) => state.gate),
+		["e2e-examples"],
+	);
+});
+
+test("a gate whose workflow is parked in workflows-disabled is not waited for", () => {
+	const files = new Set([
+		"/repo/.github/workflows/e2e-journeys.yml",
+		"/repo/.github/workflows-disabled/e2e-examples.yml",
+		"/repo/.github/workflows-disabled/e2e-journeys.yml",
+	]);
+	const exists = (file) => files.has(file);
+	// e2e-examples is parked; e2e-journeys is active (a copy in workflows-disabled does not park it); e2e-platforms is in
+	// neither folder, so a deleted workflow still makes its gate missing and fails the summary.
+	assert.deepEqual(
+		parkedGates(["e2e-examples", "e2e-journeys", "e2e-platforms", "e2e-nothing"], "/repo", exists),
 		["e2e-examples"],
 	);
 });
