@@ -1,6 +1,6 @@
 # Flisk: toată aplicația ta, rulând pe calculatorul tău cu o singură comandă
 
-[![Test coverage](https://raw.githubusercontent.com/flisk-sh/flisk/main/docs/assets/coverage.svg)](https://github.com/flisk-sh/flisk/blob/main/docs/assets/coverage.svg)
+[![Test coverage](https://raw.githubusercontent.com/flisk-sh/flisk-cli/main/docs/assets/coverage.svg)](https://github.com/flisk-sh/flisk-cli/blob/main/docs/assets/coverage.svg)
 
 [English](../README.md) | [简体中文](README-zh_cn.md) | [繁體中文](README-zh_tw.md) | [日本語](README-ja.md) | [한국어](README-ko.md) | [Türkçe](README-tr.md) | [Tiếng Việt](README-vi.md) | [ไทย](README-th.md) | [Deutsch](README-de.md) | [Español](README-es.md) | [Français](README-fr.md) | [Українська](README-uk.md) | [Polski](README-pl.md) | [Português (Brasil)](README-pt-BR.md) | [العربية](README-ar.md) | [فارسی](README-fa.md) | [Bahasa Indonesia](README-id.md) | [Italiano](README-it.md) | [Ελληνικά](README-el.md) | [മലയാളം](README-ml.md) | Română
 
@@ -62,7 +62,7 @@ flisk doctor
 Alte moduri de instalare: [Bun](install/bun.md) | [binar precompilat, fără Node.js sau Bun](install/binary.md) | [imagine container](install/container.md). Pentru instalare prin GitHub Packages în locul registrului npm public: [instalare din GitHub Packages](github-packages.md). Pentru actualizare ulterioară folosește `flisk upgrade` (sau aliasul său `flisk update`); pentru a fixa o versiune vezi [actualizare și fixarea versiunii](upgrading.md).
 
 > [!IMPORTANT]
-> Ia Flisk din depozitul [flisk-sh/flisk](https://github.com/flisk-sh/flisk), din pachetul npm
+> Ia Flisk din depozitul [flisk-sh/flisk](https://github.com/flisk-sh/flisk-cli), din pachetul npm
 > [`@flisk-sh/flisk`](https://www.npmjs.com/package/@flisk-sh/flisk) sau de pe [site-ul oficial](https://flisk.sh/).
 > Urmează linkurile de instalare din aceste surse oficiale. Un nume de depozit asemănător
 > sau un README copiat nu dovedește că o descărcare este oficială.

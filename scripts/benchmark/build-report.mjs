@@ -210,7 +210,7 @@ footer a { color: var(--accent); }
 <section id="t-env" role="tabpanel" aria-labelledby="b-env" hidden>${envTab}</section>
 </main>
 <footer>
-Source: <a href="https://github.com/flisk-sh/flisk/tree/main/scripts/benchmark">scripts/benchmark</a> · reproduce with <code>scripts/benchmark/flisk-up-warm-start.sh</code> · raw data in <a href="https://github.com/flisk-sh/flisk/tree/main/docs/benchmarks/results">docs/benchmarks/results</a>
+Source: <a href="https://github.com/flisk-sh/flisk-cli/tree/main/scripts/benchmark">scripts/benchmark</a> · reproduce with <code>scripts/benchmark/flisk-up-warm-start.sh</code> · raw data in <a href="https://github.com/flisk-sh/flisk-cli/tree/main/docs/benchmarks/results">docs/benchmarks/results</a>
 </footer>
 <script>
 (function () {

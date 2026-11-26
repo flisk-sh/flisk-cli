@@ -54,7 +54,7 @@ args = ["mcp"]
 
 Docs: [CLI](https://learn.chatgpt.com/docs/codex/cli.md) · [MCP](https://learn.chatgpt.com/docs/extend/mcp?surface=cli) · [AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md.md) · [skills](https://learn.chatgpt.com/docs/build-skills.md)
 
-**Several sessions at once.** Two or more sessions on the same repo can overwrite each other's edits. The [Run My Agents](https://github.com/flisk-sh/run-my-agents) board reads Codex sessions from `~/.codex/sessions` too, so your Codex agents show on it; its before-edit warning is a Claude Code plugin, so Codex sessions appear on the board but are not warned. For running several agents on one Flisk project, follow the [guide issue](https://github.com/flisk-sh/flisk/issues/3123).
+**Several sessions at once.** Two or more sessions on the same repo can overwrite each other's edits. The [Run My Agents](https://github.com/flisk-sh/run-my-agents) board reads Codex sessions from `~/.codex/sessions` too, so your Codex agents show on it; its before-edit warning is a Claude Code plugin, so Codex sessions appear on the board but are not warned. For running several agents on one Flisk project, follow the [guide issue](https://github.com/flisk-sh/flisk-cli/issues/3123).
 
 </td></tr>
 <tr><td><img src="../assets/tabs/agents/codex-bottom.66984153.svg" alt="Codex input: Build me a small online shop with a storefront and an orders API…" width="100%" align="top"></td></tr>

@@ -60,12 +60,12 @@ When someone opens, reopens, or edits a PR, the [AI review buttons workflow](../
 > **Review this PR in**
 > \[Grok\] \[Claude\] \[Codex\]
 >
-> Shared by [@flisk-sh](https://github.com/flisk-sh) · [flisk](https://github.com/flisk-sh/flisk) · If this helps, please ⭐ [star flisk](https://github.com/flisk-sh/flisk)
+> Shared by [@flisk-sh](https://github.com/flisk-sh) · [flisk](https://github.com/flisk-sh/flisk-cli) · If this helps, please ⭐ [star flisk](https://github.com/flisk-sh/flisk-cli)
 
 Each button is a plain link. It opens the AI's website in a new tab with this message already typed:
 
 ```text
-Review this pull request. Read the title and diff at https://github.com/flisk-sh/flisk/pull/123.
+Review this pull request. Read the title and diff at https://github.com/flisk-sh/flisk-cli/pull/123.
 ```
 
 | Button | Opens |

@@ -10,7 +10,7 @@ metadata:
 
 # Flisk troubleshooting
 
-Work from evidence: what the CLI, Tilt and Docker report. Say what you measured, what you estimated and what you do not know, in that order. The full message-by-message guide is [docs/troubleshooting.md](https://github.com/flisk-sh/flisk/blob/main/docs/troubleshooting.md).
+Work from evidence: what the CLI, Tilt and Docker report. Say what you measured, what you estimated and what you do not know, in that order. The full message-by-message guide is [docs/troubleshooting.md](https://github.com/flisk-sh/flisk-cli/blob/main/docs/troubleshooting.md).
 
 ## First minute: triage
 

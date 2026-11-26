@@ -31,7 +31,7 @@ GOLDEN_BUILD = REPO_ROOT / "runtime" / "engine" / "topologies" / "platform" / "d
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "publish-golden-images.yml"
 DOCS = REPO_ROOT / "runtime" / "engine" / "docs" / "GOLDEN_IMAGE_INTEGRATION.md"
 LAYERS = ["l1", "l2", "l3-backend", "l3-backend-prisma", "l3-frontend", "l4-backend", "l4-backend-node", "l4-frontend", "l4-migrator"]
-SOURCE = "org.opencontainers.image.source=https://github.com/flisk-sh/flisk"
+SOURCE = "org.opencontainers.image.source=https://github.com/flisk-sh/flisk-cli"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="runs a POSIX shell script")

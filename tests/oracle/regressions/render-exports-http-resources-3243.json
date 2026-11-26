@@ -5,7 +5,7 @@
   "seed": 3243,
   "shape": "minimized",
   "commit": "e9b39009",
-  "issue": "https://github.com/flisk-sh/flisk/issues/3243",
+  "issue": "https://github.com/flisk-sh/flisk-cli/issues/3243",
   "known_gap": "#3243",
   "scenario": {
     "seed": 3243,

@@ -1,6 +1,6 @@
 # Flisk: നിങ്ങളുടെ മുഴുവൻ ആപ്പും ഒരൊറ്റ കമാൻഡിൽ നിങ്ങളുടെ കമ്പ്യൂട്ടറിൽ പ്രവർത്തിക്കുന്നു
 
-[![Test coverage](https://raw.githubusercontent.com/flisk-sh/flisk/main/docs/assets/coverage.svg)](https://github.com/flisk-sh/flisk/blob/main/docs/assets/coverage.svg)
+[![Test coverage](https://raw.githubusercontent.com/flisk-sh/flisk-cli/main/docs/assets/coverage.svg)](https://github.com/flisk-sh/flisk-cli/blob/main/docs/assets/coverage.svg)
 
 [English](../README.md) | [简体中文](README-zh_cn.md) | [繁體中文](README-zh_tw.md) | [日本語](README-ja.md) | [한국어](README-ko.md) | [Türkçe](README-tr.md) | [Tiếng Việt](README-vi.md) | [ไทย](README-th.md) | [Deutsch](README-de.md) | [Español](README-es.md) | [Français](README-fr.md) | [Українська](README-uk.md) | [Polski](README-pl.md) | [Português (Brasil)](README-pt-BR.md) | [العربية](README-ar.md) | [فارسی](README-fa.md) | [Bahasa Indonesia](README-id.md) | [Italiano](README-it.md) | [Ελληνικά](README-el.md) | മലയാളം | [Română](README-ro.md)
 
@@ -62,6 +62,6 @@ flisk doctor
 മറ്റ് ഇൻസ്റ്റാൾ വഴികൾ: [Bun](install/bun.md) | [Node.js-ഓ Bun-ഓ ഇല്ലാത്ത പ്രീബിൽട്ട് ബൈനറി](install/binary.md) | [കണ്ടെയ്നർ ഇമേജ്](install/container.md). പബ്ലിക് npm റെജിസ്ട്രിക്ക് പകരം GitHub Packages വഴി ഇൻസ്റ്റാൾ ചെയ്യാൻ: [GitHub Packages ഇൻസ്റ്റാളേഷൻ](github-packages.md). പിന്നീട് അപ്ഡേറ്റ് ചെയ്യാൻ `flisk upgrade` (അതിന്റെ അപരനാമം `flisk update`) ഉപയോഗിക്കുക; ഒരു പതിപ്പ് ഉറപ്പിക്കാൻ [അപ്ഗ്രേഡും പതിപ്പ് പിന്നിംഗും](upgrading.md) കാണുക.
 
 > [!IMPORTANT]
-> Flisk [flisk-sh/flisk](https://github.com/flisk-sh/flisk) റിപ്പോസിറ്ററിയിൽ നിന്നോ, [`@flisk-sh/flisk`](https://www.npmjs.com/package/@flisk-sh/flisk) npm പാക്കേജിൽ നിന്നോ, [ഔദ്യോഗിക വെബ്സൈറ്റിൽ](https://flisk.sh/) നിന്നോ മാത്രം നേടുക. ഈ ഔദ്യോഗിക ഉറവിടങ്ങളിലെ ഇൻസ്റ്റാൾ ലിങ്കുകൾ പിന്തുടരുക. സമാനമായ പേരുള്ള റിപ്പോസിറ്ററിയോ പകർത്തിയ README-ഓ ഒരു ഡൗൺലോഡ് ഔദ്യോഗികമാണെന്ന് തെളിയിക്കുന്നില്ല.
+> Flisk [flisk-sh/flisk](https://github.com/flisk-sh/flisk-cli) റിപ്പോസിറ്ററിയിൽ നിന്നോ, [`@flisk-sh/flisk`](https://www.npmjs.com/package/@flisk-sh/flisk) npm പാക്കേജിൽ നിന്നോ, [ഔദ്യോഗിക വെബ്സൈറ്റിൽ](https://flisk.sh/) നിന്നോ മാത്രം നേടുക. ഈ ഔദ്യോഗിക ഉറവിടങ്ങളിലെ ഇൻസ്റ്റാൾ ലിങ്കുകൾ പിന്തുടരുക. സമാനമായ പേരുള്ള റിപ്പോസിറ്ററിയോ പകർത്തിയ README-ഓ ഒരു ഡൗൺലോഡ് ഔദ്യോഗികമാണെന്ന് തെളിയിക്കുന്നില്ല.
 
 പൂർണ്ണ ഗൈഡ് [ഇംഗ്ലീഷ് README](../README.md)-ൽ ഉണ്ട്.

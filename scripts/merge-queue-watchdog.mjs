@@ -132,7 +132,7 @@ export function ejectComment({ stuck, behindBy }) {
 			: `Fix the failing check, then enable auto-merge again; once the checks pass, the pull request rejoins the queue on its own.`;
 	return [
 		MARKER,
-		`I removed this pull request from the merge queue: ${why} While it held the head, every PR behind it waited (https://github.com/flisk-sh/flisk/issues/5044).${stale}`,
+		`I removed this pull request from the merge queue: ${why} While it held the head, every PR behind it waited (https://github.com/flisk-sh/flisk-cli/issues/5044).${stale}`,
 		``,
 		next,
 		``,

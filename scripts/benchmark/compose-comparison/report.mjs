@@ -11,7 +11,7 @@ export function formatMarkdownReport(data) {
 	const lines = [
 		"# Benchmark: Flisk vs Docker Compose",
 		"",
-		`Measured for [#3297](https://github.com/flisk-sh/flisk/issues/3297). This report provides honest, reproducible startup latency figures for **Flisk** versus plain **Docker Compose** across three representative application stacks.`,
+		`Measured for [#3297](https://github.com/flisk-sh/flisk-cli/issues/3297). This report provides honest, reproducible startup latency figures for **Flisk** versus plain **Docker Compose** across three representative application stacks.`,
 		"",
 		"## Test Methodology",
 		"",

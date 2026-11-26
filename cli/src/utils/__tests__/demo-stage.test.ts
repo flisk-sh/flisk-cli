@@ -143,10 +143,10 @@ describe("renderDemoFrame", () => {
       version: "1.4.20",
     };
     const withStar = frameToPlain(
-      renderDemoFrame(baseState({ done: { ...done, starUrl: "github.com/flisk-sh/flisk" } }), 80),
+      renderDemoFrame(baseState({ done: { ...done, starUrl: "github.com/flisk-sh/flisk-cli" } }), 80),
     );
     expect(withStar).toHaveLength(FRAME_ROWS);
-    expect(withStar.join("\n")).toContain("Like it? A star helps: github.com/flisk-sh/flisk");
+    expect(withStar.join("\n")).toContain("Like it? A star helps: github.com/flisk-sh/flisk-cli");
 
     const withoutStar = frameToPlain(renderDemoFrame(baseState({ done }), 80)).join("\n");
     expect(withoutStar).not.toContain("A star helps");
@@ -162,7 +162,7 @@ describe("renderDemoFrame", () => {
             hint: "Edit a file.",
             version: "1.4.20",
             discordUrl: "discord.gg/example",
-            starUrl: "github.com/flisk-sh/flisk",
+            starUrl: "github.com/flisk-sh/flisk-cli",
           },
         }),
         80,
@@ -372,7 +372,7 @@ describe("createDemoStage", () => {
       stage.finish(done);
       stage.stop();
       expect(stream.chunks.join("")).toContain(`A star helps: ${DEMO_STAR_URL}`);
-      expect(DEMO_STAR_URL).toBe("github.com/flisk-sh/flisk");
+      expect(DEMO_STAR_URL).toBe("github.com/flisk-sh/flisk-cli");
       expect(stream.chunks.join("")).toContain(`Join us on Discord: ${DEMO_DISCORD_URL}`);
       expect(DEMO_DISCORD_URL).toBe("discord.gg/qMu5Xn8Kaq");
     });

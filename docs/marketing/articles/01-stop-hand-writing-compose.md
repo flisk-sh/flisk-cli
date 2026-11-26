@@ -9,11 +9,11 @@ canonical_url: https://flisk.sh/docs/quickstart/
 
 "I have a docker-compose.yml with a handful of services. What do I do when I want Flisk to run them, and what happens to my file?"
 
-That is the question behind [issue #756](https://github.com/flisk-sh/flisk/issues/756). The short answer: you stop writing the compose file for your app. You write one `service.json` per service, and Flisk generates the local runtime files.
+That is the question behind [issue #756](https://github.com/flisk-sh/flisk-cli/issues/756). The short answer: you stop writing the compose file for your app. You write one `service.json` per service, and Flisk generates the local runtime files.
 
 ## What you write
 
-Each service gets a `service.json`. This one is from the runnable [one-backend example](https://github.com/flisk-sh/flisk/tree/main/examples/one-backend):
+Each service gets a `service.json`. This one is from the runnable [one-backend example](https://github.com/flisk-sh/flisk-cli/tree/main/examples/one-backend):
 
 ```json
 {
@@ -57,4 +57,4 @@ If your compose project has a `build:` section, the question is usually where th
 
 ## Try it
 
-The [one-backend example](https://github.com/flisk-sh/flisk/tree/main/examples/one-backend) is the smallest runnable version: one service, one generated compose file for Postgres, one command to preview it. Start with the [quickstart](https://flisk.sh/docs/quickstart/), then run `flisk up one-backend --dry-run` in the example folder to see what it would start.
+The [one-backend example](https://github.com/flisk-sh/flisk-cli/tree/main/examples/one-backend) is the smallest runnable version: one service, one generated compose file for Postgres, one command to preview it. Start with the [quickstart](https://flisk.sh/docs/quickstart/), then run `flisk up one-backend --dry-run` in the example folder to see what it would start.

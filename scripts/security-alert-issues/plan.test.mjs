@@ -11,7 +11,7 @@ import { finalLabelSet, planLabels, planSync, sameLabels } from "./plan.mjs";
 
 const DEPENDABOT_ALERT = {
 	number: 22,
-	html_url: "https://github.com/flisk-sh/flisk/security/dependabot/22",
+	html_url: "https://github.com/flisk-sh/flisk-cli/security/dependabot/22",
 	dependency: {
 		package: { name: "vite", ecosystem: "npm" },
 		manifest_path: "cli/pnpm-lock.yaml",

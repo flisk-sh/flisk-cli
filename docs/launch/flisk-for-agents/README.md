@@ -48,7 +48,7 @@ No performance numbers appear in this kit. If someone asks for one, use only the
 
 **Launch tags** (Product Hunt allows three): Developer Tools, Artificial Intelligence, Open Source.
 
-**Links:** the landing page (https://flisk.sh/agents/) as the main link, with the repository (https://github.com/flisk-sh/flisk) as the second link.
+**Links:** the landing page (https://flisk.sh/agents/) as the main link, with the repository (https://github.com/flisk-sh/flisk-cli) as the second link.
 
 **Thumbnail:** the existing Flisk mark, 240x240, under 3 MB. Do not reuse the Oct 27 listing's gallery.
 
@@ -136,7 +136,7 @@ Follow-up reply in the same thread, with gallery card 4 attached:
 >
 > If you try it, I would like to hear where it broke for you, in the Product Hunt comments or as a GitHub issue.
 >
-> (Product Hunt link) · https://github.com/flisk-sh/flisk
+> (Product Hunt link) · https://github.com/flisk-sh/flisk-cli
 
 ### Discord (Flisk server, announcements)
 

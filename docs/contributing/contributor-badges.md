@@ -4,7 +4,7 @@ Every contributor whose pull request is merged into Flisk gets a personal `FLISK
 
 ## Where your badge lives
 
-After a maintainer merges your PR, the [Hall of fame workflow](https://github.com/flisk-sh/flisk/actions/workflows/hall-of-fame.yml) rebuilds the [Hall of fame: community contributors](https://github.com/flisk-sh/flisk/issues?q=is%3Aissue+is%3Aopen+label%3Acommunity) issue. Your row includes:
+After a maintainer merges your PR, the [Hall of fame workflow](https://github.com/flisk-sh/flisk-cli/actions/workflows/hall-of-fame.yml) rebuilds the [Hall of fame: community contributors](https://github.com/flisk-sh/flisk-cli/issues?q=is%3Aissue+is%3Aopen+label%3Acommunity) issue. Your row includes:
 
 - A `FLISK HALL OF FAME @<your-login> • <N> merged PRs` badge image
 - A copy-ready markdown snippet under **Copy your badge**
@@ -14,7 +14,7 @@ After a maintainer merges your PR, the [Hall of fame workflow](https://github.co
 Open the Hall of Fame issue, find your row, and copy the snippet in the **Copy your badge** section. It looks like this:
 
 ```markdown
-[![FLISK HALL OF FAME @your-login • N merged PRs](https://img.shields.io/badge/FLISK%20HALL%20OF%20FAME-%40your-login%20%E2%80%A2%20N%20merged%20PRs-06b6d4?style=for-the-badge&labelColor=07080f)](https://github.com/flisk-sh/flisk/issues?q=is%3Aissue+is%3Aopen+label%3Acommunity)
+[![FLISK HALL OF FAME @your-login • N merged PRs](https://img.shields.io/badge/FLISK%20HALL%20OF%20FAME-%40your-login%20%E2%80%A2%20N%20merged%20PRs-06b6d4?style=for-the-badge&labelColor=07080f)](https://github.com/flisk-sh/flisk-cli/issues?q=is%3Aissue+is%3Aopen+label%3Acommunity)
 ```
 
 Paste it into your portfolio README, GitHub profile README, personal site, or anywhere markdown images render. The badge links back to the open Hall of Fame issue so anyone can verify your contribution.
@@ -29,7 +29,7 @@ To claim yours, post the link to a merged PR in `#start-here` on the [Flisk Disc
 - Your badge and ready-to-paste markdown
 - The matching Discord role, and access to the private `#contributors` channel with the maintainers
 
-Each person gets one badge. Claimed seats are listed in the [Founding Contributors](https://github.com/flisk-sh/flisk/issues?q=is%3Aissue+is%3Aopen+label%3Acommunity+%22Founding+Contributors%22) issue.
+Each person gets one badge. Claimed seats are listed in the [Founding Contributors](https://github.com/flisk-sh/flisk-cli/issues?q=is%3Aissue+is%3Aopen+label%3Acommunity+%22Founding+Contributors%22) issue.
 
 ## Tiers and belts
 
@@ -69,4 +69,4 @@ The project also publishes an aggregate `FLISK HALL OF FAME GLOBAL` badge showin
 
 ## Want to be on the list?
 
-Start with a [good first issue](https://github.com/flisk-sh/flisk/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22). Your first merged PR earns your first badge.
+Start with a [good first issue](https://github.com/flisk-sh/flisk-cli/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22). Your first merged PR earns your first badge.

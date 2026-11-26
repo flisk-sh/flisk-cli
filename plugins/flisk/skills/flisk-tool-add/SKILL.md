@@ -37,4 +37,4 @@ flisk tool add nextjs --dry-run
 
 - One `flisk tool add` per tool the user named; do not add tools they did not ask for.
 - Preview with `--dry-run` when the user is unsure.
-- Full guide: [docs/add-a-tool.md](https://github.com/flisk-sh/flisk/blob/main/docs/add-a-tool.md).
+- Full guide: [docs/add-a-tool.md](https://github.com/flisk-sh/flisk-cli/blob/main/docs/add-a-tool.md).

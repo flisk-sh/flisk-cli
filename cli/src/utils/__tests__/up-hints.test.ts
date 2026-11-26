@@ -107,7 +107,7 @@ describe("upFailureHints", () => {
   it("links only docs and headings that exist in the repository", () => {
     for (const url of Object.values(UP_HINT_DOCS)) {
       const [path, anchor] = url
-        .replace("https://github.com/flisk-sh/flisk/blob/main/", "")
+        .replace("https://github.com/flisk-sh/flisk-cli/blob/main/", "")
         .split("#");
       const file = join(repoRoot, path ?? "");
       expect(existsSync(file), path).toBe(true);

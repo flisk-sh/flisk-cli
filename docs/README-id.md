@@ -1,6 +1,6 @@
 # Flisk: seluruh aplikasi Anda berjalan di komputer Anda dengan satu perintah
 
-[![Test coverage](https://raw.githubusercontent.com/flisk-sh/flisk/main/docs/assets/coverage.svg)](https://github.com/flisk-sh/flisk/blob/main/docs/assets/coverage.svg)
+[![Test coverage](https://raw.githubusercontent.com/flisk-sh/flisk-cli/main/docs/assets/coverage.svg)](https://github.com/flisk-sh/flisk-cli/blob/main/docs/assets/coverage.svg)
 
 [English](../README.md) | [简体中文](README-zh_cn.md) | [繁體中文](README-zh_tw.md) | [日本語](README-ja.md) | [한국어](README-ko.md) | [Türkçe](README-tr.md) | [Tiếng Việt](README-vi.md) | [ไทย](README-th.md) | [Deutsch](README-de.md) | [Español](README-es.md) | [Français](README-fr.md) | [Українська](README-uk.md) | [Polski](README-pl.md) | [Português (Brasil)](README-pt-BR.md) | [العربية](README-ar.md) | [فارسی](README-fa.md) | Bahasa Indonesia | [Italiano](README-it.md) | [Ελληνικά](README-el.md) | [മലയാളം](README-ml.md) | [Română](README-ro.md)
 
@@ -62,7 +62,7 @@ flisk doctor
 Cara instalasi lain: [Bun](install/bun.md) | [binari siap pakai, tanpa Node.js atau Bun](install/binary.md) | [image container](install/container.md). Untuk menginstal lewat GitHub Packages alih-alih registry npm publik: [instalasi dari GitHub Packages](github-packages.md). Untuk memperbarui nanti gunakan `flisk upgrade` (atau aliasnya `flisk update`); untuk menyematkan versi lihat [upgrade dan penyematan versi](upgrading.md).
 
 > [!IMPORTANT]
-> Dapatkan Flisk dari repositori [flisk-sh/flisk](https://github.com/flisk-sh/flisk), dari paket npm
+> Dapatkan Flisk dari repositori [flisk-sh/flisk](https://github.com/flisk-sh/flisk-cli), dari paket npm
 > [`@flisk-sh/flisk`](https://www.npmjs.com/package/@flisk-sh/flisk), atau dari [situs resmi](https://flisk.sh/).
 > Ikuti tautan instalasi dari sumber resmi ini. Nama repositori yang mirip atau README hasil salinan
 > tidak membuktikan bahwa suatu unduhan resmi.

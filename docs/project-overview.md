@@ -8,8 +8,8 @@ A `.flisk/project.json` groups stacks into phases (`pre_alpha`, `alpha`, `beta`,
 
 ## History
 
-Development started on 21 April 2026 in the archived [flisk-sh/flisk](https://github.com/flisk-sh/flisk) repository (first
-commit [`1714637`](https://github.com/flisk-sh/flisk/commit/1714637637196ed54cbfa18534230a782c05ab36)). This repository was created
+Development started on 21 April 2026 in the archived [flisk-sh/flisk](https://github.com/flisk-sh/flisk-cli) repository (first
+commit [`1714637`](https://github.com/flisk-sh/flisk-cli/commit/1714637637196ed54cbfa18534230a782c05ab36)). This repository was created
 on 19 September 2026 and the npm package was first published on 21 September 2026, so the repository and package are younger than the
 project. The archived repository is read-only; new work happens here.
 
@@ -31,7 +31,7 @@ This is the core monorepo. Day-to-day CLI work is under `cli/`; `runtime/engine/
 
 Flisk includes Traefik and PostgreSQL, with optional monitoring, ELK, Debezium CDC, a local npm registry, and other project features. See [docs/FEATURES.md](FEATURES.md) for the full list.
 
-The CLI, engine, and repository are MIT-licensed. Some optional features require a `FLISK_LICENSE_KEY`, including on-demand service start/stop, Verdaccio, DDD scaffolding, Playwright configuration, C4 diagrams, synthetic monitoring, and selected generators. In this repository those are disabled stubs; with a key the CLI downloads their implementations. See [docs/FEATURES.md](FEATURES.md). Request a key through the [website](https://flisk.sh/#waitlist) or a [premium license issue](https://github.com/flisk-sh/flisk/issues/new?template=premium_license.yml).
+The CLI, engine, and repository are MIT-licensed. Some optional features require a `FLISK_LICENSE_KEY`, including on-demand service start/stop, Verdaccio, DDD scaffolding, Playwright configuration, C4 diagrams, synthetic monitoring, and selected generators. In this repository those are disabled stubs; with a key the CLI downloads their implementations. See [docs/FEATURES.md](FEATURES.md). Request a key through the [website](https://flisk.sh/#waitlist) or a [premium license issue](https://github.com/flisk-sh/flisk-cli/issues/new?template=premium_license.yml).
 
 ## Telemetry
 

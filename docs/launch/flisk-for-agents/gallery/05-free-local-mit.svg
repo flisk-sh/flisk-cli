@@ -18,5 +18,5 @@
 <text x="100" y="550" xml:space="preserve" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="34" font-weight="750" fill="#61f0d3" text-anchor="start">Yours</text>
 <text x="280" y="549" xml:space="preserve" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="24" font-weight="400" fill="#edf5ff" text-anchor="start">Plain service.json per service. Generated files you can read; flisk eject removes them.</text>
 <text x="64" y="650" xml:space="preserve" font-family="'JetBrains Mono','Hack',ui-monospace,Menlo,monospace" font-size="26" font-weight="400" fill="#cfe3f7" text-anchor="start">npm install -g @flisk-sh/flisk</text>
-<text x="64" y="740" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="16" fill="#91a8bf">github.com/flisk-sh/flisk · MIT · runs on your machine</text>
+<text x="64" y="740" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="16" fill="#91a8bf">github.com/flisk-sh/flisk-cli · MIT · runs on your machine</text>
 </svg>

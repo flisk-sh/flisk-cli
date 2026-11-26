@@ -68,7 +68,7 @@ describe("agent skills shipped to new projects", () => {
     expect(
       rewriteSkillLinks("see [jobs](../../../docs/byo.md#one-shot) and [x](https://a.b/c)"),
     ).toBe(
-      "see [jobs](https://github.com/flisk-sh/flisk/blob/main/docs/byo.md#one-shot) and [x](https://a.b/c)",
+      "see [jobs](https://github.com/flisk-sh/flisk-cli/blob/main/docs/byo.md#one-shot) and [x](https://a.b/c)",
     );
   });
 

@@ -7,7 +7,7 @@
 os.environ['FLISK_PROJECT_ROOT'] = config.main_dir
 
 # Load Flisk extension
-v1alpha1.extension_repo(name='flisk-cli', url='https://github.com/flisk-sh/flisk')
+v1alpha1.extension_repo(name='flisk-cli', url='https://github.com/flisk-sh/flisk-cli')
 v1alpha1.extension(name='flisk-cli', repo_name='flisk-cli', repo_path='')
 
 # Load Flisk utilities

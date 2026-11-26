@@ -147,7 +147,7 @@ export async function checkWindowsHostConfiguration(): Promise<CheckResult> {
   );
   if (excluded.length > 0) {
     warnings.push(
-      `⚠️ Windows reserved port${excluded.length > 1 ? "s" : ""} ${excluded.join(", ")} for Hyper-V/WSL.\n  Fix 1 (reset reserved ranges): run as Administrator: net stop winnat && net start winnat\n  Fix 2 (change Flisk ports): set FLISK_HTTP_PORT, FLISK_HTTPS_PORT, FLISK_POSTGRES_PORT in project config\n  Verify: flisk doctor\n  Docs: https://github.com/flisk-sh/flisk/blob/main/docs/wsl2.md#troubleshooting`,
+      `⚠️ Windows reserved port${excluded.length > 1 ? "s" : ""} ${excluded.join(", ")} for Hyper-V/WSL.\n  Fix 1 (reset reserved ranges): run as Administrator: net stop winnat && net start winnat\n  Fix 2 (change Flisk ports): set FLISK_HTTP_PORT, FLISK_HTTPS_PORT, FLISK_POSTGRES_PORT in project config\n  Verify: flisk doctor\n  Docs: https://github.com/flisk-sh/flisk-cli/blob/main/docs/wsl2.md#troubleshooting`,
     );
   }
 
@@ -180,7 +180,7 @@ export async function checkWindowsHostConfiguration(): Promise<CheckResult> {
         { encoding: "utf-8", timeout: 10_000, windowsHide: true },
       ).trim();
       warnings.push(
-        `⚠️ Ports ${externallyOccupied.join(", ")} are already listening${owners ? `:\n${owners}` : "."}\n  Fix: stop the conflicting service or change Flisk ports (FLISK_HTTP_PORT, etc.)\n  Verify: flisk doctor\n  Docs: https://github.com/flisk-sh/flisk/blob/main/docs/wsl2.md#troubleshooting`,
+        `⚠️ Ports ${externallyOccupied.join(", ")} are already listening${owners ? `:\n${owners}` : "."}\n  Fix: stop the conflicting service or change Flisk ports (FLISK_HTTP_PORT, etc.)\n  Verify: flisk doctor\n  Docs: https://github.com/flisk-sh/flisk-cli/blob/main/docs/wsl2.md#troubleshooting`,
       );
     } catch {
       warnings.push(
@@ -200,7 +200,7 @@ export async function checkWindowsHostConfiguration(): Promise<CheckResult> {
   }
   if (!dnsOk) {
     warnings.push(
-      `${WINDOWS_DNS_FAILURE}\n  Fix: add these lines to C:\\Windows\\System32\\drivers\\etc\\hosts (run Notepad as Administrator):\n    127.0.0.1 flisk.localhost\n    127.0.0.1 example.flisk.localhost\n  Verify: ping flisk.localhost (should resolve to 127.0.0.1)\n  Docs: https://github.com/flisk-sh/flisk/blob/main/docs/wsl2.md#troubleshooting`,
+      `${WINDOWS_DNS_FAILURE}\n  Fix: add these lines to C:\\Windows\\System32\\drivers\\etc\\hosts (run Notepad as Administrator):\n    127.0.0.1 flisk.localhost\n    127.0.0.1 example.flisk.localhost\n  Verify: ping flisk.localhost (should resolve to 127.0.0.1)\n  Docs: https://github.com/flisk-sh/flisk-cli/blob/main/docs/wsl2.md#troubleshooting`,
     );
   }
 

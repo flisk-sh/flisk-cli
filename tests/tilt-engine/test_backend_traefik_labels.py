@@ -9,7 +9,7 @@ Pins the exact label map generated for backend services, covering:
 - Backend without healthcheck (bring-your-own / no HTTP probe)
 - Backend without manifest (standalone base router)
 
-Spec / Issues: https://github.com/flisk-sh/flisk/issues/2410, https://github.com/flisk-sh/flisk/issues/2412
+Spec / Issues: https://github.com/flisk-sh/flisk-cli/issues/2410, https://github.com/flisk-sh/flisk-cli/issues/2412
 """
 
 from __future__ import annotations

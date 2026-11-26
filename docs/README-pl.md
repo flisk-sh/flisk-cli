@@ -1,6 +1,6 @@
 # Flisk: cała twoja aplikacja uruchomiona na twoim komputerze jedną komendą
 
-[![Test coverage](https://raw.githubusercontent.com/flisk-sh/flisk/main/docs/assets/coverage.svg)](https://github.com/flisk-sh/flisk/blob/main/docs/assets/coverage.svg)
+[![Test coverage](https://raw.githubusercontent.com/flisk-sh/flisk-cli/main/docs/assets/coverage.svg)](https://github.com/flisk-sh/flisk-cli/blob/main/docs/assets/coverage.svg)
 
 [English](../README.md) | [简体中文](README-zh_cn.md) | [繁體中文](README-zh_tw.md) | [日本語](README-ja.md) | [한국어](README-ko.md) | [Türkçe](README-tr.md) | [Tiếng Việt](README-vi.md) | [ไทย](README-th.md) | [Deutsch](README-de.md) | [Español](README-es.md) | [Français](README-fr.md) | [Українська](README-uk.md) | Polski | [Português (Brasil)](README-pt-BR.md) | [العربية](README-ar.md) | [فارسی](README-fa.md) | [Bahasa Indonesia](README-id.md) | [Italiano](README-it.md) | [Ελληνικά](README-el.md) | [മലയാളം](README-ml.md) | [Română](README-ro.md)
 
@@ -62,7 +62,7 @@ flisk doctor
 Inne sposoby instalacji: [Bun](install/bun.md) | [gotowy plik binarny, bez Node.js i Bun](install/binary.md) | [obraz kontenera](install/container.md). Aby zainstalować przez GitHub Packages zamiast publicznego rejestru npm: [instalacja z GitHub Packages](github-packages.md). Później aktualizuj poleceniem `flisk upgrade` (lub jego aliasem `flisk update`); aby przypiąć wersję, zobacz [aktualizacja i przypinanie wersji](upgrading.md).
 
 > [!IMPORTANT]
-> Pobieraj Flisk tylko z repozytorium [flisk-sh/flisk](https://github.com/flisk-sh/flisk), pakietu npm
+> Pobieraj Flisk tylko z repozytorium [flisk-sh/flisk](https://github.com/flisk-sh/flisk-cli), pakietu npm
 > [`@flisk-sh/flisk`](https://www.npmjs.com/package/@flisk-sh/flisk) albo [oficjalnej strony](https://flisk.sh/).
 > Korzystaj z linków instalacyjnych z tych oficjalnych źródeł. Podobna nazwa repozytorium
 > ani skopiowany README nie gwarantują, że pobierany plik jest oficjalny.

@@ -1,6 +1,6 @@
 # Flisk: увесь ваш застосунок запущений на вашому комп'ютері однією командою
 
-[![Test coverage](https://raw.githubusercontent.com/flisk-sh/flisk/main/docs/assets/coverage.svg)](https://github.com/flisk-sh/flisk/blob/main/docs/assets/coverage.svg)
+[![Test coverage](https://raw.githubusercontent.com/flisk-sh/flisk-cli/main/docs/assets/coverage.svg)](https://github.com/flisk-sh/flisk-cli/blob/main/docs/assets/coverage.svg)
 
 [English](../README.md) | [简体中文](README-zh_cn.md) | [繁體中文](README-zh_tw.md) | [日本語](README-ja.md) | [한국어](README-ko.md) | [Türkçe](README-tr.md) | [Tiếng Việt](README-vi.md) | [ไทย](README-th.md) | [Deutsch](README-de.md) | [Español](README-es.md) | [Français](README-fr.md) | Українська | [Polski](README-pl.md) | [Português (Brasil)](README-pt-BR.md) | [العربية](README-ar.md) | [فارسی](README-fa.md) | [Bahasa Indonesia](README-id.md) | [Italiano](README-it.md) | [Ελληνικά](README-el.md) | [മലയാളം](README-ml.md) | [Română](README-ro.md)
 
@@ -62,7 +62,7 @@ flisk doctor
 Інші способи встановлення: [Bun](install/bun.md) | [готовий бінарник, без Node.js і Bun](install/binary.md) | [образ контейнера](install/container.md). Щоб встановити через GitHub Packages замість публічного реєстру npm: [встановлення з GitHub Packages](github-packages.md). Пізніше оновлюйте командою `flisk upgrade` (або її аліасом `flisk update`); щоб зафіксувати версію, див. [оновлення та фіксація версії](upgrading.md).
 
 > [!IMPORTANT]
-> Завантажуйте Flisk лише з репозиторію [flisk-sh/flisk](https://github.com/flisk-sh/flisk), пакета npm
+> Завантажуйте Flisk лише з репозиторію [flisk-sh/flisk](https://github.com/flisk-sh/flisk-cli), пакета npm
 > [`@flisk-sh/flisk`](https://www.npmjs.com/package/@flisk-sh/flisk) або [офіційного сайту](https://flisk.sh/).
 > Дотримуйтесь посилань на встановлення з цих офіційних джерел. Схожа назва репозиторію
 > або скопійований README не гарантують, що завантаження офіційне.

@@ -7,7 +7,7 @@
 #
 # Or without downloading it first:
 #
-#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/flisk-sh/flisk/main/scripts/windows/setup-wsl.ps1))) -Repo https://github.com/<you>/flisk-task-starter
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/flisk-sh/flisk-cli/main/scripts/windows/setup-wsl.ps1))) -Repo https://github.com/<you>/flisk-task-starter
 #
 # What it does, stopping with one clear next step whenever something needs you:
 #   1. Ubuntu on WSL2: installs it when missing (that needs PowerShell as administrator and usually a restart).

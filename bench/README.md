@@ -32,9 +32,9 @@ Kiri 0.2.1 cannot build images on Linux CI ([kiri#330](https://github.com/librac
 
 | Lane | What it does | State (CI, Kiri 0.2.1) |
 | --- | --- | --- |
-| `compose-kiri-plain` | plain `docker compose up -d --build` on Kiri | ❌ build fails ([#4426](https://github.com/flisk-sh/flisk/issues/4426)) |
+| `compose-kiri-plain` | plain `docker compose up -d --build` on Kiri | ❌ build fails ([#4426](https://github.com/flisk-sh/flisk-cli/issues/4426)) |
 | `compose-kiri` | same Compose shop, images built on the runner's Docker and loaded into Kiri | ✅ |
-| `flisk-kiri` | the Flisk shop on Kiri, images built on Docker and loaded into Kiri by `docker-shim.sh` | ✅, slower first start ([#4427](https://github.com/flisk-sh/flisk/issues/4427)) |
+| `flisk-kiri` | the Flisk shop on Kiri, images built on Docker and loaded into Kiri by `docker-shim.sh` | ✅, slower first start ([#4427](https://github.com/flisk-sh/flisk-cli/issues/4427)) |
 
 `competitors/flisk-kiri/` is the same Flisk shop as `competitors/flisk/` (its `setup.sh` and `wire.mjs` are copies). Its probe hosts are `*.flisk-kiri.localhost`, because Traefik derives them from the project name. Flisk mounts Kiri's socket into Traefik with `FLISK_DOCKER_SOCKET=/run/kiri/docker.sock`. `docker-shim.sh` is bench-only: it builds on the host, saves the missing images into one tar and loads that into Kiri under a lock (skipping `ghcr.io/` and `docker.io/` refs and image ids Kiri already has, which only need a retag), and forwards everything else to Kiri. `scripts/bench/docker-shim.test.mjs` exercises it against a fake engine.
 

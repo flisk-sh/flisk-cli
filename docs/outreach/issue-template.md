@@ -3,7 +3,7 @@
 Title: `Evaluate Flisk CLI for <list name>?`
 
 ```markdown
-**Disclosure:** I maintain Flisk CLI ([flisk-sh/flisk](https://github.com/flisk-sh/flisk), MIT).
+**Disclosure:** I maintain Flisk CLI ([flisk-sh/flisk](https://github.com/flisk-sh/flisk-cli), MIT).
 
 ## What it does
 Flisk CLI runs a set of local services as Docker containers through Tilt, driven by `service.json` files (`flisk up`). It is local development orchestration, not a production deploy tool.

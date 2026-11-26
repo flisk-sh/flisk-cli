@@ -80,7 +80,7 @@ describe("flisk --help", () => {
       expect(output).toContain("--verbose");
       expect(output).toContain("Quick start:");
       expect(output).toContain("Examples:");
-      expect(output).toContain("https://github.com/flisk-sh/flisk");
+      expect(output).toContain("https://github.com/flisk-sh/flisk-cli");
     } finally {
       logSpy.mockRestore();
     }

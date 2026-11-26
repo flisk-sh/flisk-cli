@@ -13,9 +13,9 @@ Then open `http://api.shop.localhost:8080/api/orders/health`.
 
 Flisk runs local development services as plain local processes, or through Docker and Tilt for a container stack. It does not deploy to a cluster and does not replace Compose for a small stack you already maintain. Native Windows runs local-process projects; a Docker stack needs Ubuntu on WSL2.
 
-The warm demo brings 14 tiny services healthy in 4.6s on a 16 GB M1 after images existed. Not a cold boot. Separately, 100 generated `/health` stubs, about 20 lines each, became healthy through Traefik in 472s on a clean Ubuntu runner; [that fixture run](https://github.com/flisk-sh/flisk/actions/runs/36395860088) is not an ERP workload.
+The warm demo brings 14 tiny services healthy in 4.6s on a 16 GB M1 after images existed. Not a cold boot. Separately, 100 generated `/health` stubs, about 20 lines each, became healthy through Traefik in 472s on a clean Ubuntu runner; [that fixture run](https://github.com/flisk-sh/flisk-cli/actions/runs/36395860088) is not an ERP workload.
 
-- Repo: https://github.com/flisk-sh/flisk
+- Repo: https://github.com/flisk-sh/flisk-cli
 - [Quickstart](https://flisk.sh/docs/quickstart/)
 - [Comparison and known limits](../compare-honest.md)
 - [Claims registry](../claims.md)

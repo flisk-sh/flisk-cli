@@ -27,4 +27,4 @@ More: [comparison.md](../comparison.md)
 
 ---
 
-Cells describe each tool's own features as documented; "Partial" means it needs extra setup or covers part of the row. Spotted a mistake? [Open an issue](https://github.com/flisk-sh/flisk/issues/new).
+Cells describe each tool's own features as documented; "Partial" means it needs extra setup or covers part of the row. Spotted a mistake? [Open an issue](https://github.com/flisk-sh/flisk-cli/issues/new).

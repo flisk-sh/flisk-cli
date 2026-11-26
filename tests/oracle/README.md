@@ -94,7 +94,7 @@ Failures use the shared bug-memory shape (the vault fixture adds `scenario` and 
 
 ## Observations that are not failures
 
-- Known gap [#3243](https://github.com/flisk-sh/flisk/issues/3243), found by ORACLE: `flisk export render` refuses a python, go or rust
+- Known gap [#3243](https://github.com/flisk-sh/flisk-cli/issues/3243), found by ORACLE: `flisk export render` refuses a python, go or rust
   backend that `flisk resource` just scaffolded (no Dockerfile until `flisk up`). `render-exports-http-resources` tolerates that
   one message (it tags the failure `knownGap: "#3243"`), only for the resource the error names and only when that resource is a
   python, go or rust backend. The vault fixture `render-exports-http-resources-3243.json` says when the issue is fixed.

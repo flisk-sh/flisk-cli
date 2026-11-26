@@ -52,7 +52,7 @@ This writes `.mcp.json` in the project. Claude Code asks you to approve project 
 
 Docs: [setup](https://code.claude.com/docs/en/setup) · [MCP](https://code.claude.com/docs/en/mcp) · [memory](https://code.claude.com/docs/en/memory) · [skills](https://code.claude.com/docs/en/skills)
 
-**Several sessions at once.** Two or more Claude Code sessions on the same repo can overwrite each other's edits. [Run My Agents](https://github.com/flisk-sh/run-my-agents) is a Claude Code plugin that stops an edit once, with a note, when another session edited the same file in the last 10 minutes. For running several agents on one Flisk project, follow the [guide issue](https://github.com/flisk-sh/flisk/issues/3123).
+**Several sessions at once.** Two or more Claude Code sessions on the same repo can overwrite each other's edits. [Run My Agents](https://github.com/flisk-sh/run-my-agents) is a Claude Code plugin that stops an edit once, with a note, when another session edited the same file in the last 10 minutes. For running several agents on one Flisk project, follow the [guide issue](https://github.com/flisk-sh/flisk-cli/issues/3123).
 
 </td></tr>
 <tr><td><img src="../assets/tabs/agents/claude-code-bottom.acea4bfd.svg" alt="Claude Code input: Build me a small online shop with a storefront and an orders API…" width="100%" align="top"></td></tr>

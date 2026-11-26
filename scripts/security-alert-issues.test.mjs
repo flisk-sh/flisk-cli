@@ -47,7 +47,7 @@ import {
 
 const DEPENDABOT_ALERT = {
 	number: 22,
-	html_url: "https://github.com/flisk-sh/flisk/security/dependabot/22",
+	html_url: "https://github.com/flisk-sh/flisk-cli/security/dependabot/22",
 	dependency: {
 		package: { name: "vite", ecosystem: "npm" },
 		manifest_path: "cli/pnpm-lock.yaml",
@@ -85,7 +85,7 @@ virtualenv==21.14.7 \\
 // The Dependabot alert for the advisory the manifest is already clear of.
 const VIRTUALENV_ALERT = {
 	number: 27,
-	html_url: "https://github.com/flisk-sh/flisk/security/dependabot/27",
+	html_url: "https://github.com/flisk-sh/flisk-cli/security/dependabot/27",
 	dependency: {
 		package: { name: "virtualenv", ecosystem: "pip" },
 		manifest_path: "scripts/requirements-pre-commit.txt",
@@ -131,7 +131,7 @@ const VIRTUALENV_ADVISORY = {
 
 const SCANNER_ALERT = {
 	number: 456,
-	html_url: "https://github.com/flisk-sh/flisk/security/code-scanning/456",
+	html_url: "https://github.com/flisk-sh/flisk-cli/security/code-scanning/456",
 	rule: {
 		id: "CVE-2026-112942",
 		severity: "warning",
@@ -360,7 +360,7 @@ test("an existing issue is updated, not duplicated", () => {
 		state: "open",
 		body: `${markerFor("GHSA-698v-4r3x-3vcv|cli/pnpm-lock.yaml")}\n\nan older body`,
 		labels: ["security"],
-		html_url: "https://github.com/flisk-sh/flisk/issues/900",
+		html_url: "https://github.com/flisk-sh/flisk-cli/issues/900",
 	};
 	const actions = planSync(findings, [issue]);
 	assert.equal(actions.length, 1);
