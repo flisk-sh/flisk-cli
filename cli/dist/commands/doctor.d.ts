@@ -1,0 +1,26 @@
+import { Command } from "commander";
+export { checkDockerBuildCache } from "../utils/docker-build-cache.js";
+export { checkDockerFileSharing } from "../utils/docker-file-sharing.js";
+export { checkColima, checkContainerEngine, checkDockerCompose, checkDockerOperatingSystem, checkDockerRuntime, } from "../utils/doctor-container.js";
+export { checkLocalServiceDependencies, checkWorktreeEnv } from "../utils/doctor-local-deps.js";
+export { checkFliskVersion, checkLatestFliskVersion, checkPublishedBindAddress, checkWslProjectLocation, WSL2_DOCTOR_MESSAGE, } from "../utils/doctor-machine.js";
+export { checkFrontendDockerPreflight, checkGeneratedFiles, checkGeneratedProjectRuntimeAssets, checkResourceDiscovery, checkTypeScriptTypeDependencies, } from "../utils/doctor-project.js";
+export { renderDoctorOutput } from "../utils/doctor-render.js";
+export { CONTAINER_CHECK_NAMES_MAP, CONTAINER_DEPENDENT_CHECK_NAMES, type DoctorCheckFn, formatDoctorSummary, getDoctorOutcomeMessage, isContainerDependentCheck, orderDoctorResults, requiresContainerRuntime, runChecks, } from "../utils/doctor-runner.js";
+export { checkIngressPorts, checkPrivateNpmRegistry, checkTiltResourceHealth, summarizeServiceProbes, summarizeTiltBuildError, } from "../utils/doctor-runtime.js";
+export { checkContainerResourceHealth, checkContainerResourceHealthFor, checkServiceHealth, checkServiceSmoke, } from "../utils/doctor-services.js";
+export { checkStarlarkLoadExports } from "../utils/doctor-starlark.js";
+export { checkBun, checkDockerVersions, checkPackageRunner, checkTilt, } from "../utils/doctor-tools.js";
+export { checkPublicEnvSecrets } from "../utils/public-env-secrets.js";
+export { MIN_BUN_VERSION, MIN_TILT_VERSION, versionMeetsMinimum } from "../utils/tool-versions.js";
+export { NATIVE_WINDOWS_DOCTOR_MESSAGE } from "./doctor/platform.js";
+export declare const DOCTOR_FIXES: {
+    readonly dockerMissing: "See https://docs.docker.com/get-docker/";
+    readonly dockerDaemonDown: "Start Docker Desktop, OrbStack, Colima, or Kiri, then retry: flisk doctor";
+    readonly tiltMissing: "curl -fsSL https://raw.githubusercontent.com/tilt-dev/tilt/master/scripts/install.sh | bash";
+    readonly bunMissing: "curl -fsSL https://bun.sh/install | bash";
+    readonly port80: "Stop the process bound to port 80, or stop local nginx/caddy. Then: flisk doctor";
+    readonly port5432: "Stop local Postgres or change the host port. Then: flisk doctor";
+    readonly notProject: "flisk project --yes";
+};
+export declare const doctorCommand: Command;

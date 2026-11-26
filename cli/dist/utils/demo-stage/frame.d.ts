@@ -1,0 +1,84 @@
+/**
+ * Rows the frame always occupies.
+ *
+ * A fixed height is what keeps the terminal from scrolling, which matters most when the
+ * demo is recorded: a frame that grows pushes everything off the screen.
+ */
+export declare const FRAME_ROWS = 12;
+/** Where the finished frame points someone who liked the demo. */
+export declare const DEMO_STAR_URL: string;
+/** Where the finished frame points someone with a question. The invite never expires. */
+export declare const DEMO_DISCORD_URL = "discord.gg/qMu5Xn8Kaq";
+/**
+ * What the finished frame says about trust, next to the version. Each claim is in the repo: the license file, the
+ * telemetry statement and the signed-release steps in docs/security.md. The frame has a fixed height, so it is one row.
+ */
+export declare const DEMO_PROOF = "MIT \u00B7 no telemetry \u00B7 signed release: docs/security.md";
+export type DemoPhaseStatus = "pending" | "active" | "done" | "failed";
+export type DemoPhase = {
+    id: string;
+    label: string;
+    status: DemoPhaseStatus;
+    elapsedMs?: number;
+};
+export type DemoDone = {
+    /** The URLs worth putting on screen, most important first. */
+    urls: string[];
+    /** One line of facts about what was wired: "6 services · Postgres · Traefik". */
+    summary: string;
+    /** The one thing the viewer should try next. */
+    hint: string;
+    /** The CLI version, so a recording never leaves "which build is this" unanswered. */
+    version: string;
+    /** Set only on an interactive run outside CI: the Discord invite, above the star row. */
+    discordUrl?: string;
+    /** Set only on an interactive run outside CI: the repo to star, on the last row. */
+    starUrl?: string;
+};
+export type DemoState = {
+    title: string;
+    subtitle: string;
+    phases: DemoPhase[];
+    servicesReady: number;
+    servicesTotal: number;
+    servicesBuilding: number;
+    /** The setup step running before the services, e.g. "Building base images". */
+    servicesPhase?: string;
+    /** What the setup produced, e.g. "240 config files generated". */
+    detail?: string;
+    elapsedMs: number;
+    failure?: {
+        message: string;
+        fix?: string;
+        logPath?: string;
+    };
+    done?: DemoDone;
+};
+type Style = "plain" | "bold" | "dim" | "ok" | "warn" | "err";
+export type Segment = {
+    text: string;
+    style: Style;
+};
+export type FrameRow = Segment[];
+/**
+ * Control characters, including ESC, are removed from every value that reaches the frame.
+ *
+ * A repo name or an error line from git can carry ANSI sequences. Painted verbatim they
+ * can move the cursor and shred a fixed frame, which on a recording looks like the tool broke.
+ * A newline is flattened too: every cell is exactly one row tall.
+ */
+export declare function sanitizeCell(value: string): string;
+/** `0.9s`, `12.4s`, `1m 12s`. Short enough to sit in a right-aligned column. */
+export declare function formatElapsed(ms: number): string;
+/**
+ * Builds the frame as plain segments. No I/O, no clock, no terminal size.
+ *
+ * Keeping this pure is what makes the transcript snapshot-testable and the recording
+ * deterministic: the same state always paints the same twelve rows.
+ */
+export declare function renderDemoFrame(state: DemoState, columns?: number): FrameRow[];
+/** The frame as plain text lines. This is what the snapshot tests assert on. */
+export declare function frameToPlain(rows: FrameRow[]): string[];
+/** Applies color to a row. Called only at paint time, so the renderer stays testable. */
+export declare function styleRow(row: FrameRow): string;
+export {};

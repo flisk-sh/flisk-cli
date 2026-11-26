@@ -37,7 +37,7 @@ const ENGINE_BYTES = "fake engine tarball";
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
 const SIGNER =
-  "https://github.com/flisk-sh/flisk-cli/.github/workflows/release-binaries.yml@refs/heads/main";
+  "https://github.com/flisk-sh/flisk/.github/workflows/release-binaries.yml@refs/heads/main";
 
 describe("upgradeViaBinary", () => {
   let bundleStatus = 200;

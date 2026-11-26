@@ -1,0 +1,276 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { isDatabaseCapabilityEnabled } from "./capabilities.js";
+import { DATABASE_MANAGEMENT_FEATURE } from "./constants.js";
+import { dependsOnOf } from "./dependency-graph.js";
+import { DEFAULT_ALWAYS_ENABLED_INFRA } from "./project-config-defaults.js";
+import { readProjectJson } from "./project-reader.js";
+import { discoverResourcesFromRoot } from "./services.js";
+/**
+ * Shared platform Postgres start predicate.
+ *
+ * Both names mean the one shared platform Postgres Tilt resource `postgres`. So does the
+ * appName of a `database` resource (appType `database`, framework `postgres`), which declares
+ * that Postgres in a service.json (#2863).
+ * The engine start path is selection-bounded (flisk up --only); verify/doctor
+ * evaluate the project resource set they already inspect (no flisk up filter).
+ * Both surfaces use this same predicate shape over their own resource set.
+ *
+ * Feature state is read from project.json **and** the generated Tiltfile /
+ * spec.master when present, because a stock `flisk up` focus pass expands
+ * CORE_INFRA → database-management even when project.json omits it.
+ *
+ * Spec: openspec/changes/dependson-starts-platform-postgres
+ */
+export const POSTGRES_DEPENDENCY_NAMES = ["postgres", DATABASE_MANAGEMENT_FEATURE];
+const PHASE_KEYS = ["pre_alpha", "alpha", "beta", "out_of_scope"];
+export function isSharedPlatformPostgresDependency(name) {
+    return POSTGRES_DEPENDENCY_NAMES.includes(name);
+}
+/** The appNames of the `database` resources: each one names the shared platform Postgres. */
+export function databaseResourceNames(resources) {
+    return resources
+        .filter((resource) => resource.config?.appType === "database")
+        .map((resource) => resource.name);
+}
+/** True when a dependsOn name means the shared platform Postgres: one of its aliases, or a `database` resource. */
+export function namesSharedPlatformPostgres(name, databaseNames = []) {
+    return isSharedPlatformPostgresDependency(name) || databaseNames.includes(name);
+}
+function readTextIfExists(path) {
+    try {
+        return existsSync(path) ? readFileSync(path, "utf-8") : undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
+// Finds `name = [ ... ]` and returns its quoted strings. Plain string scanning, not a RegExp built from the name.
+function parseStarlarkStringList(source, name) {
+    const skipSpaces = (at) => {
+        let i = at;
+        while (i < source.length && /\s/.test(source.charAt(i)))
+            i += 1;
+        return i;
+    };
+    let from = 0;
+    for (;;) {
+        const at = source.indexOf(name, from);
+        if (at === -1)
+            return undefined;
+        let i = skipSpaces(at + name.length);
+        if (source[i] === "=") {
+            i = skipSpaces(i + 1);
+            if (source[i] === "[") {
+                const end = source.indexOf("]", i + 1);
+                if (end === -1)
+                    return undefined;
+                return [...source.slice(i + 1, end).matchAll(/"([^"]+)"|'([^']+)'/g)].map((x) => x[1] ?? x[2] ?? "");
+            }
+        }
+        from = at + name.length;
+    }
+}
+function tiltfileAlwaysEnabledInfra(projectRoot) {
+    const path = join(projectRoot, ".flisk", ".flisk-out", "Tiltfile");
+    const text = readTextIfExists(path);
+    if (!text)
+        return undefined;
+    return parseStarlarkStringList(text, "ALWAYS_ENABLED_INFRA");
+}
+function specMasterHasDatabaseManagement(projectRoot) {
+    const path = join(projectRoot, ".flisk", ".flisk-out", "spec.master");
+    const text = readTextIfExists(path);
+    if (text === undefined)
+        return undefined;
+    // PRE_ALPHA/DEFAULTS style: "database-management": True
+    return /"database-management"\s*:\s*True/.test(text);
+}
+function generatedDefaultFocusEnablesDatabaseManagement(projectRoot) {
+    const output = join(projectRoot, ".flisk", ".flisk-out");
+    const tiltfile = readTextIfExists(join(output, "Tiltfile"));
+    const spec = readTextIfExists(join(output, "spec.master"));
+    const config = readTextIfExists(join(output, "flisk-cli-ext", "discovery", "config.star"));
+    const profiles = readTextIfExists(join(output, "flisk-cli-ext", "engine", "topologies", "tilt", "config", "profiles.star"));
+    if (!tiltfile || !spec || !config || !profiles)
+        return false;
+    const preAlpha = spec.match(/PRE_ALPHA_RESOURCES\s*=\s*\{([^}]*)\}/)?.[1];
+    const coreInfra = parseStarlarkStringList(config, "CORE_INFRA");
+    return (/FOCUS_MODE\s*,\s*FOCUS_ENABLED_ALL\s*,\s*FOCUS_ENABLED_RESOURCES\s*=\s*Config\.apply_focus\(cfg\)/.test(tiltfile) &&
+        /if FOCUS_MODE and FOCUS_ENABLED_ALL\s*:/.test(tiltfile) &&
+        /"[^"]+"\s*:\s*True|'[^']+'\s*:\s*True/.test(preAlpha ?? "") &&
+        (coreInfra?.includes("postgres") ?? false) &&
+        /["']postgres["']\s*:\s*["']database-management["']/.test(config) &&
+        /for infra in CORE_INFRA_EXPORT\s*:/.test(profiles) &&
+        /needed\[INFRA_STACK_MAP_EXPORT\[infra\]\]\s*=\s*True/.test(profiles));
+}
+function projectJsonFeatureOn(projectRoot) {
+    const parsed = readProjectJson(projectRoot);
+    if (!parsed)
+        return false;
+    const phases = (parsed.phases ?? {});
+    for (const phase of PHASE_KEYS) {
+        const stacks = phases[phase]?.enabledStacks;
+        if (Array.isArray(stacks) && stacks.includes(DATABASE_MANAGEMENT_FEATURE)) {
+            return true;
+        }
+    }
+    const alwaysEnabled = parsed.always_enabled_infra ?? DEFAULT_ALWAYS_ENABLED_INFRA;
+    return Array.isArray(alwaysEnabled) && alwaysEnabled.includes(DATABASE_MANAGEMENT_FEATURE);
+}
+/**
+ * True when database-management is on for this project from project.json
+ * **or** the generated Tiltfile/spec.master when those files exist.
+ */
+export function databaseManagementEnabled(projectRoot, options) {
+    if (!isDatabaseCapabilityEnabled(projectRoot, options))
+        return false;
+    if (projectJsonFeatureOn(projectRoot))
+        return true;
+    const fromTilt = tiltfileAlwaysEnabledInfra(projectRoot);
+    if (Array.isArray(fromTilt) && fromTilt.includes(DATABASE_MANAGEMENT_FEATURE))
+        return true;
+    if (specMasterHasDatabaseManagement(projectRoot) === true)
+        return true;
+    return false;
+}
+/** Known names for unknown-dependsOn detection: discovered services/stacks + project stacks/infra. */
+function knownDependsonNames(projectRoot, resources) {
+    const known = new Set();
+    for (const name of POSTGRES_DEPENDENCY_NAMES)
+        known.add(name);
+    for (const resource of resources) {
+        known.add(resource.name);
+        if (resource.stack)
+            known.add(resource.stack);
+    }
+    const parsed = readProjectJson(projectRoot);
+    if (parsed) {
+        const phases = (parsed.phases ?? {});
+        for (const phase of PHASE_KEYS) {
+            const stacks = phases[phase]?.enabledStacks;
+            if (Array.isArray(stacks)) {
+                for (const stack of stacks)
+                    known.add(stack);
+            }
+        }
+        const alwaysEnabled = parsed.always_enabled_infra ?? DEFAULT_ALWAYS_ENABLED_INFRA;
+        if (Array.isArray(alwaysEnabled)) {
+            for (const entry of alwaysEnabled)
+                known.add(entry);
+        }
+    }
+    const fromTilt = tiltfileAlwaysEnabledInfra(projectRoot);
+    if (Array.isArray(fromTilt)) {
+        for (const entry of fromTilt)
+            known.add(entry);
+    }
+    return known;
+}
+/**
+ * Evaluate whether shared platform Postgres will start for this project.
+ *
+ * willStart = featureOn OR any inspected project resource depends on either name.
+ * Resource set is project scope (discoverResourcesFromRoot), NOT flisk up --only.
+ *
+ * Also reports focusWouldEnableDatabaseManagement so doctor/verify can warn that
+ * default focus expands CORE_INFRA → database-management even when project.json
+ * says the feature is off (the 7.1 gap).
+ */
+export function evaluateSharedPlatformPostgres(projectRoot, resources = discoverResourcesFromRoot(projectRoot), options) {
+    if (!isDatabaseCapabilityEnabled(projectRoot, options)) {
+        return {
+            featureOn: false,
+            featureOnFromProjectJson: false,
+            featureOnFromTiltfile: false,
+            featureOnFromSpecMaster: false,
+            focusWouldEnableDatabaseManagement: false,
+            dependsOnUsers: [],
+            databaseResources: [],
+            willStart: false,
+            reason: "none",
+            unknownDependsOnNames: [],
+        };
+    }
+    const featureOnFromProjectJson = projectJsonFeatureOn(projectRoot);
+    const fromTilt = tiltfileAlwaysEnabledInfra(projectRoot);
+    const featureOnFromTiltfile = Array.isArray(fromTilt) && fromTilt.includes(DATABASE_MANAGEMENT_FEATURE);
+    const featureOnFromSpecMaster = specMasterHasDatabaseManagement(projectRoot) === true;
+    const featureOn = featureOnFromProjectJson || featureOnFromTiltfile || featureOnFromSpecMaster;
+    const focusWouldEnableDatabaseManagement = !featureOnFromProjectJson && generatedDefaultFocusEnablesDatabaseManagement(projectRoot);
+    const known = knownDependsonNames(projectRoot, resources);
+    const databaseResources = databaseResourceNames(resources);
+    const dependsOnUsers = [];
+    const unknownDependsOnNames = [];
+    for (const resource of resources) {
+        const deps = dependsOnOf(resource.config);
+        let usesSharedPostgres = false;
+        for (const dep of deps) {
+            if (isSharedPlatformPostgresDependency(dep) || databaseResources.includes(dep)) {
+                usesSharedPostgres = true;
+                continue;
+            }
+            if (!known.has(dep)) {
+                unknownDependsOnNames.push({ resource: resource.name, name: dep });
+            }
+        }
+        if (usesSharedPostgres) {
+            dependsOnUsers.push(resource.name);
+        }
+    }
+    const willStart = featureOn || dependsOnUsers.length > 0 || databaseResources.length > 0;
+    let reason = "none";
+    if (featureOn) {
+        reason = "feature";
+    }
+    else if (dependsOnUsers.length > 0 || databaseResources.length > 0) {
+        reason = "dependsOn";
+    }
+    return {
+        featureOn,
+        featureOnFromProjectJson,
+        featureOnFromTiltfile,
+        featureOnFromSpecMaster,
+        focusWouldEnableDatabaseManagement,
+        dependsOnUsers,
+        databaseResources,
+        willStart,
+        reason,
+        unknownDependsOnNames,
+    };
+}
+/** Human-readable will-start / will-not-start sentence shared by doctor + verify. */
+export function sharedPlatformPostgresMessage(evaluation) {
+    const projectScopeNote = " (project resource set; flisk up may select a subset and not start Postgres)";
+    if (!evaluation.willStart) {
+        const focusNote = evaluation.focusWouldEnableDatabaseManagement
+            ? " Note: default focus/CORE_INFRA expansion would enable database-management on a typical flisk up even when project.json lists it off."
+            : "";
+        return `Shared platform Postgres will not start for this project.json/generated Tiltfile state (no database-management feature, no selected dependsOn).${focusNote}`;
+    }
+    const why = evaluation.reason === "feature"
+        ? `the database-management feature is enabled${evaluation.featureOnFromTiltfile || evaluation.featureOnFromSpecMaster
+            ? " (generated Tiltfile/spec.master)"
+            : ""}`
+        : describeSharedPostgresUsers(evaluation);
+    return `Shared platform Postgres will start because ${why}${projectScopeNote}`;
+}
+/**
+ * Why Postgres starts apart from the feature: "database resource(s) X declare it" and/or
+ * "resource(s) Y depend on postgres/database-management/X".
+ */
+export function describeSharedPostgresUsers(evaluation) {
+    const parts = [];
+    if (evaluation.databaseResources.length > 0) {
+        parts.push(`database resource(s) ${evaluation.databaseResources.join(", ")} declare it`);
+    }
+    if (evaluation.dependsOnUsers.length > 0) {
+        parts.push(`resource(s) ${evaluation.dependsOnUsers.join(", ")} depend on ${dependsOnTargets(evaluation)}`);
+    }
+    return parts.join(" and ");
+}
+function dependsOnTargets(evaluation) {
+    return ["postgres", "database-management", ...evaluation.databaseResources].join("/");
+}
