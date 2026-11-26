@@ -573,3 +573,34 @@ def test_wake_gateway_compose_builds_the_shared_image_name(tmp_path):
     block = r["yaml"].split("  wake-gateway:\n", 1)[1].split("    networks:", 1)[0]
     assert "    build: ./flisk-cli-ext/engine/assets/docker/wake-gateway\n" in block
     assert "image: flisk-wake-gateway:" in block
+
+
+def test_every_file_provider_middleware_a_router_names_is_defined(tmp_path):
+    """A router naming `<x>@file` is refused by Traefik unless the file provider defines `<x>` ("middleware \\"maintenance@file\\" does
+    not exist"), and the service then answers 404. The standalone Traefik must define each one traefik.star references."""
+    import re
+
+    referenced = set(re.findall(r"([A-Za-z0-9_-]+)@file", (NETWORKING_DIR / "traefik.star").read_text()))
+    assert referenced == {"maintenance"}, referenced
+    result = _run_starlark(
+        tmp_path,
+        """
+load('@COMPOSE/traefik_standalone.star', 'generate_maintenance_middleware', 'MAINTENANCE_MIDDLEWARE_FILE')
+r = {'file': MAINTENANCE_MIDDLEWARE_FILE, 'content': generate_maintenance_middleware()}
+""",
+    )
+    assert result["file"] == "maintenance.yml"
+    lines = result["content"].splitlines()
+    assert "http:" in lines and "  middlewares:" in lines
+    defined = {line.strip().rstrip(":") for line in lines if line.startswith("    ") and not line.startswith("     ")}
+    assert referenced <= defined
+    # Exactly one middleware type, or Traefik rejects the file (and with it every other file in the dynamic directory).
+    body = lines[lines.index("    maintenance:") + 1:]
+    assert [line.strip() for line in body if line.startswith("      ") and not line.startswith("       ")] == ["headers:"]
+
+
+def test_standalone_traefik_writes_the_maintenance_middleware_into_its_dynamic_directory():
+    source = (REPO_ROOT / "runtime" / "engine" / "topologies" / "tilt" / "resources" / "infra-loader.star").read_text()
+    loader = source[source.index("def _load_standalone_traefik"):source.index("def _load_proxy")]
+    assert 'PlatformDockerConstants.TRAEFIK_DYNAMIC_DIR_REL + "/" + MAINTENANCE_MIDDLEWARE_FILE' in loader
+    assert "generate_maintenance_middleware()" in loader
