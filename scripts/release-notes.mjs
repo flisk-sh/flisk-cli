@@ -13,7 +13,7 @@ const API = "https://api.github.com";
 
 // The paragraph Scorecard and verifiers look for, kept byte-for-byte first in the release body.
 export function checksumNotes(version) {
-	return `Signed checksums for flisk ${version}. The binaries are on https://github.com/flisk-sh/releases/releases/tag/v${version} (all releases: https://github.com/flisk-sh/releases) and the npm package is @flisk-sh/flisk@${version}. Verify with: cosign verify-blob --bundle checksums.txt.sigstore.json --certificate-identity-regexp 'https://github.com/flisk-sh/flisk/.github/workflows/(release-binaries|sign-release)\\.yml@.*' --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt`;
+	return `Signed checksums for flisk ${version}. The binaries are on https://github.com/flisk-sh/releases/releases/tag/v${version} (all releases: https://github.com/flisk-sh/releases) and the npm package is @flisk-sh/flisk@${version}. Verify with: cosign verify-blob --bundle checksums.txt.sigstore.json --certificate-identity-regexp 'https://github.com/flisk-sh/flisk-cli/.github/workflows/(release-binaries|sign-release)\\.yml@.*' --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt`;
 }
 
 // The tag directly below a version among `vX.Y.Z` tags; null when none is lower (the first release).

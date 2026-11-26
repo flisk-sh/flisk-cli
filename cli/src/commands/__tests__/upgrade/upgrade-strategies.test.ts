@@ -27,7 +27,7 @@ const upgrade = await loadUpgrade();
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
 const SIGNER =
-  "https://github.com/flisk-sh/flisk/.github/workflows/release-binaries.yml@refs/heads/main";
+  "https://github.com/flisk-sh/flisk-cli/.github/workflows/release-binaries.yml@refs/heads/main";
 
 describe("package-manager upgrade failures", () => {
   it("does not switch to the GitHub default branch when npm install fails", async () => {
@@ -384,7 +384,7 @@ describe("upgradeAllInstallations", () => {
     expect(await apiRes.json()).toEqual({ tag_name: "v1.4.0" });
 
     const sumsRes = await mockFetch(
-      "https://github.com/flisk-sh/flisk/releases/download/v1.4.0/checksums.txt",
+      "https://github.com/flisk-sh/flisk-cli/releases/download/v1.4.0/checksums.txt",
     );
     expect(sumsRes.status).toBe(200);
     expect(await sumsRes.text()).toBe(sumsText);
