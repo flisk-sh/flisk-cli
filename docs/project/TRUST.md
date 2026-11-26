@@ -39,11 +39,11 @@ Flisk is a command-line tool for **local development**. It starts an app's servi
 | Question | Answer | Evidence |
 | --- | --- | --- |
 | Vulnerability reporting | Private reports through GitHub security advisories, with acknowledgement in 3 business days, a fix target of 30 days and disclosure at 90 days at the latest. | [SECURITY.md](../../.github/SECURITY.md) |
-| Track record | Two advisories published so far (GHSA-phgf-pww4-7jxc, medium; GHSA-3hj3-f39v-j2x5, low), both fixed and disclosed. | [Security advisories](https://github.com/flisk-sh/flisk/security/advisories) |
+| Track record | Two advisories published so far (GHSA-phgf-pww4-7jxc, medium; GHSA-3hj3-f39v-j2x5, low), both fixed and disclosed. | [Security advisories](https://github.com/flisk-sh/flisk-cli/security/advisories) |
 | Threat model | Written, with each countermeasure linked to code or tests and each unchecked item marked **Not audited**. | [assurance-case.md](../assurance-case.md), [security.md](../security.md) |
 | Independent security review | **None yet.** No third-party audit or penetration test has been commissioned. A ready scope for one is in [security-review-brief.md](../security-review-brief.md). | [assurance-case.md](../assurance-case.md) |
 | Automated scanning | CodeQL, Trivy, OSV-Scanner, Semgrep, zizmor (workflows) and Dependabot on every change and nightly. | [.github/workflows](../../.github/workflows) |
-| OpenSSF Scorecard | 8.3 / 10 on 2026-11-10. | [Scorecard](https://scorecard.dev/viewer/?uri=github.com/flisk-sh/flisk) |
+| OpenSSF Scorecard | 8.3 / 10 on 2026-11-10. | [Scorecard](https://scorecard.dev/viewer/?uri=github.com/flisk-sh/flisk-cli) |
 | OpenSSF Best Practices | Self-assessment answers are kept in the repository. | [bestpractices.json](../../.github/bestpractices.json) |
 | Release integrity | Every release has SHA-256 checksums signed with Sigstore (keyless, tied to the release workflow), SLSA build provenance, and npm provenance. | [releasing.md](../releasing.md), `cosign verify-blob` command in each release's notes |
 
@@ -59,7 +59,7 @@ Flisk is a command-line tool for **local development**. It starts an app's servi
 
 ## What we would ask you to verify
 
-The same list a careful reviewer would want: founder and maintainer identities (GitHub profiles above), the legal entity behind "Flisk Landscape", who owns the premium code, and references from adopters. Questions about anything on this page go to [GitHub Discussions](https://github.com/flisk-sh/flisk/discussions) or, if private, to a security advisory.
+The same list a careful reviewer would want: founder and maintainer identities (GitHub profiles above), the legal entity behind "Flisk Landscape", who owns the premium code, and references from adopters. Questions about anything on this page go to [GitHub Discussions](https://github.com/flisk-sh/flisk-cli/discussions) or, if private, to a security advisory.
 
 ## Keeping this page honest
 

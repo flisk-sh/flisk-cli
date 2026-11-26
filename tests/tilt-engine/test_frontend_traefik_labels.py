@@ -9,7 +9,7 @@ Pins the exact label map generated for frontend services, covering:
 - Frontend with Next.js framework (omits stripprefix middleware)
 - Frontend with maintenance feature enabled (maintenance@file middleware)
 
-Spec / Issue: https://github.com/flisk-sh/flisk/issues/2411
+Spec / Issue: https://github.com/flisk-sh/flisk-cli/issues/2411
 """
 
 from __future__ import annotations

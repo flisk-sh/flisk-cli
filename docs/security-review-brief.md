@@ -37,7 +37,7 @@ Ordered by where we expect the most risk.
 
 - Build from source: `npm --prefix cli ci && npm --prefix cli run build`. Tests: `make test`.
 - A test project: `flisk demo`, or `flisk project agent-stack` for an agent stack with MCP tools, a database and messaging.
-- Report findings privately through [GitHub security advisories](https://github.com/flisk-sh/flisk/security/advisories/new). The disclosure timeline in [SECURITY.md](../.github/SECURITY.md) applies; the report is published with the fixes unless the reviewer asks otherwise.
+- Report findings privately through [GitHub security advisories](https://github.com/flisk-sh/flisk-cli/security/advisories/new). The disclosure timeline in [SECURITY.md](../.github/SECURITY.md) applies; the report is published with the fixes unless the reviewer asks otherwise.
 
 ## Reviews done
 

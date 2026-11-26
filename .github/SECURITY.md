@@ -8,7 +8,7 @@ Security fixes go into the latest release published on [npm](https://www.npmjs.c
 
 Please **do not** open a public issue for security problems.
 
-Report them privately through [GitHub security advisories](https://github.com/flisk-sh/flisk/security/advisories/new). Include:
+Report them privately through [GitHub security advisories](https://github.com/flisk-sh/flisk-cli/security/advisories/new). Include:
 
 - the Flisk version (`flisk --version`) and your OS
 - steps to reproduce

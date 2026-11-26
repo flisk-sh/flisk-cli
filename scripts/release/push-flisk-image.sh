@@ -28,7 +28,7 @@ for f in flisk-linux-amd64 flisk-linux-arm64 flisk-cli-engine.tar.gz; do
   [ -s "$assets/$f" ] || { echo "$assets/$f is missing" >&2; exit 1; }
 done
 root="$(cd "$(dirname "$0")/../.." && pwd)"
-source_url="https://github.com/flisk-sh/flisk"
+source_url="https://github.com/flisk-sh/flisk-cli"
 description="The flisk CLI with Docker, Compose and Tilt; mount /var/run/docker.sock and the project at the same path"
 # The context holds only the three assets, so nothing else from the release directory (or the repository) ends up in the image.
 context="$(mktemp -d)"

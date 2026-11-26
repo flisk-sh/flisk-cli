@@ -135,7 +135,7 @@ describe("templateTargetDir", () => {
       "tool-loop",
       "next-postgres",
     ]) {
-      expect(PROJECT_TEMPLATES[name]?.repo).toBe("https://github.com/flisk-sh/flisk.git");
+      expect(PROJECT_TEMPLATES[name]?.repo).toBe("https://github.com/flisk-sh/flisk-cli.git");
       expect(templateTargetDir(name), name).toBe(name);
     }
     const folders = Object.keys(PROJECT_TEMPLATES).map((name) => templateTargetDir(name));

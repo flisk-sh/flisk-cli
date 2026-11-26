@@ -46,5 +46,5 @@
 <text x="1013.6" y="310" xml:space="preserve" font-family="'JetBrains Mono','Hack',ui-monospace,Menlo,monospace" font-size="16" font-weight="400" fill="#edf5ff" text-anchor="start">agent_list</text>
 <text x="1013.6" y="366" xml:space="preserve" font-family="'JetBrains Mono','Hack',ui-monospace,Menlo,monospace" font-size="16" font-weight="400" fill="#edf5ff" text-anchor="start">agent_sessions</text>
 <text x="64" y="666" xml:space="preserve" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="20" font-weight="400" fill="#cfe3f7" text-anchor="start">Each tool runs the Flisk CLI on your machine and returns its JSON or text output.</text>
-<text x="64" y="740" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="16" fill="#91a8bf">github.com/flisk-sh/flisk · MIT · runs on your machine</text>
+<text x="64" y="740" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="16" fill="#91a8bf">github.com/flisk-sh/flisk-cli · MIT · runs on your machine</text>
 </svg>

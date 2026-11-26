@@ -71,11 +71,11 @@ Name APIs `<thing>-api`. In a Docker project Flisk drops the `-api` suffix in th
 
 ## Tables
 
-The Flisk convention is a separate migrator that creates and changes tables before the APIs start. `--feature prisma` scaffolds one for you (`<name>-migrator`); for other tools see [one-shot jobs](https://github.com/flisk-sh/flisk/blob/main/docs/byo.md#one-shot-jobs-migrations-seeders). For a quick prototype, creating tables with `CREATE TABLE IF NOT EXISTS` when the API starts also works; say which one you used.
+The Flisk convention is a separate migrator that creates and changes tables before the APIs start. `--feature prisma` scaffolds one for you (`<name>-migrator`); for other tools see [one-shot jobs](https://github.com/flisk-sh/flisk-cli/blob/main/docs/byo.md#one-shot-jobs-migrations-seeders). For a quick prototype, creating tables with `CREATE TABLE IF NOT EXISTS` when the API starts also works; say which one you used.
 
 ## Recipes
 
-Ready-made plans for common requests: flisk-recipe-starters (clone a working starter app), flisk-recipe-shop, flisk-recipe-saas, flisk-recipe-ai-agent and flisk-recipe-blog. More prompts by category (spreadsheets, recruiting, product management, internal tools) are in [docs/recipes/build-with-your-agent.md](https://github.com/flisk-sh/flisk/blob/main/docs/recipes/build-with-your-agent.md).
+Ready-made plans for common requests: flisk-recipe-starters (clone a working starter app), flisk-recipe-shop, flisk-recipe-saas, flisk-recipe-ai-agent and flisk-recipe-blog. More prompts by category (spreadsheets, recruiting, product management, internal tools) are in [docs/recipes/build-with-your-agent.md](https://github.com/flisk-sh/flisk-cli/blob/main/docs/recipes/build-with-your-agent.md).
 
 ## Guardrails
 

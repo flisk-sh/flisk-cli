@@ -8,7 +8,7 @@ Goal: raise flisk.sh Domain Rating (7 on 2026-11-16) with 20-40 real directory l
 |---|---|
 | Name | Flisk |
 | URL | https://flisk.sh |
-| Repo | https://github.com/flisk-sh/flisk |
+| Repo | https://github.com/flisk-sh/flisk-cli |
 | npm | https://www.npmjs.com/package/@flisk-sh/flisk |
 | Docs | https://flisk.sh/docs |
 | Discord | https://discord.gg/qMu5Xn8Kaq |

@@ -74,8 +74,8 @@ describe("project-repos utility", () => {
   describe("validateRepoUrl", () => {
     it("accepts valid SSH, HTTPS, file, and local path URLs", () => {
       expect(validateRepoUrl("git@github.com:flisk-sh/flisk.git").valid).toBe(true);
-      expect(validateRepoUrl("https://github.com/flisk-sh/flisk.git").valid).toBe(true);
-      expect(validateRepoUrl("ssh://git@github.com/flisk-sh/flisk.git").valid).toBe(true);
+      expect(validateRepoUrl("https://github.com/flisk-sh/flisk-cli.git").valid).toBe(true);
+      expect(validateRepoUrl("ssh://git@github.com/flisk-sh/flisk-cli.git").valid).toBe(true);
       expect(validateRepoUrl("file:///tmp/bare-repo.git").valid).toBe(true);
       expect(validateRepoUrl("/local/bare-repo.git").valid).toBe(true);
       expect(validateRepoUrl("./local/bare-repo.git").valid).toBe(true);

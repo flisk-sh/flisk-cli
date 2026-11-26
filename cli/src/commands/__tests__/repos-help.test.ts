@@ -16,5 +16,5 @@ it("shows configuration and examples in repos clone help", () => {
   expect(help).toContain("flisk repos clone services/orders");
   expect(help).toContain("flisk repos clone --dry-run");
   expect(help).toContain("flisk repos clone --json");
-  expect(help).toContain("https://github.com/flisk-sh/flisk/blob/main/docs/layout.md");
+  expect(help).toContain("https://github.com/flisk-sh/flisk-cli/blob/main/docs/layout.md");
 });

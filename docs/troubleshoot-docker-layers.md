@@ -174,8 +174,8 @@ For specific failure modes, reproduction cases, and step-by-step remedies for in
 
 - **[Troubleshoot L1 (base image)](troubleshoot-l1.md):** Base Alpine OS, Bun installation, upstream network timeouts, rate limits, and package repository mirrors.
 - **[Troubleshoot L2 (dependency layer)](troubleshoot-l2.md):** Manifest invalidation, cache mounts (`/cache/bun`), missing native build toolchains (`node-gyp`), and `CACHE_BUSTER` behavior.
-- **Troubleshoot L3 (builder layer):** TypeScript backend compilation failures, frontend asset bundling, and Prisma client generation (tracking issue [#915](https://github.com/flisk-sh/flisk/issues/915)).
-- **Troubleshoot L4 (runtime layer):** Non-root user permissions, port binding discrepancies (ports 3000/4000), static file serving paths in Nginx, and healthcheck probes (tracking issue [#916](https://github.com/flisk-sh/flisk/issues/916)).
+- **Troubleshoot L3 (builder layer):** TypeScript backend compilation failures, frontend asset bundling, and Prisma client generation (tracking issue [#915](https://github.com/flisk-sh/flisk-cli/issues/915)).
+- **Troubleshoot L4 (runtime layer):** Non-root user permissions, port binding discrepancies (ports 3000/4000), static file serving paths in Nginx, and healthcheck probes (tracking issue [#916](https://github.com/flisk-sh/flisk-cli/issues/916)).
 
 ---
 

@@ -252,7 +252,7 @@ EOF
       fi
       since_url="${since//:/%3A}"
       source_commit_date_url="${source_commit_date//:/%3A}"
-      printf '\n[Full Changelog](https://github.com/flisk-sh/flisk/commits/%s?since=%s&until=%s)\n' \
+      printf '\n[Full Changelog](https://github.com/flisk-sh/flisk-cli/commits/%s?since=%s&until=%s)\n' \
         "${source_commit}" "${since_url}" "${source_commit_date_url}" >> "${release_notes_file}"
     fi
   fi

@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { fileIssue, issueBody, issueTitle } from "./report-post-publish-failure.mjs";
 
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
-const RUN = "https://github.com/flisk-sh/flisk/actions/runs/42";
+const RUN = "https://github.com/flisk-sh/flisk-cli/actions/runs/42";
 
 test("issueTitle names the package and version", () => {
 	assert.equal(issueTitle("1.4.99"), "Post-publish npm smoke failed: @flisk-sh/flisk@1.4.99");

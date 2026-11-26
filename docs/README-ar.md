@@ -1,6 +1,6 @@
 # Flisk: تطبيقك بالكامل يعمل على حاسوبك بأمر واحد
 
-[![Test coverage](https://raw.githubusercontent.com/flisk-sh/flisk/main/docs/assets/coverage.svg)](https://github.com/flisk-sh/flisk/blob/main/docs/assets/coverage.svg)
+[![Test coverage](https://raw.githubusercontent.com/flisk-sh/flisk-cli/main/docs/assets/coverage.svg)](https://github.com/flisk-sh/flisk-cli/blob/main/docs/assets/coverage.svg)
 
 [English](../README.md) | [简体中文](README-zh_cn.md) | [繁體中文](README-zh_tw.md) | [日本語](README-ja.md) | [한국어](README-ko.md) | [Türkçe](README-tr.md) | [Tiếng Việt](README-vi.md) | [ไทย](README-th.md) | [Deutsch](README-de.md) | [Español](README-es.md) | [Français](README-fr.md) | [Українська](README-uk.md) | [Polski](README-pl.md) | [Português (Brasil)](README-pt-BR.md) | العربية | [فارسی](README-fa.md) | [Bahasa Indonesia](README-id.md) | [Italiano](README-it.md) | [Ελληνικά](README-el.md) | [മലയാളം](README-ml.md) | [Română](README-ro.md)
 
@@ -62,7 +62,7 @@ flisk doctor
 طرق أخرى للتثبيت: [Bun](install/bun.md) | [ملف تنفيذي جاهز لا يحتاج Node.js ولا Bun](install/binary.md) | [صورة حاوية](install/container.md). للتحديث لاحقًا استخدم `flisk upgrade`، ولتثبيت إصدار محدد راجع [الترقية وتثبيت الإصدار](upgrading.md).
 
 > [!IMPORTANT]
-> احصل على Flisk من مستودع [flisk-sh/flisk](https://github.com/flisk-sh/flisk)، أو من حزمة npm
+> احصل على Flisk من مستودع [flisk-sh/flisk](https://github.com/flisk-sh/flisk-cli)، أو من حزمة npm
 > [`@flisk-sh/flisk`](https://www.npmjs.com/package/@flisk-sh/flisk)، أو من [الموقع الرسمي](https://flisk.sh/).
 > الاسم المشابه لمستودع أو ملف README المنسوخ لا يثبت أن التنزيل رسمي.
 

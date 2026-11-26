@@ -1,6 +1,6 @@
 # Benchmark: Flisk vs Docker Compose
 
-Measured for [#3297](https://github.com/flisk-sh/flisk/issues/3297). This report provides honest, measured, and reproducible startup latency figures comparing **Flisk** (`flisk up`) against plain **Docker Compose** (`docker compose up`) across three representative application stacks under cold and warm start conditions.
+Measured for [#3297](https://github.com/flisk-sh/flisk-cli/issues/3297). This report provides honest, measured, and reproducible startup latency figures comparing **Flisk** (`flisk up`) against plain **Docker Compose** (`docker compose up`) across three representative application stacks under cold and warm start conditions.
 
 ## Executive Summary
 

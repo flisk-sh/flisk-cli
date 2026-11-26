@@ -54,7 +54,7 @@ export function buildGeneratedSection(prUrl) {
     "# Review this PR in",
     buildButtonsHtml(prUrl),
     "",
-    "<sub>Shared by [@flisk-sh](https://github.com/flisk-sh) · [flisk](https://github.com/flisk-sh/flisk) · If this helps, please ⭐ [star flisk](https://github.com/flisk-sh/flisk)</sub>",
+    "<sub>Shared by [@flisk-sh](https://github.com/flisk-sh) · [flisk](https://github.com/flisk-sh/flisk-cli) · If this helps, please ⭐ [star flisk](https://github.com/flisk-sh/flisk-cli)</sub>",
     "",
   ].join("\n");
 }

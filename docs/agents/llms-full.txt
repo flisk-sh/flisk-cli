@@ -10,7 +10,7 @@ See also the product site [llms.txt](https://flisk.sh/llms.txt).
 
 ## Quick Reference
 
-- **Repository**: https://github.com/flisk-sh/flisk
+- **Repository**: https://github.com/flisk-sh/flisk-cli
 - **Website**: https://flisk.sh/
 - **CLI Binary**: `flisk` (npm: `@flisk-sh/flisk`)
 - **Website llms.txt**: https://flisk.sh/llms.txt

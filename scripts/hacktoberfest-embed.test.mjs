@@ -24,8 +24,8 @@ test("bannerMarkup produces the expected markdown embed for a given repository",
   const explicitMarkup = bannerMarkup("flisk-sh/flisk");
   assert.equal(defaultMarkup, explicitMarkup);
 
-  const expectedSvgUrl = "https://raw.githubusercontent.com/flisk-sh/flisk/journey-map/docs/journey/hacktoberfest.svg";
-  const expectedListUrl = "https://github.com/flisk-sh/flisk/issues?q=is%3Aissue+is%3Aopen+label%3Ahacktoberfest";
+  const expectedSvgUrl = "https://raw.githubusercontent.com/flisk-sh/flisk-cli/journey-map/docs/journey/hacktoberfest.svg";
+  const expectedListUrl = "https://github.com/flisk-sh/flisk-cli/issues?q=is%3Aissue+is%3Aopen+label%3Ahacktoberfest";
 
   assert.equal(mapUrl("flisk-sh/flisk"), expectedSvgUrl);
   assert.equal(listUrl("flisk-sh/flisk"), expectedListUrl);
@@ -45,7 +45,7 @@ test("shouldEmbed accurately detects whether hacktoberfest map is already presen
   assert.equal(shouldEmbed(undefined), true);
   assert.equal(shouldEmbed("This is an issue description without map."), true);
   assert.equal(shouldEmbed(`Already contains ${MAP_PATH} in the body.`), false);
-  assert.equal(shouldEmbed("https://raw.githubusercontent.com/flisk-sh/flisk/journey-map/docs/journey/hacktoberfest.svg"), false);
+  assert.equal(shouldEmbed("https://raw.githubusercontent.com/flisk-sh/flisk-cli/journey-map/docs/journey/hacktoberfest.svg"), false);
 });
 
 test("embedMarkup embeds banner at the top of issue body for fixed input", () => {
@@ -73,7 +73,7 @@ test("embedIssues updates issues missing the map and skips issues that already h
       return JSON.stringify([
         {
           number: 101,
-          body: "Already has map: https://raw.githubusercontent.com/flisk-sh/flisk/journey-map/docs/journey/hacktoberfest.svg",
+          body: "Already has map: https://raw.githubusercontent.com/flisk-sh/flisk-cli/journey-map/docs/journey/hacktoberfest.svg",
         },
         {
           number: 102,

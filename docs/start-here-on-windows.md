@@ -9,7 +9,7 @@ Short on time? The two-service demo (`npx @flisk-sh/flisk@latest demo`) runs on 
 **One command instead:** in PowerShell, this runs steps 1 and 3 to 6 for you and checks step 2, skipping whatever is already done. Pass your repository's URL to clone it into Ubuntu as well:
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/flisk-sh/flisk/main/scripts/windows/setup-wsl.ps1))) -Repo https://github.com/<you>/<your-repository>
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/flisk-sh/flisk-cli/main/scripts/windows/setup-wsl.ps1))) -Repo https://github.com/<you>/<your-repository>
 ```
 
 It stops with one next step when something needs you: PowerShell as administrator to install Ubuntu (then a restart), or turning on Docker Desktop's WSL integration. The steps below are what it does, one by one.

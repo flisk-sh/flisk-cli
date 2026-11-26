@@ -8,7 +8,7 @@
 # against the release checksums, with no Node or Bun required. This script
 # used to clone this repo and `bun link` it instead; it now hands off to the
 # official installer so old
-#   curl -fsSL https://raw.githubusercontent.com/flisk-sh/flisk/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/flisk-sh/flisk-cli/main/install.sh | bash
 # commands keep working and every install method gets the same result.
 #
 # To work on Flisk itself, clone the repo instead (see CONTRIBUTING.md).

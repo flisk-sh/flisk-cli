@@ -11,7 +11,7 @@ stack path stays only as the fallback for manifests without `appName`.
 The executed cases run the real Starlark through Tilt's interpreter (`tilt alpha tiltfile-result`);
 the source cases keep checking the contract when the tilt CLI is not installed.
 
-Spec / Issue: https://github.com/flisk-sh/flisk/issues/392
+Spec / Issue: https://github.com/flisk-sh/flisk-cli/issues/392
 """
 
 from __future__ import annotations

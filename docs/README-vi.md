@@ -1,6 +1,6 @@
 # Flisk: toàn bộ ứng dụng của bạn chạy trên máy tính của bạn chỉ với một lệnh
 
-[![Test coverage](https://raw.githubusercontent.com/flisk-sh/flisk/main/docs/assets/coverage.svg)](https://github.com/flisk-sh/flisk/blob/main/docs/assets/coverage.svg)
+[![Test coverage](https://raw.githubusercontent.com/flisk-sh/flisk-cli/main/docs/assets/coverage.svg)](https://github.com/flisk-sh/flisk-cli/blob/main/docs/assets/coverage.svg)
 
 [English](../README.md) | [简体中文](README-zh_cn.md) | [繁體中文](README-zh_tw.md) | [日本語](README-ja.md) | [한국어](README-ko.md) | [Türkçe](README-tr.md) | Tiếng Việt | [ไทย](README-th.md) | [Deutsch](README-de.md) | [Español](README-es.md) | [Français](README-fr.md) | [Українська](README-uk.md) | [Polski](README-pl.md) | [Português (Brasil)](README-pt-BR.md) | [العربية](README-ar.md) | [فارسی](README-fa.md) | [Bahasa Indonesia](README-id.md) | [Italiano](README-it.md) | [Ελληνικά](README-el.md) | [മലയാളം](README-ml.md) | [Română](README-ro.md)
 
@@ -62,7 +62,7 @@ flisk doctor
 Các cách cài đặt khác: [Bun](install/bun.md) | [binary dựng sẵn, không cần Node.js hay Bun](install/binary.md) | [container image](install/container.md). Để cài đặt qua GitHub Packages thay vì npm registry công cộng: [cài đặt từ GitHub Packages](github-packages.md). Để cập nhật sau này dùng `flisk upgrade` (hoặc bí danh `flisk update`); để ghim một phiên bản, xem [nâng cấp và ghim phiên bản](upgrading.md).
 
 > [!IMPORTANT]
-> Chỉ tải Flisk từ repository [flisk-sh/flisk](https://github.com/flisk-sh/flisk), từ gói npm
+> Chỉ tải Flisk từ repository [flisk-sh/flisk](https://github.com/flisk-sh/flisk-cli), từ gói npm
 > [`@flisk-sh/flisk`](https://www.npmjs.com/package/@flisk-sh/flisk), hoặc từ [trang web chính thức](https://flisk.sh/).
 > Hãy dùng các liên kết cài đặt từ những nguồn chính thức này. Một repository có tên tương tự
 > hoặc một README bị sao chép không chứng minh bản tải xuống là chính thức.

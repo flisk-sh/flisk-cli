@@ -12,11 +12,11 @@
   ],
   "homepage": "https://flisk.sh",
   "bugs": {
-    "url": "https://github.com/flisk-sh/flisk/issues"
+    "url": "https://github.com/flisk-sh/flisk-cli/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/flisk-sh/flisk.git",
+    "url": "git+https://github.com/flisk-sh/flisk-cli.git",
     "directory": "cli"
   },
   "license": "MIT",

@@ -874,4 +874,4 @@ flisk logs -s orders-api --since 5m --json
 flisk down --prune-networks
 ```
 
-More in [recipes](recipes/) and [CI](ci.md). Found a missing flag? [Open an issue](https://github.com/flisk-sh/flisk/issues/new). 🙌
+More in [recipes](recipes/) and [CI](ci.md). Found a missing flag? [Open an issue](https://github.com/flisk-sh/flisk-cli/issues/new). 🙌
