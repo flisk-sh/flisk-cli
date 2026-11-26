@@ -1,0 +1,283 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
+import { isDatabaseCapabilityEnabled, isGatewayEnabled } from "./capabilities.js";
+import { toComposeProjectName } from "./compose-project-name.js";
+import { projectEnvLookup } from "./extra-port-publish.js";
+import { runCachedHostCommand, SHARED_DOCKER_PS, } from "./host-command-cache.js";
+import { createHostPortPlan, GATEWAY_DISABLED_REASON, isHostPortAvailable, PREFERRED_HOST_PORTS, withoutGatewayPorts, } from "./host-port-plan.js";
+import { dockerPublishedPorts } from "./port-owner.js";
+import { readProjectNameWithFallback } from "./project-reader.js";
+import { discoverResourcesFromRoot } from "./services.js";
+import { extraPortsOf } from "./status-ports.js";
+import { findTiltPortOwner, isForeignTilt } from "./tilt-port-owner.js";
+import { findOnPath } from "./which.js";
+const CONFIG_PATH = join(".flisk", ".flisk-out", "host-ports.json");
+/** Run the `docker ps` that the ingress check shares, once per cache. */
+export function readSharedDockerPs(cache) {
+    const { args, shellCommand, timeoutMs } = SHARED_DOCKER_PS;
+    const options = { encoding: "utf-8", timeout: timeoutMs };
+    // Resolve the binary first: a bare `docker` would be searched along the caller's PATH.
+    return runCachedHostCommand(cache, shellCommand, options, () => execFileSync(findOnPath("docker") ?? "docker", [...args], options));
+}
+/** Convert `name<TAB>image<TAB>ports` lines to the `name|ports` lines isDockerPortOwnedByProject reads. */
+export function toNamePortsLines(tabbed) {
+    return tabbed
+        .split("\n")
+        .map((line) => {
+        const [name = "", , ports = ""] = line.split("\t");
+        return `${name}|${ports}`;
+    })
+        .join("\n");
+}
+export function isDockerPortOwnedByProject(dockerPs, projectPrefix, port) {
+    return dockerPs.split("\n").some((line) => {
+        const [name = "", ports = ""] = line.split("|");
+        const containerName = name.toLowerCase();
+        const prefix = projectPrefix.toLowerCase();
+        return ((containerName.startsWith(`${prefix}_`) || containerName.startsWith(`${prefix}-`)) &&
+            ports.includes(`:${port}->`));
+    });
+}
+export function readSavedHostPortPlan(projectRoot) {
+    const path = join(projectRoot, CONFIG_PATH);
+    if (!existsSync(path))
+        return null;
+    try {
+        const value = JSON.parse(readFileSync(path, "utf-8"));
+        if (!value || typeof value !== "object")
+            return null;
+        const plan = value;
+        if (!Number.isInteger(plan.ingressHttp) ||
+            !Number.isInteger(plan.ingressHttps) ||
+            !Number.isInteger(plan.postgres) ||
+            !plan.requested ||
+            !plan.explicit ||
+            !plan.reason)
+            return null;
+        if (plan.tiltUi !== undefined &&
+            (!Number.isInteger(plan.tiltUi) || plan.tiltUi < 1 || plan.tiltUi > 65535)) {
+            delete plan.tiltUi;
+        }
+        return plan;
+    }
+    catch {
+        return null;
+    }
+}
+/** Reads the saved Tilt UI port selected during the last successful or ongoing `flisk up`. */
+export function readSavedTiltPort(projectRoot) {
+    const plan = readSavedHostPortPlan(projectRoot);
+    return plan?.tiltUi ?? null;
+}
+export function writeSavedHostPortPlan(projectRoot, plan) {
+    const path = join(projectRoot, CONFIG_PATH);
+    mkdirSync(join(projectRoot, ".flisk", ".flisk-out"), { recursive: true });
+    // Traefik bind-mounts this directory. If it is missing the daemon creates it as root:root 0750 (Kiri does), and the classic
+    // builder then cannot stat it while reading the build context. Creating it here keeps it owned by the user.
+    mkdirSync(join(projectRoot, ".flisk", ".flisk-out", "traefik-dynamic"), { recursive: true });
+    writeFileSync(path, `${JSON.stringify(plan, null, 2)}\n`, { encoding: "utf-8", mode: 0o600 });
+}
+export function exportHostPortPlan(plan) {
+    process.env.FLISK_HTTP_PORT = String(plan.ingressHttp);
+    process.env.FLISK_HTTPS_PORT = String(plan.ingressHttps);
+    process.env.FLISK_POSTGRES_PORT = String(plan.postgres);
+}
+const COMPOSE_WORKING_DIR_LABEL = "com.docker.compose.project.working_dir";
+/**
+ * True when a container whose Compose working directory is inside this project publishes the port. A container-name prefix is not
+ * enough: flisk_shop_ also matches the containers of a different project called flisk-shop-extra. Compose records the directory each
+ * project was started from, so that identifies the project exactly. Containers without the label never count.
+ */
+export function isPortHeldByProjectContainers(dockerPs, projectRoot, port) {
+    const roots = new Set([resolve(projectRoot)]);
+    try {
+        roots.add(realpathSync(projectRoot));
+    }
+    catch {
+        // The project root is already known to exist; keep the unresolved path.
+    }
+    return dockerPs.split("\n").some((line) => {
+        const [, ports = "", workingDir = ""] = line.split("|");
+        if (!workingDir || !ports.includes(`:${port}->`))
+            return false;
+        return [...roots].some((root) => workingDir === root || workingDir.startsWith(`${root}${sep}`));
+    });
+}
+/**
+ * The HTTP ingress port to probe while a stack is running. getHostPortPlan moves a saved fallback port (8080) back to the
+ * preferred one (80) as soon as that is free, which is right for the next `flisk up` but wrong for a running stack: Traefik is still
+ * bound to the saved port, so probing the planned one finds nothing and every runtime check is skipped. When this project's own
+ * containers hold the saved port, probe that one.
+ */
+export function resolveRuntimeIngressPort(projectRoot, plannedPort, readDockerPs = () => execFileSync("docker", ["ps", "--format", `{{.Names}}|{{.Ports}}|{{.Label "${COMPOSE_WORKING_DIR_LABEL}"}}`], { encoding: "utf-8", timeout: 5000 })) {
+    const saved = readSavedHostPortPlan(projectRoot);
+    if (!saved || saved.ingressHttp === plannedPort)
+        return plannedPort;
+    try {
+        if (isPortHeldByProjectContainers(readDockerPs(), projectRoot, saved.ingressHttp)) {
+            return saved.ingressHttp;
+        }
+    }
+    catch {
+        // Docker unavailable: keep the planned port.
+    }
+    return plannedPort;
+}
+/**
+ * Resolves the Tilt UI port for runtime inspection commands (`status`, `logs`, `restart`).
+ * Prefers an active Tilt owned by this project or recorded in host-ports.json.
+ * If the default port is held by another project's Tilt, ignores it and falls back to
+ * this project's saved port or reports foreign isolation.
+ */
+export function resolveRuntimeTiltPort(projectRoot, options = {}) {
+    const ownerOf = options.ownerOf ?? findTiltPortOwner;
+    const savedPort = readSavedTiltPort(projectRoot);
+    if (options.envPort !== undefined && options.envPort !== "") {
+        const parsed = Number(options.envPort);
+        if (Number.isInteger(parsed) && parsed > 0 && parsed <= 65535) {
+            const owner = ownerOf(parsed);
+            if (owner && isForeignTilt(owner, projectRoot))
+                return null;
+            return parsed;
+        }
+        return null;
+    }
+    if (savedPort !== null) {
+        const owner = ownerOf(savedPort);
+        if (owner && isForeignTilt(owner, projectRoot)) {
+            // Saved port has been taken by a foreign project; do not query it
+        }
+        else {
+            return savedPort;
+        }
+    }
+    const defaultPort = 10350;
+    const defaultOwner = ownerOf(defaultPort);
+    if (defaultOwner && isForeignTilt(defaultOwner, projectRoot)) {
+        return null;
+    }
+    return defaultPort;
+}
+/** Host ports the project's bring-your-own services publish through `extraPorts`. Empty when discovery fails. */
+function reservedExtraPorts(projectRoot) {
+    const lookup = projectEnvLookup(projectRoot);
+    try {
+        return new Set(discoverResourcesFromRoot(projectRoot).flatMap((resource) => extraPortsOf(resource, lookup).map((port) => port.hostPort)));
+    }
+    catch {
+        return new Set();
+    }
+}
+/**
+ * Reuse this project's last selection when its ports are still free or held by its own containers. Only the ports of the
+ * capabilities that are on are planned: with the gateway off, HTTP and HTTPS are never probed (no Traefik binds them).
+ */
+export async function getHostPortPlan(projectRoot, options = {}) {
+    const dbEnabled = isDatabaseCapabilityEnabled(projectRoot, options);
+    const gatewayEnabled = isGatewayEnabled(projectRoot, options);
+    const plan = await planHostPorts(projectRoot, { ...options, dbEnabled, gatewayEnabled });
+    return gatewayEnabled ? plan : withoutGatewayPorts(plan);
+}
+async function planHostPorts(projectRoot, options) {
+    const { dbEnabled, gatewayEnabled } = options;
+    const savedPlan = readSavedHostPortPlan(projectRoot);
+    // A plan saved while the gateway was off holds no real HTTP/HTTPS choice: plan again once the gateway is back on.
+    const saved = gatewayEnabled && savedPlan?.reason.ingressHttp === GATEWAY_DISABLED_REASON ? null : savedPlan;
+    const overrideKeys = [
+        ...(gatewayEnabled ? ["FLISK_HTTP_PORT", "FLISK_HTTPS_PORT"] : []),
+        ...(dbEnabled ? ["FLISK_POSTGRES_PORT"] : []),
+    ];
+    // The shell wins, then the project .env, like Compose and `extraPorts` `publish` (#2971).
+    const lookup = projectEnvLookup(projectRoot);
+    const env = { ...process.env };
+    for (const key of ["FLISK_HTTP_PORT", "FLISK_HTTPS_PORT", "FLISK_POSTGRES_PORT"]) {
+        const value = lookup(key);
+        if (value !== undefined)
+            env[key] = value;
+    }
+    const hasOverride = overrideKeys.some((key) => env[key]);
+    // Dry-run must not call Docker. A saved plan is the best representation of
+    // the current landscape in that mode; explicit overrides are still planned.
+    if (options.inspectDocker === false && saved && !hasOverride)
+        return saved;
+    const prefix = toComposeProjectName(readProjectNameWithFallback(projectRoot)).toLowerCase();
+    let dockerPs = "";
+    let dockerPsTabbed = "";
+    if (options.inspectDocker !== false) {
+        try {
+            dockerPsTabbed = readSharedDockerPs(options.commandCache);
+            dockerPs = toNamePortsLines(dockerPsTabbed);
+        }
+        catch {
+            // If Docker is down, reuse only when host binds are still available.
+        }
+    }
+    const ownedByProject = (port) => isDockerPortOwnedByProject(dockerPs, prefix, port);
+    const isPortFree = options.isPortFree ?? isHostPortAvailable;
+    // A bring-your-own service's `extraPorts` claim their host ports for its own container (a proxy on 80 and 443), so Traefik
+    // must not take them, even while that container holds them and they read as this project's own.
+    const reserved = reservedExtraPorts(projectRoot);
+    // A port another project's container publishes is never free, no matter what the loopback probes say: on macOS a
+    // bind under 1024 fails with EACCES for everyone, and the Colima/Lima forwarder is no listener a connect() sees.
+    // This is the same `docker ps` owner lookup the doctor checks use, so plan and doctor cannot disagree (#4216).
+    const heldPorts = new Map();
+    for (const [port, holder] of dockerPublishedPorts(dockerPsTabbed)) {
+        if (!ownedByProject(port))
+            heldPorts.set(port, `container ${holder.container}`);
+    }
+    const isAvailable = async (port) => !reserved.has(port) &&
+        !heldPorts.has(port) &&
+        ((await isPortFree(port)) || ownedByProject(port));
+    const replan = () => createHostPortPlan({
+        isAvailable,
+        heldPorts,
+        database: dbEnabled,
+        gateway: gatewayEnabled,
+        capabilities: options.capabilities,
+        env,
+    });
+    if (saved && !hasOverride) {
+        const checkedPorts = [
+            ...(gatewayEnabled ? [saved.ingressHttp, saved.ingressHttps] : []),
+            ...(dbEnabled ? [saved.postgres] : []),
+        ];
+        for (const port of checkedPorts) {
+            if (!(await isAvailable(port)))
+                return replan();
+        }
+        // A plan saved on a fallback port (8080) moves back to the preferred one (80)
+        // once that is free, so URLs lose the port without deleting host-ports.json.
+        for (const [key, preferred] of Object.entries(PREFERRED_HOST_PORTS)) {
+            if (!dbEnabled && key === "postgres")
+                continue;
+            if (!gatewayEnabled && (key === "ingressHttp" || key === "ingressHttps"))
+                continue;
+            const savedPort = saved[key];
+            if (preferred !== undefined && savedPort !== preferred && (await isAvailable(preferred))) {
+                return replan();
+            }
+        }
+        return saved;
+    }
+    return replan();
+}
+/** The host ports a plan places for the capabilities that are on, as `HTTP 80, HTTPS 443, Postgres 5432`. */
+export function describeHostPortPlan(plan, caps) {
+    const parts = [
+        ...(caps.gateway ? [`HTTP ${plan.ingressHttp}`, `HTTPS ${plan.ingressHttps}`] : []),
+        ...(caps.database ? [`Postgres ${plan.postgres}`] : []),
+    ];
+    return parts.length > 0 ? parts.join(", ") : "No gateway or database host ports needed";
+}
+/** What to set when the host ports for the capabilities that are on cannot be placed. */
+export function hostPortPlanFix(caps) {
+    if (caps.gateway && !caps.database) {
+        return "Set FLISK_HTTP_PORT or FLISK_HTTPS_PORT to available host ports.";
+    }
+    if (caps.database && !caps.gateway)
+        return "Set FLISK_POSTGRES_PORT to an available host port.";
+    return "Set FLISK_HTTP_PORT, FLISK_HTTPS_PORT, or FLISK_POSTGRES_PORT to available host ports.";
+}

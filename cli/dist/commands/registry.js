@@ -1,0 +1,73 @@
+import { agentCommand } from "./agent.js";
+import { completionCommand } from "./completion.js";
+import { configCommand } from "./config.js";
+import { connectCommand } from "./connect.js";
+import { createCommand } from "./create.js";
+import { distributeCommand } from "./distribute.js";
+import { doctorCommand } from "./doctor.js";
+import { downCommand } from "./down.js";
+import { ejectCommand } from "./eject.js";
+import { exportCommand } from "./export.js";
+import { importCommand } from "./import.js";
+import { logsCommand } from "./logs.js";
+import { maintainersCommand } from "./maintainers.js";
+import { mcpCommand } from "./mcp.js";
+import { networksCommand } from "./networks.js";
+import { openCommand } from "./open.js";
+import { osCommand } from "./os.js";
+import { projectCommand } from "./project.js";
+import { projectsCommand } from "./projects.js";
+import { reposCommand } from "./repos.js";
+import { resourceCommand } from "./resource.js";
+import { resourcesCommand } from "./resources.js";
+import { restartCommand } from "./restart.js";
+import { runServiceCommand } from "./run.js";
+import { runtimeCommand } from "./runtime.js";
+import { stackCommand } from "./stack.js";
+import { stacksCommand } from "./stacks.js";
+import { statusCommand } from "./status.js";
+import { toolCommand } from "./tool.js";
+import { uiCommand } from "./ui.js";
+import { upCommand } from "./up.js";
+import { upgradeCommand } from "./upgrade.js";
+import { versionCommand } from "./version.js";
+import { waitCommand } from "./wait.js";
+/** Every command the CLI registers, in the order `flisk --help` lists them. */
+export function getRegisteredCommands() {
+    return [
+        stacksCommand,
+        resourcesCommand,
+        projectsCommand,
+        upCommand,
+        downCommand,
+        mcpCommand,
+        connectCommand,
+        logsCommand,
+        waitCommand,
+        ejectCommand,
+        exportCommand,
+        importCommand,
+        openCommand,
+        statusCommand,
+        stackCommand,
+        resourceCommand,
+        runtimeCommand,
+        projectCommand,
+        createCommand,
+        toolCommand,
+        configCommand,
+        uiCommand,
+        osCommand,
+        versionCommand,
+        maintainersCommand,
+        doctorCommand,
+        completionCommand,
+        upgradeCommand,
+        networksCommand,
+        agentCommand,
+        restartCommand,
+        runServiceCommand,
+        distributeCommand,
+        reposCommand,
+    ];
+}

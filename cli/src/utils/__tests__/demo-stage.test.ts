@@ -143,7 +143,10 @@ describe("renderDemoFrame", () => {
       version: "1.4.20",
     };
     const withStar = frameToPlain(
-      renderDemoFrame(baseState({ done: { ...done, starUrl: "github.com/flisk-sh/flisk-cli" } }), 80),
+      renderDemoFrame(
+        baseState({ done: { ...done, starUrl: "github.com/flisk-sh/flisk-cli" } }),
+        80,
+      ),
     );
     expect(withStar).toHaveLength(FRAME_ROWS);
     expect(withStar.join("\n")).toContain("Like it? A star helps: github.com/flisk-sh/flisk-cli");

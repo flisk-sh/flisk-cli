@@ -1,0 +1,243 @@
+import { type InfraFramework, type InfraResourceType, type PresetResourceType } from "../types/index.js";
+/**
+ * Infrastructure frameworks: `flisk resource <name> --type database --framework redis|qdrant|mlflow|...`,
+ * `--type queue --framework nats|rabbitmq`, `--type storage --framework minio`, `--type mail --framework mailpit` and
+ * `--type payment --framework stripe-mock` (the shared Postgres is `--type database` on its own). A preset's `type` must be the type that lists it in types/index.ts. Each is a pinned image
+ * with a readiness probe, a named data volume that `flisk down` keeps, and `provides`: the connection settings every
+ * service that lists it in `dependsOn` gets in its environment. Services in the stack reach it on the Docker network by
+ * name. A framework with a web UI also publishes it on 127.0.0.1 only (`extraPorts`); two resources of one framework
+ * collide on that host port, so change `hostPort` in one service.json. The service.json is a plain bring-your-own one
+ * with `framework` recorded: the engine does not know these frameworks.
+ */
+export interface InfraPreset {
+    /** The resource type that offers it. */
+    type: InfraResourceType;
+    /** What it is, for `flisk resource --help` and the created message. */
+    description: string;
+    image: string;
+    /** The port the image listens on inside the container. */
+    port: number;
+    /** service.json `healthCheck`: a TCP port or a command, since none of these serves the Flisk health route. */
+    healthCheck: {
+        port: number;
+    } | {
+        command: string[];
+    };
+    /** Where the image keeps its data; mounted from the named volume `<name>-data`. Left out for a stateless emulator. */
+    dataPath?: string;
+    /** Non-secret settings for the image itself (service.json `params`). */
+    params?: Record<string, string>;
+    /** service.json `container.command` (`{name}` replaced), for an image whose default command does not start the server the way Flisk needs. */
+    command?: string[];
+    /** service.json `container.memory`, for an image that needs more than Flisk's default 512M. */
+    memory?: string;
+    /** The web UI, published on 127.0.0.1 (service.json `extraPorts`). */
+    uiPorts?: number[];
+    /** service.json `provides`, with `{name}` replaced by the resource name (its host name on the Docker network). */
+    provides: Record<string, string>;
+}
+export declare const INFRA_PRESETS: {
+    readonly redis: {
+        readonly type: "database";
+        readonly description: "Redis cache and job queue";
+        readonly image: "redis:7.4-alpine";
+        readonly port: 6379;
+        readonly healthCheck: {
+            readonly command: ["redis-cli", "ping"];
+        };
+        readonly dataPath: "/data";
+        readonly provides: {
+            readonly REDIS_URL: "redis://{name}:6379";
+        };
+    };
+    readonly qdrant: {
+        readonly type: "database";
+        readonly description: "Qdrant vector database";
+        readonly image: "qdrant/qdrant:v1.12.5";
+        readonly port: 6333;
+        readonly healthCheck: {
+            readonly port: 6333;
+        };
+        readonly dataPath: "/qdrant/storage";
+        readonly uiPorts: [6333];
+        readonly provides: {
+            readonly QDRANT_URL: "http://{name}:6333";
+        };
+    };
+    readonly minio: {
+        readonly type: "storage";
+        readonly description: "MinIO S3-compatible object storage";
+        readonly image: "pgsty/minio:RELEASE.2026-08-04T00-00-00Z";
+        readonly port: 9000;
+        readonly healthCheck: {
+            readonly port: 9000;
+        };
+        readonly dataPath: "/data";
+        readonly command: ["server", "/data", "--console-address", ":9001"];
+        readonly uiPorts: [9001];
+        readonly params: {
+            readonly MINIO_ROOT_USER: "minioadmin";
+            readonly MINIO_ROOT_PASSWORD: "minioadmin";
+        };
+        readonly provides: {
+            readonly MINIO_ENDPOINT: "http://{name}:9000";
+            readonly AWS_ENDPOINT_URL_S3: "http://{name}:9000";
+            readonly AWS_ACCESS_KEY_ID: "minioadmin";
+            readonly AWS_SECRET_ACCESS_KEY: "minioadmin";
+        };
+    };
+    readonly mlflow: {
+        readonly type: "database";
+        readonly description: "MLflow tracking server";
+        readonly image: "ghcr.io/mlflow/mlflow:v3.17.2";
+        readonly port: 5000;
+        readonly healthCheck: {
+            readonly port: 5000;
+        };
+        readonly dataPath: "/data";
+        readonly command: ["sh", "-c", string];
+        readonly memory: "3g";
+        readonly uiPorts: [5000];
+        readonly provides: {
+            readonly MLFLOW_TRACKING_URI: "http://{name}:5000";
+        };
+    };
+    readonly mysql: {
+        readonly type: "database";
+        readonly description: "MySQL database";
+        readonly image: "mysql:8.4";
+        readonly port: 3306;
+        readonly healthCheck: {
+            readonly command: ["mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-pflisk"];
+        };
+        readonly dataPath: "/var/lib/mysql";
+        readonly memory: "1g";
+        readonly params: {
+            readonly MYSQL_ROOT_PASSWORD: "flisk";
+            readonly MYSQL_DATABASE: "app";
+        };
+        readonly provides: {
+            readonly MYSQL_URL: "mysql://root:flisk@{name}:3306/app";
+        };
+    };
+    readonly mongodb: {
+        readonly type: "database";
+        readonly description: "MongoDB document database";
+        readonly image: "mongo:8.0.38";
+        readonly port: 27017;
+        readonly healthCheck: {
+            readonly command: ["mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"];
+        };
+        readonly dataPath: "/data/db";
+        readonly memory: "1g";
+        readonly provides: {
+            readonly MONGODB_URL: "mongodb://{name}:27017";
+        };
+    };
+    readonly clickhouse: {
+        readonly type: "database";
+        readonly description: "ClickHouse analytics database";
+        readonly image: "clickhouse/clickhouse-server:25.8-alpine";
+        readonly port: 8123;
+        readonly healthCheck: {
+            readonly port: 8123;
+        };
+        readonly dataPath: "/var/lib/clickhouse";
+        readonly uiPorts: [8123];
+        readonly params: {
+            readonly CLICKHOUSE_DB: "app";
+            readonly CLICKHOUSE_USER: "default";
+            readonly CLICKHOUSE_PASSWORD: "flisk";
+        };
+        readonly provides: {
+            readonly CLICKHOUSE_URL: "http://{name}:8123";
+            readonly CLICKHOUSE_USER: "default";
+            readonly CLICKHOUSE_PASSWORD: "flisk";
+            readonly CLICKHOUSE_DB: "app";
+        };
+    };
+    readonly nats: {
+        readonly type: "queue";
+        readonly description: "NATS message queue with JetStream";
+        readonly image: "nats:2.11.8-alpine";
+        readonly port: 4222;
+        readonly healthCheck: {
+            readonly port: 4222;
+        };
+        readonly dataPath: "/data";
+        readonly command: ["-js", "-sd", "/data", "-m", "8222"];
+        readonly provides: {
+            readonly NATS_URL: "nats://{name}:4222";
+        };
+    };
+    readonly rabbitmq: {
+        readonly type: "queue";
+        readonly description: "RabbitMQ message broker";
+        readonly image: "rabbitmq:4.4-management-alpine";
+        readonly port: 5672;
+        readonly healthCheck: {
+            readonly command: ["rabbitmq-diagnostics", "-q", "ping"];
+        };
+        readonly dataPath: "/var/lib/rabbitmq";
+        readonly uiPorts: [15672];
+        readonly params: {
+            readonly RABBITMQ_NODENAME: "rabbit@localhost";
+            readonly RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "-rabbit loopback_users []";
+        };
+        readonly provides: {
+            readonly AMQP_URL: "amqp://guest:guest@{name}:5672";
+        };
+    };
+    readonly mailpit: {
+        readonly type: "mail";
+        readonly description: "Mailpit SMTP server and inbox (stands in for Resend, SendGrid, Postmark, SES)";
+        readonly image: "axllent/mailpit:v1.33.1";
+        readonly port: 1025;
+        readonly healthCheck: {
+            readonly port: 1025;
+        };
+        readonly dataPath: "/data";
+        readonly params: {
+            readonly MP_DATABASE: "/data/mailpit.db";
+        };
+        readonly uiPorts: [8025];
+        readonly provides: {
+            readonly SMTP_URL: "smtp://{name}:1025";
+            readonly SMTP_HOST: "{name}";
+            readonly SMTP_PORT: "1025";
+            readonly MAILPIT_API_URL: "http://{name}:8025";
+        };
+    };
+    readonly "stripe-mock": {
+        readonly type: "payment";
+        readonly description: "stripe-mock Stripe API emulator (stateless: answers every call from the OpenAPI spec)";
+        readonly image: "stripe/stripe-mock:v0.206.0";
+        readonly port: 12111;
+        readonly healthCheck: {
+            readonly port: 12111;
+        };
+        readonly provides: {
+            readonly STRIPE_API_BASE: "http://{name}:12111";
+            readonly STRIPE_SECRET_KEY: "sk_test_flisklocal";
+        };
+    };
+};
+/** The `--type ... --framework ...` that replaces a removed preset type, or undefined when `type` was never one. */
+export declare function replacementForRemovedType(type: string): string | undefined;
+export declare function isInfraFramework(value: unknown): value is InfraFramework;
+/**
+ * The preset `--type database|queue|storage` with `--framework` selects, or undefined for the shared Postgres (`--type
+ * database` with no framework or `postgres`). A preset type without `--framework` runs its default (a queue is NATS, storage
+ * is MinIO). Throws nothing: assertInfraFramework reports a wrong combination.
+ */
+export declare function infraFrameworkFor(type: string, framework: string | undefined): InfraFramework | undefined;
+/** True for a `--type` whose every framework is a preset container (`queue`, `storage`). */
+export declare function isPresetResourceType(type: string): type is PresetResourceType;
+/** True for a `--type` that offers infrastructure frameworks: `database` and the preset types. */
+export declare function isInfraResourceType(type: string): type is InfraResourceType;
+/** The frameworks `type` accepts, in the order the help lists them. */
+export declare function frameworksOfType(type: string): readonly string[];
+/** The framework a preset type runs when `--framework` is left out; undefined for `database` (the shared Postgres). */
+export declare function defaultFrameworkOfType(type: string): string | undefined;
+/** The service.json of an infrastructure preset. `image` replaces the pinned image (for example redis:8-alpine). */
+export declare function createInfraServiceJson(name: string, stack: string, framework: InfraFramework, image?: string): Record<string, unknown>;

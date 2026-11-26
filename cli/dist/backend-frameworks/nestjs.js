@@ -1,0 +1,64 @@
+// Copyright (c) 2026 Flisk Landscape contributors
+// SPDX-License-Identifier: MIT
+import { LOCAL_FRONTEND_CORS_REASON, localFrontendOriginConst } from "../utils/generated-cors.js";
+import { portFromEnv } from "../utils/generated-port.js";
+export function getNestIndexTemplate(name, _durability, options = {}) {
+    return `import 'reflect-metadata';
+import { Controller, Get, Module } from '@nestjs/common';
+import { NestFactory } from '@nestjs/core';
+
+// ${LOCAL_FRONTEND_CORS_REASON}
+${localFrontendOriginConst()}
+
+@Controller()
+class AppController {
+  // Health check: Flisk uses this endpoint to check service health
+  @Get('health')
+  health() {
+    return { status: 'ok', service: '${name}' };
+  }
+
+  @Get('health/live')
+  live() {
+    return { status: 'alive', timestamp: Date.now() };
+  }
+
+  @Get()
+  root() {
+    return { service: '${name}', version: '1.0.0', endpoints: ['/health', '/health/live'] };
+  }
+}
+
+@Module({ controllers: [AppController] })
+class AppModule {}
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule, { logger: ['error', 'warn', 'log'] });
+${portFromEnv("port", "  ", options.port)}
+
+  app.enableCors({ origin: LOCAL_FRONTEND_ORIGIN });
+
+  // Bind beyond loopback: Traefik reaches the container over the Docker network.
+  await app.listen(port, '0.0.0.0');
+  console.log('\\n🚀 ${name} running on http://localhost:' + port);
+  console.log('📊 Health check: http://localhost:' + port + '/health\\n');
+}
+
+bootstrap();
+`;
+}
+export const nestBackendProvider = {
+    id: "nestjs",
+    label: "Bun + NestJS",
+    dependencies: {
+        "@nestjs/common": "^11.0.0",
+        "@nestjs/core": "^11.0.0",
+        "@nestjs/platform-express": "^11.0.0",
+        "reflect-metadata": "^0.2.2",
+        rxjs: "^7.8.1",
+    },
+    devDependencies: {},
+    // Nest's decorators need these; the engine's generated Docker tsconfig already sets them.
+    compilerOptions: { experimentalDecorators: true, emitDecoratorMetadata: true },
+    createIndex: getNestIndexTemplate,
+};

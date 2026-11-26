@@ -1,0 +1,342 @@
+import { Command } from "commander";
+import { getBackendIndexTemplate, getDrizzleBackendIndexTemplate } from "../backend-languages/bun.js";
+import type { FrontendFrameworkFile } from "../frontend-frameworks/types.js";
+import type { AgentConfig, CreatableResourceType, InfraFramework, InfraResourceType, PortAssignableResourceType } from "../types/index.js";
+import { DEFAULT_STACK_NAME } from "../utils/constants.js";
+import { FliskError } from "../utils/errors.js";
+export { getDockerfileTemplate, getShutdownHandlerTemplate, getTestTemplate, getWorkerIndexTemplate, } from "../generator/resource-templates.js";
+export declare const BASE_TEMPLATE: {
+    readonly port: 0;
+    readonly dependsOn: readonly [];
+    readonly build: {
+        readonly dockerfile: "Dockerfile";
+        readonly context: ".";
+    };
+    readonly dev: {
+        readonly command: "bun run dev";
+        readonly watch: readonly ["src/**/*"];
+    };
+};
+interface TypeSpecificConfig {
+    /** The route the engine probes. The engine reads `healthCheckPath` (default /health); a top-level `healthCheck` is read by nothing. */
+    healthCheckPath?: string;
+    dev?: {
+        command: string;
+        watch: string[];
+    };
+}
+export declare const TYPE_SPECIFIC: Record<CreatableResourceType, TypeSpecificConfig>;
+/** Options an infrastructure framework cannot take: its image listens on a fixed port inside the container. */
+export declare function assertInfraPresetOptions(framework: InfraFramework, options: {
+    port?: string;
+    image?: string;
+}): void;
+/**
+ * `--framework` for `--type database` (postgres, or an infrastructure framework) and the preset types (`queue`, `storage`):
+ * a wrong id gets the type that offers it, because the ids of the types are disjoint.
+ */
+export declare function assertInfraFramework(type: string, framework: string | undefined): void;
+/**
+ * `--base-path` of a frontend, checked against the pattern `flisk config verify` applies to service.json, so a resource this
+ * command creates is never reported invalid. A missing leading slash is added, as the engine does when it routes the frontend
+ * (get_frontend_base_path); anything else the pattern rejects is refused before a file is written. Empty means the default.
+ */
+/**
+ * Quote a folder path for a printed next step like `cd <path>`: the reader pastes it into a shell, so a path with a space
+ * (`cd a b/c`) would break. Plain paths print exactly as before; anything with characters the shell treats specially gets
+ * double quotes, unless it holds a `"`, backtick, `$` or backslash, which a double-quoted string would expand or break on
+ * (POSIX single quotes are safe for those). isPathSafe already refused `< > : " | ? *` before this runs.
+ */
+export declare function quoteNextStepsPath(path: string): string;
+export declare function resolveBasePath(value: string | undefined): string | undefined;
+/** The port of an `inference` resource: 11434 unless `--port` says otherwise. It is the port inside the container, so any port is allowed. */
+export declare function resolveInferencePort(value: string | undefined, resources: Array<{
+    config?: {
+        port?: number;
+    };
+}>): number;
+export declare function resolveByoPort(value: string | undefined, assignedPort: number, resources: Array<{
+    name?: string;
+    config?: {
+        port?: number;
+    };
+}>): number;
+export declare function resolveResourcePort(resourceType: PortAssignableResourceType, value: string | undefined, assignedPort: number, resources: Array<{
+    name?: string;
+    config?: {
+        port?: number;
+    };
+}>): number;
+/**
+ * The probe route of a server framework (Next.js): its health route lives under the same prefix the engine serves the
+ * frontend on, which is `basePath` or, without one, the service name (get_frontend_base_path).
+ */
+export declare function serverFrameworkHealthPath(name: string, basePath?: string): string;
+/**
+ * After registering an existing server-framework frontend under a new base path (or name), the new probe route when the
+ * manifest still carries a generated default, else undefined. A `healthCheckPath` the user set is never rewritten.
+ */
+export declare function retargetServerHealthPath(existing: {
+    appName?: string;
+    basePath?: unknown;
+    healthCheckPath?: unknown;
+}, newName: string, newBasePath: string | undefined): string | undefined;
+export declare function createServiceJson(name: string, type: CreatableResourceType, stack: string, port: number, extraFeatures?: string[], frameworkId?: string, languageId?: string, agent?: AgentConfig, basePath?: string): any;
+export declare function createByoServiceJson(name: string, stack: string, port: number, options: {
+    healthCheckPath: string;
+    dockerfile: string;
+    image?: string;
+    exposeViaProxy?: boolean;
+    restart?: string;
+    volumes?: Array<{
+        source: string;
+        target: string;
+    }>;
+    provides?: Record<string, string>;
+}): {
+    $schema: string;
+    schemaVersion: number;
+    appName: string;
+    appType: "bring-your-own";
+    stack: string;
+    port: number;
+    healthCheckPath: string;
+    image: string;
+    exposeViaProxy?: boolean | undefined;
+    restart?: string | undefined;
+    volumes?: {
+        source: string;
+        target: string;
+    }[] | undefined;
+    provides?: Record<string, string> | undefined;
+} | {
+    $schema: string;
+    schemaVersion: number;
+    appName: string;
+    appType: "bring-your-own";
+    stack: string;
+    port: number;
+    healthCheckPath: string;
+    dockerfile: string;
+    exposeViaProxy?: boolean | undefined;
+    restart?: string | undefined;
+    volumes?: {
+        source: string;
+        target: string;
+    }[] | undefined;
+    provides?: Record<string, string> | undefined;
+};
+export declare function createPackageJson(name: string, type: string, frameworkId?: string, prismaEnabled?: boolean, agentConfig?: AgentConfig, drizzleEnabled?: boolean, projectName?: string): {
+    name: string;
+    version: string;
+    type: string;
+    scripts: {
+        start?: string;
+        predev?: string | undefined;
+        prebuild?: string | undefined;
+        dev: string;
+        build: string;
+        test: string;
+        "test:watch": string;
+        typecheck: string;
+        lint: string;
+        "lint:fix": string;
+    };
+    dependencies: {
+        prisma?: string | undefined;
+        "@prisma/client"?: string | undefined;
+        "@prisma/adapter-pg"?: string | undefined;
+        pg?: string | undefined;
+        "drizzle-orm"?: string | undefined;
+    };
+    devDependencies: {
+        "@types/bun": string;
+        "@types/node": string;
+        typescript: string;
+        "@biomejs/biome": string;
+        vite?: string | undefined;
+        "drizzle-kit"?: string | undefined;
+        "@types/pg"?: string | undefined;
+    };
+};
+export declare const PRISMA_SCHEMA_TEMPLATE = "generator client {\n  provider = \"prisma-client\"\n  output   = \"../generated/prisma\"\n}\n\ndatasource db {\n  provider = \"postgresql\"\n}\n";
+export declare const PRISMA_CONFIG_TEMPLATE = "export default {\n  schema: \"prisma/schema.prisma\",\n  datasource: {\n    url: process.env.DATABASE_URL,\n  },\n};\n";
+/**
+ * A Vite frontend's own `src/vite-env.d.ts`, unless its framework writes one. The generated `.autogenerated/env.ts` and
+ * `api-client.ts` read `import.meta.env`, which only type-checks with Vite's client types; a reference kept inside
+ * `src/App.tsx` (the React starter) disappears when the app is rewritten, and the image's `tsc` then fails.
+ * A framework with its own `scripts` (Next.js) does not use Vite and gets nothing.
+ */
+export declare function withViteEnvTypes<T extends {
+    filename: string;
+}>(files: T[], framework: {
+    scripts?: Record<string, string>;
+} | undefined): Array<T | FrontendFrameworkFile>;
+/** Version ranges for `--feature drizzle`; `drizzle-kit` must stay on the same minor as `drizzle-orm`. */
+export declare const DRIZZLE_ORM_RANGE = "^0.44.7";
+export declare const DRIZZLE_KIT_RANGE = "^0.31.8";
+export declare const DRIZZLE_DB_TEMPLATE = "import { drizzle } from 'drizzle-orm/node-postgres';\nimport { Pool } from 'pg';\n\n// DATABASE_URL is injected by Flisk. The pool connects on the first query, so a missing or\n// unreachable database fails /health/db instead of stopping the service at startup.\nexport const pool = new Pool({ connectionString: process.env.DATABASE_URL });\nexport const db = drizzle(pool);\n\n// A Postgres restart closes the idle connections and the pool reports it here. Without a listener that error stops the\n// process; with one the pool drops the dead connection and the next query opens a new one.\npool.on('error', (err) => console.error('postgres connection lost:', err.message));\n";
+export declare const DRIZZLE_SCHEMA_TEMPLATE = "// Define tables here, for example with pgTable from 'drizzle-orm/pg-core'.\nexport {};\n";
+export declare const DRIZZLE_CONFIG_TEMPLATE = "import { defineConfig } from 'drizzle-kit';\n\nexport default defineConfig({\n  dialect: 'postgresql',\n  schema: './src/schema.ts',\n  out: './drizzle',\n  dbCredentials: { url: process.env.DATABASE_URL ?? '' },\n});\n";
+export interface ResourceTsconfig {
+    extends?: string;
+    compilerOptions: Record<string, unknown>;
+    include: string[];
+    exclude: string[];
+}
+/** Strict options shared by every TypeScript scaffold, written once at the project root (#5420). */
+export declare const ROOT_TSCONFIG_BASE: {
+    compilerOptions: {
+        target: string;
+        module: string;
+        moduleResolution: string;
+        strict: boolean;
+        esModuleInterop: boolean;
+        skipLibCheck: boolean;
+        forceConsistentCasingInFileNames: boolean;
+    };
+};
+/** Emit settings for a compiled service. A Vite app extends only the base and sets `noEmit` below. */
+export declare const TSCONFIG_TEMPLATE: {
+    compilerOptions: {
+        outDir: string;
+        rootDir: string;
+        declaration: boolean;
+        declarationMap: boolean;
+        sourceMap: boolean;
+    };
+    include: string[];
+    exclude: string[];
+};
+export declare function createResourceTsconfig(resourceType: CreatableResourceType, frameworkId?: string, baseConfigPath?: string): ResourceTsconfig;
+/**
+ * A no-emit companion config that brings the scaffolded tests (and the frontend's generated Vite config)
+ * under the same strict settings without changing where `tsc` writes a backend's dist/index.js (#5420).
+ */
+export declare function createResourceTestTsconfig(hasOwnTsconfig?: boolean): ResourceTsconfig;
+/**
+ * The Biome config written next to every scaffolded resource. `lint` is `biome check .`, and with no config Biome
+ * defaults to tabs and double quotes, so the scaffold failed its own check. The formatter is off (the generated JSON and
+ * templates are not in Biome's style) and two style rules are off because the placeholders use them on purpose:
+ * `let allReady` is reassigned once you add a dependency check, and the startup logs concatenate the port.
+ */
+export declare const RESOURCE_BIOME_CONFIG: {
+    root: boolean;
+    files: {
+        includes: string[];
+    };
+    formatter: {
+        enabled: boolean;
+    };
+    linter: {
+        enabled: boolean;
+        rules: {
+            preset: string;
+            style: {
+                useConst: string;
+                useTemplate: string;
+            };
+        };
+    };
+};
+export { getBackendIndexTemplate, getDrizzleBackendIndexTemplate };
+/**
+ * Resource types `flisk resource --type` accepts; `byo` is an alias of `bring-your-own`, and `inference` is a preset of it.
+ * `database`, `queue` and `storage` stay themselves: their `--framework` decides whether Flisk's Postgres or a bring-your-own
+ * container is created. The preset types of 1.4.24 (redis, qdrant, rabbitmq, minio, mlflow) are frameworks now.
+ */
+export declare function parseResourceType(type: string): CreatableResourceType | InfraResourceType | "sdk";
+declare const SUPPORTED_PROMPT_RESOURCE_TYPES: readonly ["backend", "frontend", "worker", "mcp", "agent", "bring-your-own", "inference", "database", "queue", "storage", "mail", "payment", "sdk"];
+export type PromptableResourceType = (typeof SUPPORTED_PROMPT_RESOURCE_TYPES)[number];
+/** Interactive `flisk resource` choices presented when `--type` is omitted. */
+export declare const RESOURCE_TYPE_CHOICES: Array<{
+    title: string;
+    value: PromptableResourceType;
+}>;
+/** The service.json of a `database` resource: the project's Postgres, declared so services can name it in `dependsOn`. */
+export declare function createDatabaseServiceJson(name: string, stack: string): Record<string, unknown>;
+type ExistingServiceConfig = {
+    [key: string]: unknown;
+    $schema?: string;
+    schemaVersion?: number;
+    appName?: string;
+    appType?: string;
+    stack?: string;
+    port?: number;
+    basePath?: unknown;
+    framework?: unknown;
+    healthCheckPath?: unknown;
+};
+/**
+ * Parse an existing `service.json` manifest.
+ *
+ * Wraps JSON syntax errors in a `FliskError` that names the offending file, so a malformed manifest
+ * is reported as a CLI error instead of an unhandled `SyntaxError`. Only the JSON syntax is
+ * checked here: the manifest fields themselves are not validated, and a syntactically valid file
+ * is returned as-is, including unknown or missing fields.
+ *
+ * @param content - The raw contents of the `service.json` file.
+ * @param configPath - Path to the manifest, used in the error message.
+ * @returns The parsed manifest.
+ * @throws FliskError When the content is not valid JSON.
+ */
+export declare function parseExistingServiceJson(content: string, configPath: string): ExistingServiceConfig;
+/**
+ * The frameworks `--type database` and the preset types (`queue`, `storage`) accept, in the order the help lists them. The
+ * database default is the shared Flisk Postgres (no container of its own, so no image); every other one is a pinned image,
+ * and a preset type without `--framework` runs its default (NATS, MinIO).
+ */
+export declare function infraFrameworkListing(type: InfraResourceType): {
+    id: string;
+    label: string;
+    image: string | null;
+    default: boolean;
+    command: string;
+}[];
+/** What `flisk resource --frameworks --json` reports: the same inventory the text listing prints. */
+export declare function frameworkInventoryReport(options: {
+    type?: string;
+    language?: string;
+}): Record<string, unknown>;
+/**
+ * What `flisk resource <name> --json` reports. `action` is `registered` for a directory that already had a
+ * service.json. `port` is null for an SDK. `discovered` is whether discovery.paths covers `path`, so `flisk up` starts it.
+ */
+export interface ResourceReport {
+    action: "created" | "registered";
+    name: string;
+    type: string;
+    stack: string;
+    port: number | null;
+    path: string;
+    framework: string | null;
+    language: string | null;
+    discovered: boolean;
+    /** Non-fatal notes, such as a stack name that looks like a typo of an existing one (#4378). */
+    warnings?: string[];
+}
+/**
+ * The stack a new project's first resource lands in. Re-exported from constants.
+ */
+export { DEFAULT_STACK_NAME };
+/**
+ * The parts of the `flisk resource` command the user already typed, so a no-input
+ * error can repeat them in its "For example" hint instead of the fixed
+ * `api --type backend` example (#5059).
+ */
+interface ResourceNoInputTyped {
+    name?: string;
+    type?: string;
+    isTypeExplicit?: boolean;
+    framework?: string;
+    language?: string;
+    local?: boolean;
+}
+/**
+ * Turns a prompt that could not read input into an error that names the flags which avoid the
+ * stack prompt. The suggestions travel with both the printed error and the `--json` envelope.
+ * When the user typed a resource name, the "For example" hint repeats the command they typed
+ * (#5059); with no name given it keeps the fixed `api --type backend` example.
+ */
+export declare function resourceNoInputError(cause: unknown, typed?: ResourceNoInputTyped, prompt?: "stack" | "type"): FliskError;
+export declare const resourceCommand: Command;
