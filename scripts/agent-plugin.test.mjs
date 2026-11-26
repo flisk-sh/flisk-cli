@@ -74,6 +74,38 @@ test("the committed plugin files match the generator", () => {
   assert.deepEqual(run(ROOT, { write: false }), [], "run: node scripts/agent-plugin.mjs");
 });
 
+const CONVERT_SKILLS = [
+  ".claude/skills/flisk-convert/SKILL.md",
+  `${SKILLS_SOURCE}/flisk-convert/SKILL.md`,
+  `${PLUGIN_DIR}/skills/flisk-convert/SKILL.md`,
+  `${CLAUDE_PLUGIN_DIR}/skills/flisk-convert/SKILL.md`,
+];
+
+for (const rel of CONVERT_SKILLS) {
+  test(`${rel}: third-party conversions stay local without a star-count exception`, () => {
+    const text = readFileSync(path.join(ROOT, rel), "utf8");
+    const ownership = text.split("## 0. Whose repo is it?")[1]?.split("\n## 1.")[0] ?? "";
+    assert.match(ownership, /Your own repo, or one the user owns: go on/);
+    assert.match(ownership, /local-only, regardless of star count/);
+    assert.match(ownership, /Never open a pull request, issue, discussion or comment/);
+    assert.match(ownership, /Do not push a branch to a fork or upstream/);
+    assert.match(ownership, /the user .* opens any upstream PR themselves/);
+    assert.doesNotMatch(text, /stargazerCount|500 stars|check its size first/);
+  });
+
+  test(`${rel}: real-run proof is a local handoff, not an upstream comment`, () => {
+    const text = readFileSync(path.join(ROOT, rel), "utf8");
+    const proof = text.split("## 5.")[1]?.split("\n## Guardrails")[0] ?? "";
+    assert.match(proof, /keep the proof local/);
+    assert.match(proof, /the user handles any upstream PR, issue, discussion or comment/);
+    assert.match(proof, /Do not publish the evidence or contact maintainers yourself/);
+    assert.match(proof, /Review your own diff locally/);
+    assert.doesNotMatch(proof, /for a PR to someone else's repo|Before asking a maintainer to merge|in a comment/);
+    assert.match(proof, /Start it for real/);
+    assert.match(proof, /Show the app working/);
+  });
+}
+
 test("the self-hosted plugin owns the Claude Code hooks and verifier agent", () => {
   const generated = new Set(plan(ROOT).map((file) => file.rel));
   for (const rel of PLUGIN_CLAUDE_FILES) {
