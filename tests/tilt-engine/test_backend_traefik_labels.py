@@ -123,9 +123,6 @@ r = {'labels': l}
         "traefik.http.routers.testproj-orders-api-management.middlewares": "testproj-orders-api-strip-prefix-management",
         "traefik.http.middlewares.testproj-orders-api-strip-prefix-management.stripprefix.prefixes": "/api/orders-management",
         "traefik.http.routers.testproj-orders-api-management.priority": "121",
-        "traefik.http.middlewares.testproj-orders-api-redirect.redirectregex.regex": "^`/orders-management/api/v1/(.*)`",
-        "traefik.http.middlewares.testproj-orders-api-redirect.redirectregex.replacement": "`/api/orders/$$1`",
-        "traefik.http.middlewares.testproj-orders-api-redirect.redirectregex.permanent": "true",
     }
     assert labels == expected
 
@@ -181,9 +178,6 @@ r = {'labels': l}
         "traefik.http.routers.testproj-orders-api-management.middlewares": "testproj-orders-api-strip-prefix-management",
         "traefik.http.middlewares.testproj-orders-api-strip-prefix-management.stripprefix.prefixes": "/api/orders-management",
         "traefik.http.routers.testproj-orders-api-management.priority": "121",
-        "traefik.http.middlewares.testproj-orders-api-redirect.redirectregex.regex": "^`/orders-management/api/v1/(.*)`",
-        "traefik.http.middlewares.testproj-orders-api-redirect.redirectregex.replacement": "`/api/orders/$$1`",
-        "traefik.http.middlewares.testproj-orders-api-redirect.redirectregex.permanent": "true",
     }
     assert labels == expected
 
@@ -227,9 +221,6 @@ r = {'labels': l}
         "traefik.http.routers.testproj-orders-api-project.middlewares": "testproj-orders-api-strip-prefix-project",
         "traefik.http.middlewares.testproj-orders-api-strip-prefix-project.stripprefix.prefixes": "/api/orders",
         "traefik.http.routers.testproj-orders-api-project.priority": "111",
-        "traefik.http.middlewares.testproj-orders-api-redirect.redirectregex.regex": "^`/orders-management/api/v1/(.*)`",
-        "traefik.http.middlewares.testproj-orders-api-redirect.redirectregex.replacement": "`/api/orders/$$1`",
-        "traefik.http.middlewares.testproj-orders-api-redirect.redirectregex.permanent": "true",
     }
     assert labels == expected
     # Stack-level router and management router must NOT be present
@@ -283,9 +274,6 @@ r = {'labels': l}
         "traefik.http.routers.testproj-orders-api-project.middlewares": "testproj-orders-api-strip-prefix-project",
         "traefik.http.middlewares.testproj-orders-api-strip-prefix-project.stripprefix.prefixes": "/api/orders",
         "traefik.http.routers.testproj-orders-api-project.priority": "111",
-        "traefik.http.middlewares.testproj-orders-api-redirect.redirectregex.regex": "^`/orders-management/api/v1/(.*)`",
-        "traefik.http.middlewares.testproj-orders-api-redirect.redirectregex.replacement": "`/api/orders/$$1`",
-        "traefik.http.middlewares.testproj-orders-api-redirect.redirectregex.permanent": "true",
     }
     assert labels == expected
     # The router rule matches the explicit route
@@ -512,6 +500,36 @@ r = {{'labels': l}}
         "Host(`api.testproj.localhost`) && (Path(`/api/orders-management`) || PathPrefix(`/api/orders-management/`))"
     )
 
+
+def test_every_middleware_a_backend_defines_is_used_by_one_of_its_routers(tmp_path):
+    """A middleware no router names does nothing. The old `-redirect` middleware was one: no router used it, and its regex was
+    wrapped in rule backticks, so it could not have matched a path anyway (old `/orders-management/api/v1/...` URLs got 404)."""
+    body = """
+load('@NETWORKING/traefik.star', 'get_backend_traefik_labels')
+
+manifest = {'appType': 'backend', 'stack': 'orders', 'port': 4000}
+l = get_backend_traefik_labels(
+    'orders-api',
+    'orders.backend.testproj.local',
+    '/api/orders',
+    'orders-api',
+    4000,
+    '/health',
+    manifest=manifest,
+)
+r = {'labels': l}
+"""
+    labels = run_traefik_labels(tmp_path, "testproj", body)
+
+    defined = {key.split(".")[3] for key in labels if key.startswith("traefik.http.middlewares.")}
+    used = {
+        name
+        for key, value in labels.items()
+        if key.startswith("traefik.http.routers.") and key.endswith(".middlewares")
+        for name in value.split(",")
+    }
+    assert defined, labels
+    assert defined <= used, sorted(defined - used)
 
 @pytest.mark.parametrize("app_type", ["backend", "bring-your-own"])
 @pytest.mark.parametrize("resource_name", ["orders-api", "orders"])

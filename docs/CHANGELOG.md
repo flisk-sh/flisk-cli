@@ -4,6 +4,8 @@ Notable changes to the `flisk` CLI. Versions match [npm](https://www.npmjs.com/p
 
 ## Unreleased
 
+- Backend containers no longer carry a `<name>-redirect` Traefik middleware. No router used it, and its regex was wrapped in rule backticks, so it never matched: old `/<stack>-management/api/v1/...` URLs got 404 with or without it. The labels now define only middlewares that a router uses.
+
 - In a shared stack, a backend with an explicit Traefik host but no explicit path now scopes that host to its own `/api/<name>` route. Two backends can share one host without their host-only routers overlapping and sending requests to an arbitrary service.
 - Backend replicas now keep the logical service API path, including the bring-your-own trailing-slash redirect. The URL printed by `flisk up` remains routed when only numbered replicas are available.
 
