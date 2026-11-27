@@ -236,7 +236,7 @@ test("the maintainer flag does not ping the candidate", async () => {
   });
   await client.flagMaintainerCandidate(seat(3, "ann-gh", "ann"), 16, BELTS[1]);
   assert.match(sent.title, /ann-gh reached 15 merged PRs/);
-  assert.deepEqual(sent.assignees.sort(), ["kburym", "odykyi"]);
+  assert.deepEqual(sent.assignees.sort(), ["biomekonoko", "kburym", "odykyi"]);
   assert.doesNotMatch(sent.body, /@ann-gh/);
   assert.match(sent.body, /Green Belt/);
 });

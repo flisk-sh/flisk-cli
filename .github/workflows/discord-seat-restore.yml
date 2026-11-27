@@ -1,0 +1,53 @@
+name: 🤖 BOT | Community | Restore founding seats
+
+# Run by hand, once. Rebuilds the founding seat list with the saved Discord token, so
+# nobody needs the token on their own computer. The list holds Discord ids, so it is
+# never printed in the log. With create_issue off, nothing is written anywhere.
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_issue:
+        description: Create the public seat list issue (it contains Discord ids)
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: discord-founding-role
+  cancel-in-progress: false
+
+jobs:
+  restore:
+    name: Restore the founding seat list
+    if: github.repository == 'flisk-sh/flisk-cli' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Restore from Discord
+        run: node scripts/restore-founding-registry.mjs > "$RUNNER_TEMP/registry.md"
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+      - name: Show the seats without Discord ids
+        run: grep -E '^(\*\*[0-9]|\| [0-9])' "$RUNNER_TEMP/registry.md" | cut -d'|' -f1-3
+      - name: Create the seat list issue
+        if: ${{ inputs.create_issue }}
+        run: |
+          existing=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues?state=all&labels=community&per_page=100" \
+            --jq '.[] | select((.body // "") | contains("<!-- flisk:founding-registry -->")) | .number')
+          if [ -n "$existing" ]; then
+            echo "::error::The seat list issue already exists: #$existing"
+            exit 1
+          fi
+          gh label create community --force
+          gh issue create --title "Founding Contributors: the first 100" --label community --body-file "$RUNNER_TEMP/registry.md"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}

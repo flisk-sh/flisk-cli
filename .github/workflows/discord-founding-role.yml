@@ -9,8 +9,7 @@ name: 🤖 BOT | Community | Discord founding role
 on:
   schedule:
     - cron: "17 * * * *"
-  # A Cloudflare Worker starts this every 3 minutes (workers/discord-bot-trigger), because
-  # GitHub's schedule above can go hours without firing.
+  # Once an hour. GitHub can start a scheduled run late. Run it by hand to answer sooner.
   workflow_dispatch:
     inputs:
       claims_only:

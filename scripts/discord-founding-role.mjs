@@ -19,7 +19,7 @@ const CONTRIBUTOR_ROLE = "Flisk Contributor";
 export const FOUNDING_SEATS = 100;
 const ORG = "flisk-sh";
 const REPO = `${ORG}/flisk-cli`;
-const MAINTAINERS = new Set(["kburym", "odykyi"]);
+const MAINTAINERS = new Set(["kburym", "odykyi", "biomekonoko"]);
 const MAX_PAGES = 20;
 
 export const REGISTRY_MARK = "<!-- flisk:founding-registry -->";
@@ -116,7 +116,8 @@ const notEligibleReply = () =>
 
 function isCommunityPr(pr) {
   return (
-    pr.user?.type === "User" && !MAINTAINERS.has(pr.user.login) && !["OWNER", "MEMBER"].includes(pr.author_association)
+    // Outside contributors are invited into the org, so MEMBER does not mean team.
+    pr.user?.type === "User" && !MAINTAINERS.has(pr.user.login) && pr.author_association !== "OWNER"
   );
 }
 
@@ -380,6 +381,12 @@ export function githubClient(token, { fetchImpl = fetch } = {}) {
       body: body ? JSON.stringify(body) : undefined,
     });
     if (response.status === 404 && allow404) return null;
+    if (response.status === 403 && allow404) {
+      // A blocked repository answers 403 for good. Other 403s, such as rate limits, still fail.
+      const text = await response.text();
+      if (text.includes("Repository access blocked")) return null;
+      throw new Error(`GitHub ${method} ${path}: 403 ${text}`);
+    }
     if (!response.ok) throw new Error(`GitHub ${method} ${path}: ${response.status} ${await response.text()}`);
     return response.status === 204 ? true : response.json();
   };
