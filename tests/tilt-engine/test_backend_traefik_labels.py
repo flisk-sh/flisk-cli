@@ -292,6 +292,43 @@ r = {'labels': l}
     assert labels["traefik.http.routers.testproj-orders-api.rule"] == "Host(`custom.orders.local`) || (Path(`/custom/orders`) || PathPrefix(`/custom/orders/`))"
 
 
+def test_shared_stack_explicit_host_only_routes_by_resource_path(tmp_path):
+    """Two backends that share one explicit host and set no path get distinct path-scoped rules."""
+    body = """
+load('@NETWORKING/traefik.star', 'get_backend_traefik_labels')
+
+l = ''
+for name, path in [('orders-api', '/api/orders'), ('payments-api', '/api/payments')]:
+    manifest = {
+        'appType': 'backend',
+        'appName': name,
+        'stack': 'shop',
+        'port': 4000,
+        '_stackBackendCount': 2,
+        'traefik': {'host': 'api.example.com'},
+    }
+    l += get_backend_traefik_labels(
+        name,
+        'shop.backend.testproj.local',
+        path,
+        name,
+        4000,
+        '/health',
+        manifest=manifest,
+    )
+r = {'labels': l}
+"""
+    labels = run_traefik_labels(tmp_path, "testproj", body)
+
+    orders_rule = labels["traefik.http.routers.testproj-orders-api.rule"]
+    payments_rule = labels["traefik.http.routers.testproj-payments-api.rule"]
+    assert orders_rule != payments_rule
+    assert orders_rule == "Host(`api.example.com`) && (Path(`/api/orders`) || PathPrefix(`/api/orders/`))"
+    assert payments_rule == "Host(`api.example.com`) && (Path(`/api/payments`) || PathPrefix(`/api/payments/`))"
+    assert labels["traefik.http.middlewares.testproj-orders-api-strip-prefix.stripprefix.prefixes"] == "/api/orders"
+    assert labels["traefik.http.middlewares.testproj-payments-api-strip-prefix.stripprefix.prefixes"] == "/api/payments"
+
+
 def test_shared_stack_backend_with_empty_explicit_route_uses_fallback(tmp_path):
     """An empty explicit route falls back to no shared-stack router."""
     body = """
