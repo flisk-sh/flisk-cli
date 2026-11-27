@@ -298,6 +298,14 @@
 			"owner": "maintainers"
 		},
 		{
+			"workflow": "discord-seat-restore.yml",
+			"job": "restore",
+			"tier": "bot",
+			"required": false,
+			"reason": "Manual: rebuilds the founding seat list from Discord and can create its issue",
+			"owner": "maintainers"
+		},
+		{
 			"workflow": "discord-founding-role.yml",
 			"job": "grant",
 			"tier": "bot",
