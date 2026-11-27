@@ -16,7 +16,7 @@ function recorder(status = 204, text = "") {
 test("most minutes only handle claims, on main", async () => {
   const { calls, fetchImpl } = recorder();
   await startBot(at(3), "tok", fetchImpl);
-  assert.match(calls[0].url, /workflows\/discord-founding-role\.yml\/dispatches$/);
+  assert.match(calls[0].url, /repos\/flisk-sh\/flisk-cli\/actions\/workflows\/discord-founding-role\.yml\/dispatches$/);
   assert.equal(calls[0].init.method, "POST");
   assert.equal(calls[0].init.headers.Authorization, "Bearer tok");
   assert.deepEqual(calls[0].body, { ref: "main", inputs: { claims_only: "true" } });

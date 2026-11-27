@@ -27,7 +27,7 @@ concurrency:
 jobs:
   grant:
     name: Grant seats and sync levels
-    if: github.repository == 'flisk-sh/flisk'
+    if: github.repository == 'flisk-sh/flisk-cli'
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
