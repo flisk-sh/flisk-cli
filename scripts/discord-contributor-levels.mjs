@@ -99,8 +99,9 @@ async function syncSeat(entry, { discord, github, entries, roleIds }) {
   }
 
   const work = await github.mergedWork(entry.github);
-  // A seat needs a merged PR, so zero means the search cannot see PRs, not that they have none.
-  if (work.prs === 0) throw new Error(`GitHub search found no merged PRs for ${entry.github}.`);
+  // A seat needs a merged PR, so zero means the search cannot see them (PRs in a blocked
+  // repository, or a renamed account). Their roles and stored levels stay as they are.
+  if (work.prs === 0) return "unseen";
   const tier =higher(TIERS, tierFor(work.prs), entry.tier);
   const belt = higher(BELTS, beltFor(work.labels), entry.belt);
 
@@ -138,6 +139,7 @@ async function syncSeat(entry, { discord, github, entries, roleIds }) {
     entry.maintainerFlagged = true;
     await github.saveRegistry(entries);
   }
+  return "synced";
 }
 
 export async function syncLevels({ discord, github, log = console.log }) {
@@ -153,15 +155,24 @@ export async function syncLevels({ discord, github, log = console.log }) {
   const entries = await github.readRegistry();
   const ctx = { discord, github, entries, roleIds };
   let failed = 0;
+  let searched = 0;
+  const unseen = [];
   // One bad seat must not hold up everyone after it, and the run still goes red.
   for (const entry of entries) {
     try {
-      await syncSeat(entry, ctx);
+      const result = await syncSeat(entry, ctx);
+      if (result === "unseen") unseen.push(entry.n);
+      if (result) searched++;
     } catch (error) {
       failed++;
       log(`::warning::Levels for seat ${entry.n} failed: ${error.message}`);
     }
   }
+  if (unseen.length > 0) {
+    log(`::warning::No merged PRs found for seats ${unseen.join(", ")}, so their levels were left unchanged.`);
+  }
   log(`Synced levels for ${entries.length} seats.`);
+  // If nobody has a visible PR, the search itself is broken, for example by a missing permission.
+  if (searched > 0 && unseen.length === searched) throw new Error("GitHub search found no merged PRs for any seat.");
   if (failed > 0) throw new Error(`${failed} of ${entries.length} seats failed.`);
 }
