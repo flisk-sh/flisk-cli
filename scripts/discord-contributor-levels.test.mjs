@@ -174,11 +174,23 @@ test("one failing seat does not stop the others, and the run still fails", async
   assert.equal(calls.announced.length, 1);
 });
 
-test("a seat holder with zero merged PRs fails the run instead of passing quietly", async () => {
+test("a search that finds no PRs for any seat fails the run", async () => {
   const entries = [seat(1, "ann-gh", "ann")];
   const { calls, go } = setup({ entries, work: { "ann-gh": { prs: 0, labels: [] } } });
-  await assert.rejects(go, /1 of 1 seats failed/);
+  await assert.rejects(go, /no merged PRs for any seat/);
   assert.deepEqual([calls.grants, calls.announced], [[], []]);
+});
+
+test("a holder whose PRs cannot be seen keeps their roles and the run passes", async () => {
+  const entries = [seat(1, "old-gh", "old", { tier: "Core" }), seat(2, "ann-gh", "ann")];
+  const { calls, go } = setup({
+    entries,
+    members: { old: { roles: [roleOf("Flisk Core")] } },
+    work: { "ann-gh": { prs: 1, labels: [] } },
+  });
+  await go();
+  assert.deepEqual([calls.grants, calls.revokes, calls.announced], [[], [], []]);
+  assert.equal(entries[0].tier, "Core");
 });
 
 test("a missing Discord role stops the sync with its name", async () => {
@@ -236,7 +248,7 @@ test("the maintainer flag does not ping the candidate", async () => {
   });
   await client.flagMaintainerCandidate(seat(3, "ann-gh", "ann"), 16, BELTS[1]);
   assert.match(sent.title, /ann-gh reached 15 merged PRs/);
-  assert.deepEqual(sent.assignees.sort(), ["kburym", "odykyi"]);
+  assert.deepEqual(sent.assignees.sort(), ["biomekonoko", "kburym", "odykyi"]);
   assert.doesNotMatch(sent.body, /@ann-gh/);
   assert.match(sent.body, /Green Belt/);
 });

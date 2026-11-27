@@ -5,7 +5,7 @@ name: 🤖 BOT | CI | Cancel dead queue runs
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "0 * * * *"
   workflow_dispatch:
 
 permissions: {}

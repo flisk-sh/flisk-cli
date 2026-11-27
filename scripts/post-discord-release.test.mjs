@@ -46,7 +46,8 @@ test("run skips a version already posted, and never throws", async () => {
   const posted = async () => ({ ok: true, json: async () => [{ content: "**Flisk CLI 1.4.50 is out**\nx" }] });
   const logs = [];
   await run({ version: "1.4.50", changelog: CHANGELOG, token: "t", channelId: "c", fetchImpl: posted, log: (m) => logs.push(m) });
-  assert.match(logs[0], /already has a post/);
+  // An unreadable seat list may warn first; the release post carries on.
+  assert.match(logs.at(-1), /already has a post/);
   await run({ version: "1.4.50", changelog: CHANGELOG, token: "t", channelId: "c", fetchImpl: async () => { throw new Error("boom"); }, log: (m) => logs.push(m) });
   assert.match(logs.at(-1), /::warning::Could not post/);
 });
