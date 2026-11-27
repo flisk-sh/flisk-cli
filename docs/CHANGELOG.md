@@ -4,6 +4,7 @@ Notable changes to the `flisk` CLI. Versions match [npm](https://www.npmjs.com/p
 
 ## Unreleased
 
+- The parked shop benchmark workflow no longer selects pull requests that only change TypeScript unit tests in its vendored extension directories. Runtime code, docs, discovery, specs and shared Docker helpers retain their existing coverage; weekly and manual runs are unchanged (#10, partial scope fix).
 - In a shared stack, a backend with an explicit Traefik host but no explicit path now scopes that host to its own `/api/<name>` route. Two backends can share one host without their host-only routers overlapping and sending requests to an arbitrary service.
 - Backend replicas now keep the logical service API path, including the bring-your-own trailing-slash redirect. The URL printed by `flisk up` remains routed when only numbered replicas are available.
 

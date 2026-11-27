@@ -12,6 +12,12 @@ on:
   pull_request:
     paths:
       - "runtime/**"
+      # Extension unit tests are excluded from vendoring and engineSourceFingerprint.
+      # Keep other runtime inputs (including docs); see cli/src/generator/template-engine.ts.
+      - "!runtime/engine/**/*.test.ts"
+      - "!runtime/discovery/**/*.test.ts"
+      - "!runtime/specs/**/*.test.ts"
+      - "!runtime/ext/**/*.test.ts"
       - "cli/src/commands/up*"
       - "bench/**"
       - "scripts/bench/**"
