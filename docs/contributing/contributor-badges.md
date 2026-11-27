@@ -23,7 +23,7 @@ Paste it into your portfolio README, GitHub profile README, personal site, or an
 
 The first 100 people to ship code to any `flisk-sh` repository earn a permanent, numbered **Founding Contributor** badge to show on their GitHub profile or CV. After that, the badge is a numbered **Flisk Contributor** badge.
 
-To claim yours, post the link to a merged PR in `#start-here` on the [Flisk Discord](https://discord.gg/qMu5Xn8Kaq). Within a few minutes a bot replies with:
+To claim yours, post the link to a merged PR in `#start-here` on the [Flisk Discord](https://discord.gg/qMu5Xn8Kaq). A bot checks about once an hour, sometimes later, and replies with:
 
 - Your number, given in the order people claim them
 - Your badge and ready-to-paste markdown
