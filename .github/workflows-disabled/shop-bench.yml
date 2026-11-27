@@ -12,6 +12,8 @@ on:
   pull_request:
     paths:
       - "runtime/**"
+      - "!runtime/**/*.md"
+      - "!runtime/**/tests/**"
       - "cli/src/commands/up*"
       - "bench/**"
       - "scripts/bench/**"
