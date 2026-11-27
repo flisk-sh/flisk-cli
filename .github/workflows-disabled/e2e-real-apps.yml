@@ -20,7 +20,7 @@ on:
   schedule:
     # GitHub starts daily scheduled runs about 7-10 h after their cron time (#3911), so this
     # cron is set 8 h early and the run really starts around 04:00 UTC.
-    - cron: "0 20 * * *"
+    - cron: "0 20 * * 0"
 
 permissions:
   contents: read
