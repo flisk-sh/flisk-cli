@@ -349,7 +349,10 @@ jobs:
       - name: Run TypeScript unit tests with coverage
         if: ${{ steps.select.outputs.mode != 'selected' }}
         working-directory: cli
-        run: bun run test:coverage
+        # Vitest reserves a CPU by default, leaving one worker on private two-CPU Linux runners.
+        # Pinned-Tilt full-coverage benchmark: 806s with that default, 340s with two workers (same 773 files).
+        # Keep every test, coverage report/floor and the ten-minute hang guard; use both runner CPUs instead.
+        run: bun run test:coverage --maxWorkers=2
         env:
           FLISK_REQUIRE_TILT: '1'
       - name: Run the unit tests this queue entry affects
