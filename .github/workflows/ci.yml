@@ -428,6 +428,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
           BRANCH="chore/refresh-coverage-badge"
+          # A fresh checkout has no remote-tracking ref for the bot branch. Without one the lease below is rejected as
+          # "stale info" once the branch exists, which turned this job red on every later run.
+          git fetch --no-tags origin "$BRANCH" 2>/dev/null || true
           git checkout -b "$BRANCH"
           git add docs/assets/coverage.svg
           git commit -m "chore: refresh coverage badge"
