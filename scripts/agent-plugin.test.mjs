@@ -106,6 +106,48 @@ for (const rel of CONVERT_SKILLS) {
   });
 }
 
+const readScanConvert = () => readFileSync(path.join(ROOT, ".claude/skills/flisk-scan-convert/SKILL.md"), "utf8");
+
+test("scan-convert: ownership, not stars or consent, determines the local-only boundary", () => {
+  const text = readScanConvert();
+  const ownership = text.split("## 0. Whose repo is it?")[1]?.split("\n## 1.")[0] ?? "";
+  assert.match(ownership, /Your own repo, or one the user owns: go on/);
+  assert.match(ownership, /local-only, regardless of star count/);
+  assert.match(ownership, /Never open a pull request, issue, discussion or comment/);
+  assert.match(ownership, /even if the user approves the repo or text/);
+  assert.match(ownership, /the user opens any upstream PR themselves/);
+});
+
+test("scan-convert: read-only discovery leads to a local clone, not a fork or push", () => {
+  const text = readScanConvert();
+  const convert = text.split("## 3. Convert one")[1]?.split("\n## 4.")[0] ?? "";
+  assert.match(text, /it only reads/);
+  assert.match(text, /10 to 500 stars/);
+  assert.match(convert, /Clone the repository into a fresh local directory/);
+  assert.match(convert, /Do not create a fork or push a branch to a fork or upstream/);
+  assert.match(convert, /follow flisk-convert/);
+  assert.doesNotMatch(convert, /Fork it, clone the fork/);
+});
+
+test("scan-convert: measurements and self-review remain a local evidence handoff", () => {
+  const text = readScanConvert();
+  const evidence = text.split("## 4.")[1]?.split("\n## Guardrails")[0] ?? "";
+  assert.match(evidence, /keep the proof local/);
+  assert.match(evidence, /local self-review/);
+  assert.match(evidence, /the user handles any upstream PR, issue, discussion or comment/);
+  assert.match(evidence, /three runs each/);
+  assert.match(evidence, /a real `flisk up`/);
+  assert.match(evidence, /5-10 screenshots/);
+  assert.doesNotMatch(evidence, /in the PR body|a self-review comment/);
+});
+
+test("scan-convert: guardrails never authorize third-party contact after confirmation", () => {
+  const guardrails = readScanConvert().split("## Guardrails")[1] ?? "";
+  assert.match(guardrails, /Scanning is read-only/);
+  assert.match(guardrails, /Do not publish the evidence or contact maintainers yourself/);
+  assert.doesNotMatch(guardrails, /until the user confirms|Ask first|thank them once|record their words in the epic/);
+});
+
 test("the self-hosted plugin owns the Claude Code hooks and verifier agent", () => {
   const generated = new Set(plan(ROOT).map((file) => file.rel));
   for (const rel of PLUGIN_CLAUDE_FILES) {
