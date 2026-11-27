@@ -287,21 +287,16 @@ jobs:
         working-directory: adopter
         env:
           ENV_CONTENT: ${{ matrix.env_file }}
-          CI_TEST_PASSWORD: ${{ secrets.CI_TEST_PASSWORD }}
         run: |
-          # The matrix cannot read secrets, so it carries @@CI_TEST_PASSWORD@@ (and @@CI_TEST_PASSWORD_16@@, its first 16
-          # characters, for keys that must be exactly 16 long) and the value is filled in here. The value goes into URLs
-          # and JSON unescaped, so CI_TEST_PASSWORD must be letters and digits only, at least 16 of them.
+          # These credentials belong only to this disposable stack, not to a repository secret. Generate a fresh
+          # alphanumeric value for URLs and JSON, with a 16-character prefix for keys that require that exact length.
           if [ -n "$ENV_CONTENT" ]; then
-            if [[ "$ENV_CONTENT" == *@@CI_TEST_PASSWORD* ]] && ! [[ "$CI_TEST_PASSWORD" =~ ^[A-Za-z0-9]{16,}$ ]]; then
-              echo "::error::secret CI_TEST_PASSWORD must be set to 16 or more letters and digits"
-              exit 1
-            fi
+            fixture_value="$(node -p 'require("node:crypto").randomBytes(16).toString("hex")')"
             # Bash 5.2 turns "&" in a replacement into the matched text; switch that off so the value goes in as is.
             shopt -u patsub_replacement 2>/dev/null || true
-            short="${CI_TEST_PASSWORD:0:16}"
+            short="${fixture_value:0:16}"
             content="${ENV_CONTENT//@@CI_TEST_PASSWORD_16@@/$short}"
-            printf "%s\n" "${content//@@CI_TEST_PASSWORD@@/$CI_TEST_PASSWORD}" > .env
+            printf "%s\n" "${content//@@CI_TEST_PASSWORD@@/$fixture_value}" > .env
           fi
 
       # flisk import reads only the root Compose file. A repo that keeps it in a subfolder gets a root copy, with
