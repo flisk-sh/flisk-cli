@@ -8,7 +8,7 @@ name: 🤖 BOT | CI | Merge queue watchdog
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "0 * * * *"
   workflow_dispatch:
 
 permissions: {}

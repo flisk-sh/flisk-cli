@@ -152,3 +152,59 @@ describe("project-repos/report (leaf module)", () => {
     expect(result.message).toMatch(/not a Git repository/);
   });
 });
+
+describe("project-repos/clone shared parent folders", () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "flisk-clone-parents-"));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("keeps a shared parent while another clone is still running", async () => {
+    let parentWhileRunning: boolean | undefined;
+    const results = await cloneMissingRepos(
+      root,
+      [
+        { url: "https://github.com/org/broken.git", dir: "services/broken" },
+        { url: "https://github.com/org/works.git", dir: "services/works" },
+      ],
+      async (args) => {
+        const url = args.at(-2) ?? "";
+        const tempPath = args.at(-1) ?? "";
+        if (url.endsWith("broken.git")) throw new Error("fatal: repository not found");
+        // Finish only after the broken clone has failed and run its cleanup.
+        await new Promise((done) => setTimeout(done, 20));
+        parentWhileRunning = existsSync(join(root, "services"));
+        mkdirSync(tempPath);
+        return "";
+      },
+    );
+
+    expect(parentWhileRunning).toBe(true);
+    expect(results.map((r) => [r.dir, r.cloned, r.failed])).toEqual([
+      ["services/broken", false, true],
+      ["services/works", true, false],
+    ]);
+  });
+
+  it("removes the empty parents it created once every clone has failed", async () => {
+    mkdirSync(join(root, "kept"));
+    await cloneMissingRepos(
+      root,
+      [
+        { url: "https://github.com/org/a.git", dir: "kept/new/a" },
+        { url: "https://github.com/org/b.git", dir: "kept/new/deeper/b" },
+      ],
+      async () => {
+        throw new Error("fatal: repository not found");
+      },
+    );
+
+    expect(existsSync(join(root, "kept", "new"))).toBe(false);
+    expect(existsSync(join(root, "kept"))).toBe(true);
+  });
+});

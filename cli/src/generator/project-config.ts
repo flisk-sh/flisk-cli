@@ -176,6 +176,18 @@ export function normalizeProjectConfig(value: unknown): NormalizedProjectConfig 
     }
   }
 
+  if (config.always_enabled_infra !== undefined) {
+    if (!Array.isArray(config.always_enabled_infra)) {
+      addProblem("always_enabled_infra", "an array of strings", config.always_enabled_infra);
+    } else {
+      for (const [index, item] of config.always_enabled_infra.entries()) {
+        if (typeof item !== "string") {
+          addProblem(`always_enabled_infra[${index}]`, "a string", item);
+        }
+      }
+    }
+  }
+
   if (
     !config.discovery ||
     typeof config.discovery !== "object" ||
