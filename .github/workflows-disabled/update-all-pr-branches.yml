@@ -1,10 +1,15 @@
-# One click: merge the latest main into every open PR branch that is behind.
+# Merge the latest base branch into an explicitly selected set of PR branches.
 # Uses only GitHub's update-branch API; never checks out or runs PR code.
 # Conflicting PRs are listed in the job summary for human follow-up.
-name: 🤖 BOT | Manual | Update all PR branches with main
+name: 🤖 BOT | Manual | Update selected PR branches
 
 on:
   workflow_dispatch:
+    inputs:
+      pr_numbers:
+        description: "Space-separated positive PR numbers to update (for example 12 34)"
+        required: true
+        type: string
 
 permissions: {}
 
@@ -14,7 +19,7 @@ concurrency:
 
 jobs:
   update-all:
-    name: Update every open PR branch
+    name: Update selected PR branches
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     permissions:
@@ -23,11 +28,22 @@ jobs:
       - name: Update branches
         env:
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBERS: ${{ inputs.pr_numbers }}
         run: |
-          set -uo pipefail
+          set -euo pipefail
+          # Validate the entire selection before making any API request. Keep input
+          # in env, not inline shell, and never fall back to discovering all PRs.
+          selection_pattern="^[ ]*[1-9][0-9]*([ ]+[1-9][0-9]*)*[ ]*$"
+          if [[ ! "${PR_NUMBERS:-}" =~ $selection_pattern ]]; then
+            echo "::error::Provide space-separated positive PR numbers (for example 12 34)." >&2
+            exit 1
+          fi
+          read -r -a numbers <<< "$PR_NUMBERS"
+          declare -A seen=()
           updated=(); conflicts=(); skipped=()
-          for n in $(gh pr list --repo "$GITHUB_REPOSITORY" --state open --base main \
-            --limit 1000 --json number --jq '.[].number'); do
+          for n in "${numbers[@]}"; do
+            [[ -z "${seen[$n]:-}" ]] || continue
+            seen[$n]=1
             if out="$(gh api --method PUT "repos/${GITHUB_REPOSITORY}/pulls/${n}/update-branch" 2>&1)"; then
               updated+=("#$n")
             elif grep -qi "merge conflict" <<< "$out"; then
@@ -37,7 +53,7 @@ jobs:
             fi
           done
           {
-            echo "### Update all PR branches"
+            echo "### Update selected PR branches"
             echo "- Updated: ${updated[*]:-none}"
             echo "- Merge conflict (needs a human): ${conflicts[*]:-none}"
             echo "- Skipped (already current or no permission): ${skipped[*]:-none}"

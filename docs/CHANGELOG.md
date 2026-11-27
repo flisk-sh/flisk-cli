@@ -4,6 +4,7 @@ Notable changes to the `flisk` CLI. Versions match [npm](https://www.npmjs.com/p
 
 ## Unreleased
 
+- The parked manual PR-branch update workflow now requires an explicit space-separated list of PR numbers, validates the whole list before any API call, and updates duplicate selections only once instead of discovering and updating every open PR (#9). It remains disabled.
 - In a shared stack, a backend with an explicit Traefik host but no explicit path now scopes that host to its own `/api/<name>` route. Two backends can share one host without their host-only routers overlapping and sending requests to an arbitrary service.
 - Backend replicas now keep the logical service API path, including the bring-your-own trailing-slash redirect. The URL printed by `flisk up` remains routed when only numbered replicas are available.
 
