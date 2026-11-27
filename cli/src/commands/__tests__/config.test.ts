@@ -284,6 +284,20 @@ describe("config regenerate --dry-run", () => {
     expect(result.stderr).toContain("❌");
     expect(result.stderr).toMatch(/.*(JSON|token|property)/i);
   });
+
+  it("rejects a scalar always_enabled_infra before generation", async () => {
+    const root = createTempProject({
+      projectJson: { ...projectJson(), always_enabled_infra: "proxy" },
+    });
+
+    const result = await runCommandInProcess(configCommand, ["regenerate", "--dry-run"], root);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      ".flisk/project.json.always_enabled_infra: expected an array of strings",
+    );
+    expect(result.stderr).not.toContain("filter is not a function");
+  });
 });
 
 describe("config regenerate", () => {

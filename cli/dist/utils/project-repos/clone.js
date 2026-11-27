@@ -74,8 +74,10 @@ export function classifyRepoDestination(targetPath) {
 /**
  * Clones a single repository if its destination directory does not already exist.
  * Leaves existing directories untouched.
+ * A failed attempt passes the parent folders it created to `cleanupParents`; a caller that runs
+ * several clones at once uses it to postpone the removal until they have all finished.
  */
-export async function cloneRepo(repo, projectRoot, runner = defaultGitRunner) {
+export async function cloneRepo(repo, projectRoot, runner = defaultGitRunner, cleanupParents = cleanupCreatedParents) {
     const dirValidation = validateRepoDir(repo.dir, projectRoot);
     if (!dirValidation.valid || !dirValidation.targetPath) {
         throw new FliskError(`Invalid repository destination "${repo.dir}": ${dirValidation.reason}`, [
@@ -107,7 +109,7 @@ export async function cloneRepo(repo, projectRoot, runner = defaultGitRunner) {
         mkdirSync(dirname(targetPath), { recursive: true });
     }
     catch (error) {
-        cleanupCreatedParents(createdParents);
+        cleanupParents(createdParents);
         throw new FliskError(`Failed to create the parent directory for "${redactRepoUrl(repo.url)}" at "${repo.dir}": ${error.message}`, ["Check that the parent path is writable and is not a file"]);
     }
     // Clone into a sibling temp directory and rename it into place, so a concurrent clone of the same
@@ -126,7 +128,7 @@ export async function cloneRepo(repo, projectRoot, runner = defaultGitRunner) {
     }
     catch (error) {
         rmSync(tempPath, { recursive: true, force: true });
-        cleanupCreatedParents(createdParents);
+        cleanupParents(createdParents);
         const hint = redactRepoUrl(firstLine(error));
         throw new FliskError(`Failed to clone repository "${redactRepoUrl(repo.url)}" into "${repo.dir}": ${hint || "git clone failed"}`, [
             "Verify your Git network access and authentication (SSH keys or personal access tokens)",
@@ -215,9 +217,11 @@ export async function cloneMissingRepos(projectRoot, repos, runner = defaultGitR
         ]);
     }
     const results = [];
+    // Repositories can share a parent folder, so none is removed while a clone may still be using it.
+    const failedParents = [];
     const cloneOne = async (repo) => {
         try {
-            return await cloneRepo(repo, projectRoot, runner);
+            return await cloneRepo(repo, projectRoot, runner, (paths) => failedParents.push(...paths));
         }
         catch (error) {
             return {
@@ -242,6 +246,8 @@ export async function cloneMissingRepos(projectRoot, repos, runner = defaultGitR
             results.push(outcome.value);
         }
     }
+    // A child path is longer than its parent, so shortest first here means deepest removed first.
+    cleanupCreatedParents(failedParents.sort((a, b) => a.length - b.length));
     return results;
 }
 /**
