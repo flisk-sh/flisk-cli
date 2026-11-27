@@ -40,4 +40,4 @@ jobs:
       issues: write # comment on the head PR
     uses: flisk-sh/.github/.github/workflows/stalled-merge-queue.yml@e0c2405547b5e791a67723253e771a3da349633c # v1, merged after the v1 tag (flisk-sh/.github#32)
     with:
-      scripts_ref: 28a7fad96298d2f1f22ca839b208324e8841cdee
+      scripts_ref: e0c2405547b5e791a67723253e771a3da349633c
