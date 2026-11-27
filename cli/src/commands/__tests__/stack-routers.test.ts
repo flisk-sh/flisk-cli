@@ -106,9 +106,9 @@ if '-orders-api-project.rule=' not in entry: fail('the per-backend -project rout
 `);
   });
 
-  it("keeps an explicit traefik.host with only that host as its rule when the stack has two backends", () => {
+  it("scopes an explicit traefik.host to the backend API path when the stack has two backends", () => {
     expectPasses(`${entryFor("{'_stackBackendCount': 2, 'traefik': {'host': 'orders.test.local'}}")}
-if '-orders-api.rule=Host(\`orders.test.local\`)"' not in entry: fail('the explicit router should match only its own host')
+if '-orders-api.rule=Host(\`orders.test.local\`) && (Path(\`/api/orders\`) || PathPrefix(\`/api/orders/\`))"' not in entry: fail('the explicit router should scope the host to this backend path')
 if 'shop.backend' in entry: fail('the shared stack host is still in a rule')
 if '-orders-api-management.rule=' in entry: fail('the shared -management router is still emitted')
 `);

@@ -327,7 +327,13 @@ def get_backend_traefik_labels(
         # Another backend in this stack would match the same stack rule, so it is not emitted. The service labels stay (the
         # -project router points at the service). A manifest that set its own host or pathPrefix keeps a router, but one whose
         # rule is only what it set, never the shared stack host or path.
-        backend_route_rule = backend_rule(explicit_host, explicit_path)
+        if explicit_host and not explicit_path:
+            # A bare Host(...) matches every path on that host, so two backends that share it still collide. Scope the
+            # host to this resource's printed API path with &&; making the path another || branch would keep the collision.
+            explicit_path = cli_api_path(traefik_resource_name, manifest)
+            backend_route_rule = "Host(`{}`) && {}".format(explicit_host, path_segment_rule(explicit_path))
+        else:
+            backend_route_rule = backend_rule(explicit_host, explicit_path)
         backend_route_priority = backend_rule_priority(explicit_host, explicit_path)
 
     if stack_shared and not backend_route_rule:

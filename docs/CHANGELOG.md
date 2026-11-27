@@ -4,6 +4,7 @@ Notable changes to the `flisk` CLI. Versions match [npm](https://www.npmjs.com/p
 
 ## Unreleased
 
+- In a shared stack, a backend with an explicit Traefik host but no explicit path now scopes that host to its own `/api/<name>` route. Two backends can share one host without their host-only routers overlapping and sending requests to an arbitrary service.
 - Backend replicas now keep the logical service API path, including the bring-your-own trailing-slash redirect. The URL printed by `flisk up` remains routed when only numbered replicas are available.
 
 - Re-running `flisk resource` over an existing service no longer reports "registered successfully" for a no-op. If the requested `--type`, `--stack` or `--port` disagrees with the existing `service.json`, the command now exits non-zero, names the existing resource and leaves every file untouched; with nothing to change it prints "<name> already exists, nothing to do" and does not rewrite the manifest. The old ignored-flag warnings and JSON fields are gone: a conflicting flag is now an error, not a warning (#5416).
