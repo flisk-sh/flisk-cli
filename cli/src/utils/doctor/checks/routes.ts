@@ -6,7 +6,9 @@ import type { CheckResult, DiscoveredResource } from "../../../types/index.js";
 import { BRING_YOUR_OWN_TYPE } from "../../constants.js";
 import { findProjectRoot } from "../../paths.js";
 import { isApiServiceType } from "../../resource-kind.js";
+import { resolveServicePath, routesAsApi } from "../../service-urls.js";
 import { discoverResourcesFromRoot } from "../../services.js";
+import { trimEndChars } from "../../trim-chars.js";
 
 /**
  * Two API backends in one stack used to share the stack-scoped Traefik routers (`/api/<stack>-management`), so the same rule
@@ -15,12 +17,17 @@ import { discoverResourcesFromRoot } from "../../services.js";
  * it drops the stack routers for all of them. A backend that sets its own `traefik.host` / `traefik.pathPrefix` keeps a router
  * for just that route; the others are left with `/api/<name>` only. This check warns about the backends that lose the stack path
  * and about two backends that set the same explicit route.
+ *
+ * It also warns, across the whole project, when two services resolve to one API path: `orders` and `orders-api` both get
+ * `/api/orders` (the `-api` suffix is dropped), as do two services with the same `apiPath`. Their `-project` routers then carry the
+ * same rule and priority, so Traefik sends every request to one of them and `flisk up` prints the same URL for both.
  */
 export function checkSharedStackRoutes(
   projectRoot = findProjectRoot() ?? process.cwd(),
 ): CheckResult {
   const groups = new Map<string, { stack: string; resources: DiscoveredResource[] }>();
-  for (const resource of discoverResourcesFromRoot(projectRoot)) {
+  const discovered = discoverResourcesFromRoot(projectRoot);
+  for (const resource of discovered) {
     const config = resource.config;
     const routable =
       isApiServiceType(config?.appType) ||
@@ -68,6 +75,8 @@ export function checkSharedStackRoutes(
     }
   }
 
+  problems.push(...apiPathCollisions(discovered));
+
   if (problems.length === 0) {
     return {
       name: "Stack API routes",
@@ -80,6 +89,25 @@ export function checkSharedStackRoutes(
     didPass: false,
     isWarning: true,
     message: problems.join("\n    "),
-    fix: 'Call each backend at /api/<name>, move one backend to its own stack, or give each its own "traefik.pathPrefix" in service.json',
+    fix: 'Call each backend at /api/<name>, move one backend to its own stack, or give each its own "traefik.pathPrefix" in service.json; for two services on one API path, rename one or give it its own "apiPath"',
   };
+}
+
+/** Services that `flisk up` routes at the same API path (the engine's cli_api_path in traefik_helpers.star), one message per path. */
+function apiPathCollisions(resources: DiscoveredResource[]): string[] {
+  const byPath = new Map<string, string[]>();
+  for (const resource of resources) {
+    if (!routesAsApi(resource)) continue;
+    // `/api/x/` and `/api/x` match the same requests (`/api/x/...`), so they collide too.
+    const path = trimEndChars(resolveServicePath(resource), "/") || "/";
+    byPath.set(path, [...(byPath.get(path) ?? []), resource.name]);
+  }
+  const problems: string[] = [];
+  for (const [path, names] of byPath) {
+    if (names.length < 2) continue;
+    problems.push(
+      `${names.sort((left, right) => left.localeCompare(right)).join(" and ")} are ${names.length === 2 ? "both" : "all"} routed at ${path} on the API host, so Traefik sends every request for ${path} to one of them and the ${names.length === 2 ? "other cannot" : "others cannot"} be reached`,
+    );
+  }
+  return problems;
 }

@@ -42,6 +42,20 @@ describe("checkSharedStackRoutes", () => {
     );
   }
 
+  function writeResourceIn(
+    directory: string,
+    name: string,
+    stack: string,
+    extra: Record<string, unknown> = {},
+  ) {
+    const dir = join(testDir, "services", directory, name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "service.json"),
+      JSON.stringify({ appName: name, appType: "backend", stack, ...extra }),
+    );
+  }
+
   it("passes when each stack has one backend", () => {
     writeResource("orders-api");
     expect(checkSharedStackRoutes(testDir).didPass).toBe(true);
@@ -70,6 +84,35 @@ describe("checkSharedStackRoutes", () => {
     expect(result.didPass).toBe(false);
     expect(result.message).toContain("orders-api lose the shared");
     expect(result.message).not.toContain("billing-api lose");
+  });
+
+  it("warns when two services in different stacks resolve to one API path (orders and orders-api)", () => {
+    writeResourceIn("orders", "orders", "orders");
+    writeResourceIn("shop", "orders-api", "shop");
+
+    const result = checkSharedStackRoutes(testDir);
+
+    expect(result.didPass).toBe(false);
+    expect(result.isWarning).toBe(true);
+    expect(result.message).toContain("orders and orders-api are both routed at /api/orders");
+    expect(result.fix).toContain('"apiPath"');
+  });
+
+  it("warns when two services set the same apiPath, with or without a trailing slash", () => {
+    writeResourceIn("a", "alpha-api", "a", { apiPath: "/api/v1/things" });
+    writeResourceIn("b", "beta-api", "b", { apiPath: "/api/v1/things/" });
+
+    const result = checkSharedStackRoutes(testDir);
+
+    expect(result.didPass).toBe(false);
+    expect(result.message).toContain("alpha-api and beta-api are both routed at /api/v1/things");
+  });
+
+  it("passes when services in different stacks resolve to different API paths", () => {
+    writeResourceIn("orders", "orders-api", "orders");
+    writeResourceIn("shop", "orders-admin", "shop");
+    writeResourceIn("web", "orders-web", "web", { appType: "frontend" });
+    expect(checkSharedStackRoutes(testDir).didPass).toBe(true);
   });
 
   it("passes when both backends set a different pathPrefix", () => {
