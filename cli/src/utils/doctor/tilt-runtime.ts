@@ -242,6 +242,7 @@ export function getDeferredResourceNames(
   // A caller that selected no project cannot have deferred resources; skip
   // discovery entirely so the check (and its unit tests) read no host state.
   if (projectRoot === null) return new Set();
+  if (!process.env.FLISK_LICENSE_KEY?.trim()) return new Set();
   try {
     const list =
       resources ?? (projectRoot ? discoverResourcesFromRoot(projectRoot) : discoverResources());
