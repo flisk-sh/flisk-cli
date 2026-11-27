@@ -10,6 +10,7 @@ import {
   DONE,
   discordClient,
   FOUNDING_SEATS,
+  githubClient,
   parseRegistry,
   prLinks,
   REFUSED,
@@ -63,6 +64,21 @@ function setup({ messages, pulls = {}, members = {}, entries = [] }) {
   };
   return { calls, go: () => run({ discord, github, log: () => {} }) };
 }
+
+test("an invited org member still earns a seat", async () => {
+  const { calls, go } = setup({
+    messages: [post("m1", "ann", url(7))],
+    pulls: { 7: merged("ann-gh", "User", "MEMBER") },
+  });
+  await go();
+  assert.deepEqual(calls.saved, [[[1, "ann-gh"]]]);
+});
+
+test("a blocked repository counts as not found, other 403s still fail", async () => {
+  const answer = (text) => githubClient("t", { fetchImpl: async () => new Response(text, { status: 403 }) });
+  assert.equal(await answer('{"message":"Repository access blocked"}').pull("flisk", 1), null);
+  await assert.rejects(answer("rate limit exceeded").pull("flisk", 1), /403 rate limit/);
+});
 
 test("prLinks finds each org PR once and ignores other owners", () => {
   const text = `${url(7)} again ${url(7)}, ${url(9, "fliskos")}, https://github.com/other/repo/pull/9`;
@@ -215,7 +231,7 @@ test("a GitHub account can only be claimed once", async () => {
 
 for (const [name, pull] of [
   ["maintainer", merged("odykyi")],
-  ["org member", merged("someone", "User", "MEMBER")],
+  ["org owner", merged("someone", "User", "OWNER")],
   ["bot", merged("renovate", "Bot")],
   ["deleted account", { merged_at: "2026-11-09T00:00:00Z", user: null }],
   ["missing", undefined],
