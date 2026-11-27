@@ -162,10 +162,41 @@ describe("doctor-runtime utilities", () => {
         },
       ];
 
-      const deferred = getDeferredResourceNames(resources);
-      expect(deferred.has("cold-api")).toBe(true);
-      expect(deferred.has("always-on")).toBe(false);
-      expect(deferred.has("no-sablier")).toBe(false);
+      const prevKey = process.env.FLISK_LICENSE_KEY;
+      process.env.FLISK_LICENSE_KEY = "test-license-key";
+      try {
+        const deferred = getDeferredResourceNames(resources);
+        expect(deferred.has("cold-api")).toBe(true);
+        expect(deferred.has("always-on")).toBe(false);
+        expect(deferred.has("no-sablier")).toBe(false);
+      } finally {
+        if (prevKey === undefined) delete process.env.FLISK_LICENSE_KEY;
+        else process.env.FLISK_LICENSE_KEY = prevKey;
+      }
+    });
+
+    it("returns empty set when FLISK_LICENSE_KEY is unset", () => {
+      const prevKey = process.env.FLISK_LICENSE_KEY;
+      delete process.env.FLISK_LICENSE_KEY;
+      try {
+        const resources: DiscoveredResource[] = [
+          {
+            name: "cold-api",
+            path: "/path/cold",
+            configPath: "/path/cold/service.json",
+            stack: "main",
+            type: "backend",
+            config: {
+              appName: "cold-api",
+              appType: "backend",
+              sablier: { enable: true, deferStart: true },
+            },
+          },
+        ];
+        expect(getDeferredResourceNames(resources).size).toBe(0);
+      } finally {
+        if (prevKey !== undefined) process.env.FLISK_LICENSE_KEY = prevKey;
+      }
     });
   });
 
