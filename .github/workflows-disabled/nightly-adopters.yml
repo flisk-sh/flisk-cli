@@ -291,12 +291,12 @@ jobs:
           # These credentials belong only to this disposable stack, not to a repository secret. Generate a fresh
           # alphanumeric value for URLs and JSON, with a 16-character prefix for keys that require that exact length.
           if [ -n "$ENV_CONTENT" ]; then
-            CI_TEST_PASSWORD="$(node -p 'require("node:crypto").randomBytes(16).toString("hex")')"
+            fixture_value="$(node -p 'require("node:crypto").randomBytes(16).toString("hex")')"
             # Bash 5.2 turns "&" in a replacement into the matched text; switch that off so the value goes in as is.
             shopt -u patsub_replacement 2>/dev/null || true
-            short="${CI_TEST_PASSWORD:0:16}"
+            short="${fixture_value:0:16}"
             content="${ENV_CONTENT//@@CI_TEST_PASSWORD_16@@/$short}"
-            printf "%s\n" "${content//@@CI_TEST_PASSWORD@@/$CI_TEST_PASSWORD}" > .env
+            printf "%s\n" "${content//@@CI_TEST_PASSWORD@@/$fixture_value}" > .env
           fi
 
       # flisk import reads only the root Compose file. A repo that keeps it in a subfolder gets a root copy, with
