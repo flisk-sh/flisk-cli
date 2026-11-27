@@ -126,6 +126,34 @@ describe("project-config", () => {
       });
     });
 
+    it.each([
+      ["a scalar", "proxy", "always_enabled_infra", "an array of strings", '"proxy"'],
+      ["a non-string item", [1], "always_enabled_infra[0]", "a string", "1"],
+    ])(
+      "rejects %s in always_enabled_infra instead of passing it to generation",
+      (_label, value, field, expected, described) => {
+        withTempRoot((projectRoot) => {
+          writeProjectJson(projectRoot, {
+            ...projectConfig(),
+            always_enabled_infra: value,
+          });
+
+          let caught: unknown;
+          try {
+            readProjectConfig(projectRoot);
+          } catch (error) {
+            caught = error;
+          }
+
+          expect(caught).toBeInstanceOf(FliskError);
+          expect((caught as Error).message).toBe(
+            `.flisk/project.json.${field}: expected ${expected}, got ${described}`,
+          );
+          expect((caught as FliskError).exitCode).toBe(1);
+        });
+      },
+    );
+
     it("reports all errors when multiple fields are invalid", () => {
       withTempRoot((projectRoot) => {
         writeProjectJson(projectRoot, {

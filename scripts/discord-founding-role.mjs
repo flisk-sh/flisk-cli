@@ -18,8 +18,8 @@ const FOUNDING_ROLE = "Founding Contributor";
 const CONTRIBUTOR_ROLE = "Flisk Contributor";
 export const FOUNDING_SEATS = 100;
 const ORG = "flisk-sh";
-const REPO = `${ORG}/flisk`;
-const MAINTAINERS = new Set(["kburym", "odykyi"]);
+const REPO = `${ORG}/flisk-cli`;
+const MAINTAINERS = new Set(["kburym", "odykyi", "biomekonoko"]);
 const MAX_PAGES = 20;
 
 export const REGISTRY_MARK = "<!-- flisk:founding-registry -->";
@@ -116,7 +116,8 @@ const notEligibleReply = () =>
 
 function isCommunityPr(pr) {
   return (
-    pr.user?.type === "User" && !MAINTAINERS.has(pr.user.login) && !["OWNER", "MEMBER"].includes(pr.author_association)
+    // Outside contributors are invited into the org, so MEMBER does not mean team.
+    pr.user?.type === "User" && !MAINTAINERS.has(pr.user.login) && pr.author_association !== "OWNER"
   );
 }
 
@@ -135,6 +136,36 @@ async function classify(links, authorId, entries, github) {
     }
   }
   return result;
+}
+
+// The bot's own seat announcements, each with the message it answered. They are a
+// second record of who holds which number.
+export function announcedSeats(messages) {
+  return messages.flatMap((m) => {
+    if (!m.author.bot || m.webhook_id) return [];
+    const found = /You are (?:Founding|Flisk) Contributor #(\d+)(?: of \d+)?!\*\* ([\w.-]+#\d+) by `([^`]+)` merged/.exec(
+      m.content ?? "",
+    );
+    if (!found) return [];
+    const [, n, pr, github] = found;
+    return [{ n: Number(n), github, pr, replyTo: m.message_reference?.message_id, at: m.timestamp }];
+  });
+}
+
+// An incomplete list would hand out numbers that are already taken, or refuse
+// people their own badge, so nothing is posted until it is complete.
+function assertRegistryComplete(entries, messages) {
+  const unlinked = entries.filter((e) => !e.revoked && !e.discord);
+  if (unlinked.length > 0) {
+    throw new Error(`Seats without a Discord id: ${unlinked.map((e) => e.n).join(", ")}.`);
+  }
+  for (const claim of announcedSeats(messages)) {
+    const entry = entries.find((e) => e.n === claim.n);
+    // A revoked entry may have no login, and its number stays used.
+    if (!entry || (!entry.revoked && entry.github.toLowerCase() !== claim.github.toLowerCase())) {
+      throw new Error(`The bot announced seat ${claim.n} for ${claim.github}, but the registry disagrees.`);
+    }
+  }
 }
 
 async function handle(message, ctx) {
@@ -206,6 +237,7 @@ export async function run({ discord, github, log = console.log }) {
   const messages = await discord.messages();
   assertContentVisible(messages);
   const entries = await github.readRegistry();
+  assertRegistryComplete(entries, messages);
 
   // A message marked done before seats existed still needs its number.
   const needsWork = (m) =>
@@ -349,6 +381,12 @@ export function githubClient(token, { fetchImpl = fetch } = {}) {
       body: body ? JSON.stringify(body) : undefined,
     });
     if (response.status === 404 && allow404) return null;
+    if (response.status === 403 && allow404) {
+      // A blocked repository answers 403 for good. Other 403s, such as rate limits, still fail.
+      const text = await response.text();
+      if (text.includes("Repository access blocked")) return null;
+      throw new Error(`GitHub ${method} ${path}: 403 ${text}`);
+    }
     if (!response.ok) throw new Error(`GitHub ${method} ${path}: ${response.status} ${await response.text()}`);
     return response.status === 204 ? true : response.json();
   };
@@ -366,18 +404,15 @@ export function githubClient(token, { fetchImpl = fetch } = {}) {
         }
         if (issues.length < 100) break;
       }
-      return [];
+      // Never start from an empty list: numbering would restart at 1.
+      throw new Error(
+        `No seat registry issue in ${REPO}. Restore it with scripts/restore-founding-registry.mjs before running the bot.`,
+      );
     },
     async saveRegistry(entries) {
       const body = renderRegistry(entries);
-      if (registryIssue) {
-        await call("PATCH", `/repos/${REPO}/issues/${registryIssue}`, { body: { body } });
-      } else {
-        const created = await call("POST", `/repos/${REPO}/issues`, {
-          body: { title: REGISTRY_TITLE, body, labels: ["community"] },
-        });
-        registryIssue = created.number;
-      }
+      if (!registryIssue) throw new Error("Read the seat registry before saving it.");
+      await call("PATCH", `/repos/${REPO}/issues/${registryIssue}`, { body: { body } });
     },
     // Search counts every flisk-sh repository, the same rule the seats use. Sizes are
     // kept small because each person costs GraphQL points on the hourly sync.
