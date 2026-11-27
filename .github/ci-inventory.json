@@ -785,7 +785,7 @@
 			"job": "update-all",
 			"tier": "bot",
 			"required": false,
-			"reason": "Manual one-click update of every open PR branch with main (#5412)",
+			"reason": "Manual update of explicitly selected PR branches (#9)",
 			"owner": "maintainers"
 		},
 		{
