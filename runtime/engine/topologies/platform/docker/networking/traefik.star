@@ -385,8 +385,11 @@ def get_backend_traefik_labels(
     # http://api.{project}.localhost/api/{resource-name}
     if manifest:
         stack = manifest.get("stack", "")
-        api_path = cli_api_path(resource_entry_name, manifest)
-        project_rule = project_backend_rule(manifest, resource_entry_name)
+        # A replica has its own router name, but advertises the logical service's
+        # API path. Otherwise losing the primary also loses the URL printed by
+        # `flisk up`, even while the shared load balancer has healthy replicas.
+        api_path = cli_api_path(traefik_resource_name, manifest)
+        project_rule = project_backend_rule(manifest, traefik_resource_name)
         project_entrypoints = build_entrypoints(
             TRAEFIK_BACKEND_ENABLE_HTTP,
             TRAEFIK_BACKEND_ENABLE_HTTPS,
