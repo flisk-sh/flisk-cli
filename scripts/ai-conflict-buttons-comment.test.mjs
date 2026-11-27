@@ -8,6 +8,8 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { buildComment } from "./ai-conflict-buttons.mjs";
+
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SCRIPT = join(ROOT, "scripts", "ai-conflict-buttons-comment.sh");
 
@@ -16,13 +18,16 @@ const GH_STUB = `#!/usr/bin/env bash
 echo "$*" >> "$GH_LOG"
 case "$*" in
   *"--method POST"*|*"--method PATCH"*) cat > "$GH_STDIN" ;;
+  *issues/comments/*)
+    if [[ "\${GH_FAIL_COMMENT_READ:-}" == "true" ]]; then exit 1; fi
+    printf '%s' "$GH_COMMENT_BODY" ;;
   *"--paginate"*) printf '%s' "\${GH_COMMENT_ID:-}" ;;
   *mergeable_state*) printf '%s\\n' "$GH_STATE" ;;
   *) printf '%s\\n' "$GH_PR_BODY" ;;
 esac
 `;
 
-function run({ state = "dirty", commentId = "", omit = [], extra = {} } = {}) {
+function run({ state = "dirty", commentId = "", commentBody = "", omit = [], extra = {} } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "flisk-conflict-comment-"));
   try {
     const bin = join(dir, "bin");
@@ -36,6 +41,7 @@ function run({ state = "dirty", commentId = "", omit = [], extra = {} } = {}) {
       GH_STDIN: join(dir, "gh-stdin.json"),
       GH_STATE: state,
       GH_COMMENT_ID: commentId,
+      GH_COMMENT_BODY: commentBody,
       GH_PR_BODY: "Fixes #123",
       PR_NUMBER: "2365",
       PR_URL: "https://github.com/acme/flisk/pull/2365",
@@ -74,4 +80,60 @@ test("exits non-zero when no PR number is given", () => {
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /PR_NUMBER/);
   assert.equal(r.log, ""); // gh was never called
+});
+
+function currentComment(conflicting) {
+  return buildComment({
+    prUrl: "https://github.com/acme/flisk/pull/2365",
+    prNumber: "2365",
+    headOwner: "octocat",
+    headBranch: "feature",
+    baseBranch: "main",
+    body: "Fixes #123",
+    conflicting,
+  });
+}
+
+for (const state of ["dirty", "clean"]) {
+  test(`does not rewrite an unchanged ${state} comment`, () => {
+    const r = run({ state, commentId: "42", commentBody: currentComment(state === "dirty") });
+    assert.equal(r.status, 0, r.stderr);
+    assert.doesNotMatch(r.log, /--method (POST|PATCH)/);
+    assert.equal(r.posted, "");
+    assert.match(r.stdout, /unchanged/);
+  });
+}
+
+test("does not create a comment for a clean PR with no existing comment", () => {
+  const r = run({ state: "clean" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.log, /--method (POST|PATCH)/);
+});
+
+for (const [state, wasConflicting] of [["clean", true], ["dirty", false]]) {
+  test(`updates the existing comment when state changes to ${state}`, () => {
+    const r = run({ state, commentId: "42", commentBody: currentComment(wasConflicting) });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.log, /--method PATCH repos\/acme\/flisk\/issues\/comments\/42/);
+    assert.doesNotMatch(r.log, /--method POST/);
+    assert.equal(JSON.parse(r.posted).body, currentComment(state === "dirty"));
+  });
+}
+
+test("updates conflicting buttons when the prompt changes", () => {
+  const r = run({
+    commentId: "42",
+    commentBody: currentComment(true),
+    extra: { HEAD_BRANCH: "changed-branch" },
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.log, /--method PATCH/);
+  assert.match(JSON.parse(r.posted).body, /changed-branch/);
+});
+
+
+test("does not write when reading the existing comment fails", () => {
+  const r = run({ commentId: "42", extra: { GH_FAIL_COMMENT_READ: "true" } });
+  assert.notEqual(r.status, 0);
+  assert.doesNotMatch(r.log, /--method (POST|PATCH)/);
 });

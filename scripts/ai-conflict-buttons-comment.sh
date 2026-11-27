@@ -64,6 +64,14 @@ if [[ -z "$comment_id" ]]; then
   exit 0
 fi
 
+# Repeated synchronize/backfill runs must not rewrite the same comment.
+# Compare command substitutions so gh's output newline is not part of the body.
+current_body="$(gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" --jq '.body // ""')"
+if [[ "$current_body" == "$(cat "$out_file")" ]]; then
+  echo "Conflict comment ${comment_id} on PR #${PR_NUMBER} is unchanged."
+  exit 0
+fi
+
 jq -n --rawfile body "$out_file" '{body: $body}' > "$patch_file"
 jq -e 'has("body") and (.body | type == "string")' "$patch_file" > /dev/null
 gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" \
