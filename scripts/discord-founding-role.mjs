@@ -19,7 +19,7 @@ const CONTRIBUTOR_ROLE = "Flisk Contributor";
 export const FOUNDING_SEATS = 100;
 const ORG = "flisk-sh";
 const REPO = `${ORG}/flisk-cli`;
-const MAINTAINERS = new Set(["kburym", "odykyi"]);
+const MAINTAINERS = new Set(["kburym", "odykyi", "biomekonoko"]);
 const MAX_PAGES = 20;
 
 export const REGISTRY_MARK = "<!-- flisk:founding-registry -->";

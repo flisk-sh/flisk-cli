@@ -231,6 +231,7 @@ test("a GitHub account can only be claimed once", async () => {
 
 for (const [name, pull] of [
   ["maintainer", merged("odykyi")],
+  ["admin maintainer", merged("biomekonoko", "User", "MEMBER")],
   ["org owner", merged("someone", "User", "OWNER")],
   ["bot", merged("renovate", "Bot")],
   ["deleted account", { merged_at: "2026-11-09T00:00:00Z", user: null }],
