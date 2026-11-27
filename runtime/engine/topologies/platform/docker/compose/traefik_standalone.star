@@ -124,6 +124,27 @@ volumes:
     )
 
 
+# File-provider name of the middleware a router gets with `featuresEnabled: ["maintenance"]` (traefik.star). The platform
+# proxy defines its own; the standalone Traefik had none, so Traefik refused every router that named it ("middleware
+# \"maintenance@file\" does not exist") and the service answered 404. Here it is a pass-through: a headers middleware that
+# only drops an X-Flisk-Maintenance response header nothing sets. It must be a valid middleware: one invalid file in the
+# dynamic directory stops Traefik loading every file there, the deferred-start routes included.
+MAINTENANCE_MIDDLEWARE_FILE = "maintenance.yml"
+
+
+def generate_maintenance_middleware():
+    """File-provider config for the `maintenance` middleware that standalone projects' routers reference."""
+    return """# SYSTEM-GENERATED - DO NOT EDIT
+# Pass-through `maintenance` middleware for routers of services with featuresEnabled: ["maintenance"].
+http:
+  middlewares:
+    maintenance:
+      headers:
+        customResponseHeaders:
+          X-Flisk-Maintenance: ""
+"""
+
+
 def _docker_socket_source():
     """The host path Traefik mounts as the Docker socket.
 

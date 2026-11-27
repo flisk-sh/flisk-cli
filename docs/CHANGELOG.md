@@ -4,6 +4,7 @@ Notable changes to the `flisk` CLI. Versions match [npm](https://www.npmjs.com/p
 
 ## Unreleased
 
+- A service with `featuresEnabled: ["maintenance"]` answered 404 on every URL in a standalone project: its Traefik routers name the `maintenance@file` middleware, which only the platform proxy defined, so Traefik refused them ("middleware \"maintenance@file\" does not exist"). The standalone Traefik now gets a pass-through `maintenance` middleware in `.flisk/.flisk-out/traefik-dynamic/maintenance.yml`.
 - In a shared stack, a backend with an explicit Traefik host but no explicit path now scopes that host to its own `/api/<name>` route. Two backends can share one host without their host-only routers overlapping and sending requests to an arbitrary service.
 - Backend replicas now keep the logical service API path, including the bring-your-own trailing-slash redirect. The URL printed by `flisk up` remains routed when only numbered replicas are available.
 

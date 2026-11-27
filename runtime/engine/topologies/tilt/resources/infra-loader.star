@@ -31,7 +31,7 @@ load("../../../../discovery/registry.star", "APP_RESOURCES")
 load("../../platform/docker/constants.star", "PlatformDockerConstants")
 load("../../platform/docker/config/healthcheck.star", "DOCKER_HEALTHCHECK")
 load("../../platform/docker/dockerfile/language_dockerfile.star", "is_provider_owned_language")
-load("../../platform/docker/compose/traefik_standalone.star", "generate_standalone_traefik_compose")
+load("../../platform/docker/compose/traefik_standalone.star", "generate_standalone_traefik_compose", "generate_maintenance_middleware", "MAINTENANCE_MIDDLEWARE_FILE")
 load("../../platform/docker/networking/sablier_container_cycle.star", "sablier_middleware_suffix")
 load("../../platform/registries/verdaccio_loader.star", "load_verdaccio")
 
@@ -380,6 +380,8 @@ def _load_standalone_traefik(root_prefix, env_file, write_fn, golden_image_resou
     )
     if write_fn:
         write_fn(compose_rel, content)
+        # Routers of a service with the `maintenance` feature name maintenance@file; without this file Traefik drops them.
+        write_fn(PlatformDockerConstants.TRAEFIK_DYNAMIC_DIR_REL + "/" + MAINTENANCE_MIDDLEWARE_FILE, generate_maintenance_middleware())
     compose_file = root_prefix + compose_rel if root_prefix else compose_rel
     print("🌐 Loading standalone Traefik from {}".format(compose_file))
     _docker_compose(compose_file, env_file, 'traefik')
