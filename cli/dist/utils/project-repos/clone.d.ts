@@ -24,8 +24,10 @@ export declare function classifyRepoDestination(targetPath: string): RepoDestina
 /**
  * Clones a single repository if its destination directory does not already exist.
  * Leaves existing directories untouched.
+ * A failed attempt passes the parent folders it created to `cleanupParents`; a caller that runs
+ * several clones at once uses it to postpone the removal until they have all finished.
  */
-export declare function cloneRepo(repo: RepoConfig, projectRoot: string, runner?: GitRunner): Promise<CloneRepoResult>;
+export declare function cloneRepo(repo: RepoConfig, projectRoot: string, runner?: GitRunner, cleanupParents?: (paths: string[]) => void): Promise<CloneRepoResult>;
 /** One decision of a clone plan: the repository would be cloned, or its existing folder kept. */
 export interface RepoClonePlanEntry {
     url: string;
