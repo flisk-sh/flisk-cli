@@ -16,6 +16,7 @@ permissions:
 jobs:
   label:
     name: Apply labels from changed paths
+    if: github.event.action != 'labeled' || github.event.sender.login != 'github-actions[bot]'
     runs-on: ubuntu-26.04
     timeout-minutes: 2
     steps:
