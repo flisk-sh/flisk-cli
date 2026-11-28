@@ -20,7 +20,7 @@ concurrency:
 jobs:
   comment:
     name: Comment AI conflict buttons
-    if: github.event_name == 'pull_request_target'
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.draft == false
     runs-on: ubuntu-26.04
     timeout-minutes: 3
     permissions:
