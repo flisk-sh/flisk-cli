@@ -14,7 +14,7 @@ Take an app that already exists and make `flisk up` start it. Change as little a
 
 ## 0. Whose repo is it?
 
-Your own repo, or one the user owns: go on. **Someone else's repo: check its size first** (`gh repo view OWNER/REPO --json stargazerCount -q .stargazerCount`). More than 500 stars means no pull request from us, ever: a maintainer of a large org blocked us for one (2026-11-02). Do not open it, and do not push a branch to a fork "for later". You may still convert a local clone to try Flisk, if the user asks; tell them it stays local. At 500 stars or fewer, follow the repo's CONTRIBUTING, disclose that you are a Flisk maintainer using an AI assistant, and open an issue or discussion before a large change.
+Your own repo, or one the user owns: go on. **Someone else's repo: local-only, regardless of star count.** Convert a local clone only when the user asks. Never open a pull request, issue, discussion or comment on a repository neither you nor the user owns. Do not push a branch to a fork or upstream, including "for later". Keep the conversion and its evidence local; the user decides whether to contact maintainers and opens any upstream PR themselves.
 
 ## 1. Look before you change
 
@@ -54,9 +54,9 @@ Use `--image <name>` instead of `--dockerfile` for a ready-made image, `--regist
 4. If something is red, read `flisk logs --service <name>` and use the flisk-troubleshoot skill.
 5. Stop with `flisk down`.
 
-## 5. Prove it on a real run (for a PR to someone else's repo)
+## 5. Prove it on a real run (local evidence and user handoff)
 
-A dry run and a green CI check are not evidence. Before asking a maintainer to merge, run the converted stack for real and show it. The reference is the self-review on [biolend83/tubehaus#42](https://github.com/biolend83/tubehaus/pull/42#issuecomment-6556357152), which was merged:
+A dry run and a green CI check are not evidence. Run the converted stack for real and keep the proof local. For someone else's repo, hand the user the local diff, logs and screenshots; the user handles any upstream PR, issue, discussion or comment. Do not publish the evidence or contact maintainers yourself.
 
 - **Start it for real** with the released Flisk the docs name (`flisk up`, not only `--dry-run`), with the values a user would set in `.env`. Use a throwaway project name or fresh volumes so an older test's data (an old database password) cannot fake a failure or a pass, and remove those volumes afterwards. On Colima, run from under `$HOME`: bind mounts from `/tmp` arrive empty.
 - **Show the app working**, not just containers up: screenshots of the main page, one real action (a search, a video playing, a login page), and numbers where you can read them (a player's `currentTime`, an HTTP status).
@@ -64,7 +64,7 @@ A dry run and a green CI check are not evidence. Before asking a maintainer to m
 - **Trace each setting you migrated end to end**: `.env` → `service.json` → the generated Compose file → what Docker actually did (`docker inspect`, `docker ps`). For ports, test from the outside too: loopback answers, the machine's LAN address does not (or does, if that is what Compose did).
 - **Put the raw text under each screenshot** (a collapsible block per log), mask anything private (egress IPs, keys), and keep the files.
 - **Read logs, not badges**: a `continue-on-error` CI step is green even when it fails.
-- **Review your own diff in a comment** before the maintainer does: what you checked, what you fixed after reviewing (with commits), behaviour changes they should know about, what belongs to Flisk and not to their repo (link the Flisk issue), and what you did not verify (other OS or architecture, a second machine).
+- **Review your own diff locally**: what you checked, what you fixed after reviewing (with commits), behaviour changes they should know about, what belongs to Flisk and not to their repo (link the Flisk issue), and what you did not verify (other OS or architecture, a second machine).
 - **Offer Flisk as an option**: keep their Compose file as the main way unless they ask otherwise, reuse the same Docker volume names so no data is copied, and disclose that you work on Flisk and that an AI assistant was used.
 - **Every gap you hit is a Flisk bug**: fix it in Flisk (or file it) instead of working around it in their repo.
 
