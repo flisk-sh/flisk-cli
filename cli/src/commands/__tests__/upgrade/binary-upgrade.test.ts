@@ -9,6 +9,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -479,6 +480,29 @@ describe("upgradeViaBinary", () => {
       });
 
       expect(ok).toBe(false);
+    });
+
+    it("restores the previous binary when moving the existing engine directory aside fails (#54)", async () => {
+      writeFileSync(fliskPath, "old binary");
+      const engineDir = join(installDir, "flisk-cli");
+      mkdirSync(engineDir, { recursive: true });
+      writeFileSync(join(engineDir, "old-engine-file"), "old engine");
+
+      const injectedRenameSync = ((oldPath: Parameters<typeof renameSync>[0], newPath: Parameters<typeof renameSync>[1]) => {
+        if (String(oldPath) === engineDir && String(newPath).endsWith("flisk-cli.previous")) {
+          throw Object.assign(new Error("EBUSY: resource busy or locked"), { code: "EBUSY" });
+        }
+        renameSync(oldPath, newPath);
+      }) as typeof renameSync;
+
+      const ok = await upgrade.upgradeViaBinary(fliskPath, release, {
+        isWindows: () => false,
+        renameSync: injectedRenameSync,
+      });
+
+      expect(ok).toBe(false);
+      expect(readFileSync(fliskPath, "utf-8")).toBe("old binary");
+      expect(readFileSync(join(engineDir, "old-engine-file"), "utf-8")).toBe("old engine");
     });
   });
 });
