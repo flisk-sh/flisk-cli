@@ -551,8 +551,8 @@ export async function upgradeViaBinary(
       if (existsSync(binaryBackup)) rename(binaryBackup, fliskPath);
       throw err;
     }
-    if (existsSync(engineDir)) rename(engineDir, engineBackup);
     try {
+      if (existsSync(engineDir)) rename(engineDir, engineBackup);
       rename(engineStageDir, engineDir);
     } catch (err) {
       if (existsSync(engineBackup)) rename(engineBackup, engineDir);
