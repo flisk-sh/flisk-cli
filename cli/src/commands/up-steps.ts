@@ -2146,7 +2146,7 @@ async function containerStartupPlan(run: UpRun): Promise<void> {
       for (const svc of backends) {
         const sablier = svc.config?.sablier;
         const deferredTag =
-          sablier?.enable && sablier?.deferStart
+          sablier?.enable && sablier?.deferStart && process.env.FLISK_LICENSE_KEY?.trim()
             ? chalk.dim(" (deferred — starts on first request)")
             : "";
         if (isRoutedBringYourOwn(svc)) {
